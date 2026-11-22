@@ -119,7 +119,7 @@ try {
   await chatsHeader.getByRole('heading', { name: 'Chats' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await chatsHeader.locator('.left-header-compose').count(), 0, '«Написать» в шапке больше нет');
   await page.locator('[data-add-for="chats"]').click();
-  for (const item of ['New Message', 'New Group', 'New Channel', 'Plan entry']) {
+  for (const item of ['New message', 'New group', 'New channel', 'Plan entry']) {
     await page.getByRole('menuitem', { name: item }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   await page.keyboard.press('Escape');
@@ -1238,7 +1238,7 @@ try {
   await page.locator('[data-add-for]').click();
   // Меню «+» раскрывается у плавающей кнопки, вне ленты
   const addMenu = page;
-  for (const item of ['New Message', 'New Group', 'New Channel', 'Plan entry']) {
+  for (const item of ['New message', 'New group', 'New channel', 'Plan entry']) {
     await addMenu.getByRole('menuitem', { name: item }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   assert.equal(await page.locator('#LeftColumn .NewChatButton button:visible').count(), 0, 'карандаша на телефоне нет');

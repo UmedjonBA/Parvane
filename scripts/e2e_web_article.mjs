@@ -241,7 +241,7 @@ try {
   assert.equal(await articleBody.getByRole('heading', { name: title }).count(), 0, 'заголовок-название не повторяется');
   await shoot(bobPage, 'viewer');
   await bobPage.locator('[data-article-save] button').click();
-  await bobPage.getByText(`Saved to notes: «${title}»`).first().waitFor({ state: 'visible', timeout: 60000 });
+  await bobPage.getByText(`Saved to notes: “${title}”`).first().waitFor({ state: 'visible', timeout: 60000 });
   // Статья — экран на весь экран (доска `XpChat`): «Переслать» внизу, закрывается стрелкой «Назад»
   // (Escape забирает висящее уведомление «Сохранено»)
   await bobPage.locator('[data-article-forward]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

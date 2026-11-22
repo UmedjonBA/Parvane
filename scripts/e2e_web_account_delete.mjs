@@ -95,7 +95,7 @@ try {
   await pending.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const notice = await pending.innerText();
   assert.match(notice, /The account will be deleted on/, `текст экрана: ${notice}`);
-  assert.match(notice, /You requested deletion on .+\. Until .+ it can be cancelled/, `дата запроса: ${notice}`);
+  assert.match(notice, /You requested deletion on .+\. Until .+ it can be canceled/, `дата запроса: ${notice}`);
   assert.equal(await pending.locator('[data-deletion-days]').getAttribute('data-deletion-days'), '7', 'семь дней до удаления');
   assert.equal(await form.locator('#sign-in-password').isVisible(), false, 'форма входа скрыта');
   await pending.locator('[data-restore-account] button').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

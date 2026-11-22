@@ -528,7 +528,7 @@ try {
   await body.getByRole('button', { name: CABINET }).click();
   const missingSheet = page.locator('[data-note-missing-sheet]');
   await visible(missingSheet, 'вопрос о заметке, которой нет');
-  assert.match(await missingSheet.innerText(), new RegExp(`Linked from 1 note: «${NOTE}»`), 'кто ссылается');
+  assert.match(await missingSheet.innerText(), new RegExp(`Linked from 1 note: “${NOTE}”`), 'кто ссылается');
   await page.waitForFunction((wanted) => (
     document.querySelector('[data-note-missing-sheet] [data-missing-name]')?.value === wanted
   ), CABINET, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('в шторке нет названия из ссылки'));

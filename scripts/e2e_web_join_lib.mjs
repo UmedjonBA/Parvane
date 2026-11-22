@@ -267,7 +267,7 @@ export async function joinByTypedKey(session, key) {
 export async function createChannel(page, title, memberName) {
   await page.locator('#LeftColumn').hover();
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Channel' }).click();
+  await page.getByRole('menuitem', { name: 'New channel' }).click();
   const search = page.locator('#new-group-picker-search');
   await search.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await search.fill(memberName);

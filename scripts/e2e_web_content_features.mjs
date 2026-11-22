@@ -189,7 +189,7 @@ try {
   // ── Блокировка: список переживает reload ───────────────────────────────────
   await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Privacy and security' }).click();
-  await aliceSession.page.getByRole('button', { name: 'Blocked Users' }).click();
+  await aliceSession.page.getByRole('button', { name: 'Blocked users' }).click();
   const blockFab = aliceSession.page.getByRole('button', { name: 'Block', exact: true }).last();
   await blockFab.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
   // Нативная клавиатурная активация <button> надёжнее кликов сквозь
@@ -214,7 +214,7 @@ try {
   await relogin(aliceSession.page, PASSWORD);
   await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Privacy and security' }).click();
-  await aliceSession.page.getByRole('button', { name: 'Blocked Users' }).click();
+  await aliceSession.page.getByRole('button', { name: 'Blocked users' }).click();
   await blockedRow.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);

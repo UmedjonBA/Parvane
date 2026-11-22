@@ -147,13 +147,13 @@ try {
   await expectMediaFlowing(bob.page, { audio: true });
   console.log('OK: аудиозвонок соединён, звук идёт в обе стороны');
   console.log(`   путь медиа: ${(await callMediaStats(alice.page)).map((p) => `${p.connectionState}/${p.candidateType}`).join(', ')}`);
-  await alice.page.getByRole('button', { name: 'End Call' }).click();
-  await bob.page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: CALL_TIMEOUT_MS });
+  await alice.page.getByRole('button', { name: 'End call' }).click();
+  await bob.page.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: CALL_TIMEOUT_MS });
 
   // ── Видеозвонок ──
   await alice.page.waitForTimeout(3000);
   await alice.page.getByRole('button', { name: 'More actions' }).click();
-  await alice.page.getByRole('menuitem', { name: 'Video Call' }).click();
+  await alice.page.getByRole('menuitem', { name: 'Video call' }).click();
   await bob.page.getByText('is calling you...', { exact: true }).waitFor({ state: 'visible', timeout: CALL_TIMEOUT_MS });
   await bob.page.getByRole('button', { name: 'Accept' }).click();
   await Promise.all([alice.page, bob.page].map((page) => page.getByText(/^\d+:\d{2}$/).first()
@@ -161,7 +161,7 @@ try {
   await expectMediaFlowing(alice.page, { audio: true, video: true });
   await expectMediaFlowing(bob.page, { audio: true, video: true });
   console.log('OK: видеозвонок соединён, видео и звук идут в обе стороны');
-  await alice.page.getByRole('button', { name: 'End Call' }).click();
+  await alice.page.getByRole('button', { name: 'End call' }).click();
   console.log('OK: звонки на проде работают');
 } catch (err) {
   await dump('fail');

@@ -47,8 +47,8 @@ try {
     await callButton.click();
     await bobSession.page.getByText('is calling you...', { exact: true })
       .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await bobSession.page.getByRole('button', { name: 'End Call' }).click();
-    await aliceSession.page.getByRole('button', { name: 'End Call' })
+    await bobSession.page.getByRole('button', { name: 'End call' }).click();
+    await aliceSession.page.getByRole('button', { name: 'End call' })
       .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
     await aliceSession.page.waitForTimeout(RING_COOLDOWN_MS);
   }
@@ -57,7 +57,7 @@ try {
   // ── Вызов сверх потолка: причина тостом, звонок не висит, адресат не звонит ─
   await callButton.click();
   await expectToast(aliceSession.page, LIMIT_TOAST);
-  await aliceSession.page.getByRole('button', { name: 'End Call' })
+  await aliceSession.page.getByRole('button', { name: 'End call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await bobSession.page.getByText('is calling you...', { exact: true }).count(), 0,
     'вызов сверх потолка дошёл до адресата');

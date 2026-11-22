@@ -95,7 +95,7 @@ try {
   await page.mouse.move(800, 360);
   await page.locator('#LeftColumn').hover();
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Group' }).click();
+  await page.getByRole('menuitem', { name: 'New group' }).click();
   const memberSearch = page.locator('#new-group-picker-search');
   await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await memberSearch.fill(bobName);
@@ -108,7 +108,7 @@ try {
   await page.mouse.move(800, 360);
   await page.locator('#LeftColumn').hover();
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Channel' }).click();
+  await page.getByRole('menuitem', { name: 'New channel' }).click();
   await selectPickerRow(page, '#LeftColumn', bobName);
   await page.getByRole('button', { name: 'Continue To Channel Info' }).click();
   const channelName = page.locator('#LeftColumn .input-group:has(label:has-text("Channel name")) input');
@@ -156,7 +156,7 @@ try {
   await assertAbsent(right, [
     'Reactions', 'Topics', 'Chat History For New Members', 'Linked Channel',
   ], 'ManageGroup');
-  await right.getByText('Group Type').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await right.getByText('Group type').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await right.locator('.AvatarEditable').count(), 1, 'ManageGroup: group photo editor must be shown');
   await right.locator('#group-about').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await right.getByText('Permissions').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -349,7 +349,7 @@ try {
   const privacyItem = page.getByText('Privacy and security', { exact: true }).first();
   await privacyItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await privacyItem.click();
-  await page.locator('#LeftColumn').getByText('Blocked Users').first()
+  await page.locator('#LeftColumn').getByText('Blocked users').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await assertAbsent(page.locator('#LeftColumn'), [
     'Phone Number', 'Last Seen & Online', 'Profile Photos', 'Forwarded Messages', 'Calls', 'Voice Messages',

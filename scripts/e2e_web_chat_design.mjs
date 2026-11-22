@@ -49,15 +49,15 @@ try {
   assert.ok(titleBox.width <= 2, 'заголовок на компьютере — только для чтения с экрана');
   // Создание чата — «+» панели модулей
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Group' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.getByRole('menuitem', { name: 'New group' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.keyboard.press('Escape');
   console.log('OK: шапка списка чатов на компьютере — поле поиска 40 px');
   // «Новое сообщение» (доска `ZpChat2`): «Новая группа», «Новый канал», контакты и ник с другого сервера
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Message' }).click();
+  await page.getByRole('menuitem', { name: 'New message' }).click();
   const remote = page.locator('#LeftColumn [data-contacts-remote]');
   await remote.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  for (const name of ['New Group', 'New Channel']) {
+  for (const name of ['New group', 'New channel']) {
     await page.locator('#LeftColumn .ListItem').filter({ hasText: name }).first()
       .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
@@ -81,7 +81,7 @@ try {
   await toNote.click();
   // Выбор: новая заметка либо существующая (доска `ZpChat`: «новая или в существующую»)
   await page.locator('[data-note-pick-new]').click();
-  await expectToast(page, `Saved to notes: «${noteText}»`);
+  await expectToast(page, `Saved to notes: “${noteText}”`);
   // Второе сообщение дописывается в ту же заметку
   const moreText = `Ещё строка ${suffix}`;
   await sendText(page, moreText);
@@ -89,7 +89,7 @@ try {
   await menu.getByRole('menuitem', { name: /^To a note/ }).click();
   await page.locator(`[data-article-notes] [data-article-note="${noteText}"]`)
     .click({ timeout: 60000 });
-  await expectToast(page, `Saved to notes: «${noteText}»`);
+  await expectToast(page, `Saved to notes: “${noteText}”`);
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   const noteRow = page.locator(`#ParvaneKnowledge [data-note-row="${noteText}"]`).first();
   await noteRow.waitFor({ state: 'visible', timeout: 60000 });

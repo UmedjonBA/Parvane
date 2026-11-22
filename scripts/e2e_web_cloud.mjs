@@ -272,7 +272,7 @@ try {
   await page.locator('[data-sheet-subtitle]').getByText('in “My drive”').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('#parvane-cloud-name').fill(SECRET_NAME);
   await page.getByRole('button', { name: 'Create', exact: true }).click();
-  await page.getByText(`A folder «${SECRET_NAME}» is already here. Choose another name.`)
+  await page.getByText(`A folder “${SECRET_NAME}” is already here. Choose another name.`)
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('.Modal.open').getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.locator('#parvane-cloud-name').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -534,7 +534,7 @@ try {
     await target.dispatchEvent('drop', { dataTransfer: data });
     await item(name).dispatchEvent('dragend', { dataTransfer: data }).catch(() => undefined);
   };
-  await dragTo('перетащенный.txt', item(SECRET_NAME), `Drag onto a folder — «${SECRET_NAME}»`);
+  await dragTo('перетащенный.txt', item(SECRET_NAME), `Drag onto a folder — “${SECRET_NAME}”`);
   await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await cloud.locator('[data-cloud-drag-hint]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await item(SECRET_NAME).click();
@@ -544,7 +544,7 @@ try {
   await toRoot();
   await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // На любую папку дерева слева (доска `XdFiles`), не только на «Мой диск»
-  await dragTo('перетащенный.txt', navFolder(SECRET_NAME), `Drag onto a folder on the left — «${SECRET_NAME}»`);
+  await dragTo('перетащенный.txt', navFolder(SECRET_NAME), `Drag onto a folder on the left — “${SECRET_NAME}”`);
   await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await navFolder(SECRET_NAME).click();
   await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -611,7 +611,7 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-cloud-note-list] [data-cloud-note]')
     ?.getAttribute('data-cloud-note') === 'Overview', undefined, { timeout: STEP_TIMEOUT_MS });
   await notePick.locator(`[data-cloud-note="${noteTitle}"]`).click();
-  await page.getByText(`Attached to «${noteTitle}»`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.getByText(`Attached to “${noteTitle}”`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await notePick.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await knowledge.locator(`[data-note-row="${noteTitle}"]`).click();

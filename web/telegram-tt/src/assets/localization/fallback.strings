@@ -543,11 +543,11 @@
 "ChannelJoinRequest" = "APPLY TO JOIN GROUP";
 "BotStart" = "START";
 "BotRestart" = "Restart Bot";
-"SubscribeRequests" = "Join Requests";
-"MemberRequests" = "Join Requests";
-"AddContact" = "Add Contact";
+"SubscribeRequests" = "Join requests";
+"MemberRequests" = "Join requests";
+"AddContact" = "Add contact";
 "Call" = "Call";
-"VideoCall" = "Video Call";
+"VideoCall" = "Video call";
 "ChatsUnmute" = "Unmute";
 "ChatsMute" = "Mute";
 "ViewDiscussion" = "View Discussion";
@@ -828,7 +828,7 @@
 "InviteLink" = "Invite Link";
 "SearchStickersHint" = "Search sticker sets";
 "SearchGifsTitle" = "Search GIFs";
-"SharedMedia" = "Shared Media";
+"SharedMedia" = "Shared media";
 "ChannelStatsViewsCount_one" = "{count} view";
 "ChannelStatsViewsCount_other" = "{count} views";
 "ChannelStatsSharesCount_one" = "{count} share";
@@ -1909,8 +1909,8 @@
 "MusicAddedBy" = "added by {name}";
 "MusicAddedUsage" = "Today {today} of {perDay} · {used} of {quota}";
 "MusicFetchTitle" = "Not on the server";
-"MusicFetchLooking" = "Looking in the catalogue…";
-"MusicFetchNothing" = "Nothing in the catalogue for this query";
+"MusicFetchLooking" = "Looking in the catalog…";
+"MusicFetchNothing" = "Nothing in the catalog for this query";
 "MusicFetchUnavailable" = "Online search is not available right now";
 "MusicFetchRetry" = "Retry";
 "MusicFetchSearching" = "Looking for the file…";
@@ -2632,7 +2632,7 @@
 "PlannerQuickTitle" = "New entry";
 "PlannerQuickAuto" = "Auto";
 "PlannerQuickPlaceholder" = "call tomorrow 16:00 45 min";
-"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. Put a description after “--”: “English lesson tue 15:00 -- listening test”. Numbers can be words (“at five pm”). Markers #group, @place and a final ! set the group (task or event), the place and “in progress” (task).";
+"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognized. Put a description after “--”: “English lesson tue 15:00 -- listening test”. Numbers can be words (“at five pm”). Markers #group, @place and a final ! set the group (task or event), the place and “in progress” (task).";
 "PlannerQuickMore" = "More options";
 "PlannerQuickDue" = "due {date}";
 "PlannerQuickRemove" = "Remove: {value}";
@@ -3046,7 +3046,7 @@
 "KnowledgeCanvasGroupHere" = "New group here";
 "KnowledgeCanvasAlign" = "Align";
 "KnowledgeCanvasAlignLeft" = "Align left";
-"KnowledgeCanvasAlignCenter" = "Align centres";
+"KnowledgeCanvasAlignCenter" = "Align centers";
 "KnowledgeCanvasAlignRight" = "Align right";
 "KnowledgeCanvasAlignTop" = "Align top";
 "KnowledgeCanvasAlignMiddle" = "Align middles";
@@ -4214,7 +4214,7 @@
 "MusicFetchQueued" = "In the server queue";
 "MusicFetchQueuedAhead_one" = "In the server queue · {count} track ahead";
 "MusicFetchQueuedAhead_other" = "In the server queue · {count} tracks ahead";
-"MusicFetchPickingReference" = "Looking for the track in the catalogue…";
+"MusicFetchPickingReference" = "Looking for the track in the catalog…";
 "MusicFetchServerDownloading" = "The server is downloading";
 "MusicUploadSending" = "Uploading to the server";
 "MusicFetchBytes" = "{done} of {total} MB";
@@ -4257,7 +4257,7 @@
 "MusicAccessMembersHint" = "Only the people you invite see the playlist. Those who add tracks are chosen by you.";
 "MusicAccessServerHint" = "Everyone on the server sees a shared playlist. Only those you invite can add tracks.";
 "MusicAccessLater" = "You can change access later in the playlist menu.";
-"MusicMembersTitle" = "Playlist members “{name}”";
+"MusicMembersTitle" = "Members of “{name}”";
 "MusicMembersOnlyHint" = "The playlist is visible only to these people.";
 "MusicMembersServerHint" = "The playlist is open to everyone on the server, these people add tracks.";
 "MusicMembersInvite" = "Invite by nickname";
@@ -4530,8 +4530,8 @@
 "TaskResponseAcceptedEvent" = "✅ Accepted: event “{name}”";
 "TaskResponseDeclinedEvent" = "❌ Declined: event “{name}”";
 "ArticleTextHead" = "Article “{title}”";
-"ParvaneCallEnd" = "End Call";
-"ParvaneCallLeave" = "End Call";
+"ParvaneCallEnd" = "End call";
+"ParvaneCallLeave" = "End call";
 "ParvaneCallSpeaker" = "Speaker";
 "ParvaneCallSpeakerUnavailable" = "This browser does not let you choose the sound output";
 "ParvaneCallRelayed" = "The call goes through the server · encryption is on";
@@ -4611,8 +4611,8 @@
 "ParvaneAuthTelegramNotYou" = "Did not get a request and did not sign in? Someone knows your password — change it.";
 "ParvaneAuthUpgradeText" = "The server runs a newer version. Your data is in place.";
 "ParvaneDeletionTitle" = "The account will be deleted on {date}";
-"ParvaneDeletionText" = "You requested deletion on {requested}. Until {date} it can be cancelled — everything stays as it was.";
-"ParvaneDeletionTextNoRequested" = "Until {date} the deletion can be cancelled — everything stays as it was.";
+"ParvaneDeletionText" = "You requested deletion on {requested}. Until {date} it can be canceled — everything stays as it was.";
+"ParvaneDeletionTextNoRequested" = "Until {date} the deletion can be canceled — everything stays as it was.";
 "ParvaneDeletionDaysHint" = "left until chats, files, notes and module records are deleted";
 "ParvaneDeletionExportNote" = "The export runs inside the app, so signing in cancels the deletion. After exporting you can delete the account again: Profile → Delete account.";
 "ParvaneDeletionExportConfirm" = "Sign in and export";

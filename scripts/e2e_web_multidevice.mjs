@@ -86,7 +86,7 @@ async function createGroup(page, memberName, title) {
   await page.waitForTimeout(200);
   await page.locator('#LeftColumn').hover();
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Group' }).click();
+  await page.getByRole('menuitem', { name: 'New group' }).click();
   const memberSearch = page.locator('#new-group-picker-search');
   await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await memberSearch.fill(memberName);
@@ -359,7 +359,7 @@ try {
   assert.equal(await bobDevice1.page.locator('[data-peer-state="active"]').count(), 1,
     'device 1 lost its session after device 2 gave up');
   await expectMediaFlowing(aliceSession.page, { audio: true, minPeers: 1 });
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End call' }).click();
   await bobDevice1.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 

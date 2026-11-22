@@ -72,7 +72,7 @@ async function setMemberHidden(page, groupTitle, username, isHidden) {
 // Профиль группы → Edit → «Group Type» (окно поверх чата) → «Жалобы участников»
 async function openReports(page, title) {
   const right = await openGroupManagement(page, title);
-  await right.locator('.ListItem').filter({ hasText: 'Group Type' }).first().click();
+  await right.locator('.ListItem').filter({ hasText: 'Group type' }).first().click();
   await page.locator('.pv-type-dialog [data-reports-entry]').first().click();
   const screen = right.locator('[data-reports-screen]');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

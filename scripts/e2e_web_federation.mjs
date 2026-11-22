@@ -103,7 +103,7 @@ async function createGroup(page, members, title) {
   await page.waitForTimeout(200);
   await page.locator('#LeftColumn').hover();
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Group' }).click();
+  await page.getByRole('menuitem', { name: 'New group' }).click();
   const search = page.locator('#new-group-picker-search');
   await search.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   for (const member of members) {
@@ -222,8 +222,8 @@ try {
   }
   await expectMediaFlowing(a, { audio: true });
   await expectMediaFlowing(b, { audio: true });
-  await a.getByRole('button', { name: 'End Call' }).click();
-  await b.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await a.getByRole('button', { name: 'End call' }).click();
+  await b.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: личный звонок между серверами — звук в обе стороны');
 
   // Групповой звонок: Аня (A) зовёт, Борис (B) и Вера (A) принимают — пары A↔B и A↔A
@@ -238,10 +238,10 @@ try {
   await waitActivePeers(b, 2, 'Борис');
   await waitActivePeers(v, 2, 'Вера');
   for (const page of [a, b, v]) await expectMediaFlowing(page, { audio: true, minPeers: 2 });
-  await a.getByRole('button', { name: 'End Call' }).click();
+  await a.getByRole('button', { name: 'End call' }).click();
   await a.getByText('Group Call', { exact: true }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   for (const page of [b, v]) {
-    await page.getByRole('button', { name: 'End Call' }).click().catch(() => undefined);
+    await page.getByRole('button', { name: 'End call' }).click().catch(() => undefined);
   }
   console.log('OK: групповой звонок с участниками двух серверов — звук у всех троих');
 

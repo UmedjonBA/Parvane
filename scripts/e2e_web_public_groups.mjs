@@ -91,9 +91,9 @@ try {
   await createGroupViaUi(page, title, [carol.split('@')[0]]);
   await sendText(page, before);
   const right = await openGroupManagement(page, title);
-  await right.locator('.ListItem').filter({ hasText: 'Group Type' }).first().click();
+  await right.locator('.ListItem').filter({ hasText: 'Group type' }).first().click();
   // На компьютере «Тип группы» — окно поверх чата (доска `XdChat`); тип — сегмент «Закрытая / Публичная»
-  const typeRow = right.locator('.ListItem').filter({ hasText: 'Group Type' }).first();
+  const typeRow = right.locator('.ListItem').filter({ hasText: 'Group type' }).first();
   const typeDialog = page.locator('.pv-type-dialog');
   const screen = typeDialog.locator('.Management');
   await screen.getByRole('radio', { name: 'Public', exact: true }).first().click();

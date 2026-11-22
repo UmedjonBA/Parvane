@@ -94,8 +94,8 @@ try {
   assert.match(readDesktopLog(bobWorkdir), /медиа-движок = webrtc/, 'desktop: звонок не на настоящем webrtc-движке');
   await page.getByText(/^\d+:\d{2}$/).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await expectMediaFlowing(page, { audio: true });
-  await page.getByRole('button', { name: 'End Call' }).click();
-  await page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await page.getByRole('button', { name: 'End call' }).click();
+  await page.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   console.log(`e2e_web_cross_calls (${PAIR}): web → desktop соединён, звук от desktop принят`);
 
   // ── desktop → web: десктоп перезапускается с хуком вызова, web принимает ────
@@ -120,8 +120,8 @@ try {
   await waitDesktopLog(bobWorkdir, /звонок → Active/, CALL_TIMEOUT_MS, desktop, { since: restartFrom });
   await page.getByText(/^\d+:\d{2}$/).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await expectMediaFlowing(page, { audio: true });
-  await page.getByRole('button', { name: 'End Call' }).click();
-  await page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await page.getByRole('button', { name: 'End call' }).click();
+  await page.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   // запись о захвате без устройства — признак, что звонок шёл именно без звукового сервера
   await waitDesktopLog(bobWorkdir, /PulseAudio call-in не открылся: .*собеседнику уходит тишина/, 5000, desktop,
     { since: restartFrom });

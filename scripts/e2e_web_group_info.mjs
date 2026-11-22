@@ -427,7 +427,7 @@ try {
   // Владелец: пункт «Join Requests» появляется без перезагрузки → одобрить
   const requestsAt = Date.now();
   const rightReq = await openGroupManagement(alicePage, groupTitle);
-  const requestsItem = rightReq.locator('.ListItem').filter({ hasText: 'Join Requests' }).first();
+  const requestsItem = rightReq.locator('.ListItem').filter({ hasText: 'Join requests' }).first();
   await requestsItem.waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
   console.log(`join request reached the owner's screen in ${Date.now() - requestsAt} ms`);
   await requestsItem.click();
@@ -457,7 +457,7 @@ try {
   await expectToast(sessions.grace.page, /approves your request/);
   // Отклонение — на экране заявок (доска `RpPick`: «Отклонить» под заявкой)
   const rightDecline = await openGroupManagement(alicePage, groupTitle);
-  const requestsItem2 = rightDecline.locator('.ListItem').filter({ hasText: 'Join Requests' }).first();
+  const requestsItem2 = rightDecline.locator('.ListItem').filter({ hasText: 'Join requests' }).first();
   await requestsItem2.waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
   await requestsItem2.click();
   await rightDecline.locator('.ListItem, .JoinRequest').filter({ hasText: nick('grace') }).first()
@@ -500,7 +500,7 @@ try {
     // «Вступление по заявке» — в разделе «Доступ» окна «Тип группы» (на компьютере — окно поверх чата, доска `XdChat`)
     const rightMode = await openGroupManagement(alicePage, groupTitle);
     await rightMode.getByText('Choose photo').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await rightMode.locator('.ListItem').filter({ hasText: 'Group Type' }).first().click();
+    await rightMode.locator('.ListItem').filter({ hasText: 'Group type' }).first().click();
     const typeDialog = alicePage.locator('.pv-type-dialog');
     const row = typeDialog.locator('.Management .ListItem', { hasText: 'Join by request' }).first();
     await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

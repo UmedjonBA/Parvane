@@ -221,7 +221,7 @@ try {
   await hidden(passwordForm);
   await shown(page.locator('.SettingsActiveSessions'));
   await profileRow(page, 'Privacy and security').click();
-  await shown(page.locator('#Settings').getByText('Blocked Users').first());
+  await shown(page.locator('#Settings').getByText('Blocked users').first());
   assert.equal(await page.locator('#Settings').getByText(/E2E Keys/).count(), 0, 'копия ключей осталась в «Конфиденциальности»');
   console.log('OK: «Копия ключей», «О приложении», «Устройства и аккаунт», «Конфиденциальность»');
 
@@ -389,9 +389,9 @@ try {
   await shown(devicesScreen.locator('[data-session-current]').getByText(/this device|This computer/).first());
   assert.equal(await devicesScreen.locator('[data-confirm-sign-in]').count(), 0, 'единственное устройство просят подтвердить');
   await devicesScreen.locator('[data-link-new]').click();
-  await shown(page.locator('.Modal').getByText(/sign in with your nick and password/));
+  await shown(page.locator('.Modal').getByText(/sign in with your nickname and password/));
   await page.keyboard.press('Escape');
-  await hidden(page.locator('.Modal').getByText(/sign in with your nick and password/));
+  await hidden(page.locator('.Modal').getByText(/sign in with your nickname and password/));
   console.log('OK: «Устройства» — это устройство, «Привязать новое устройство»');
 
   // Escape: экран → «Обзор» → список чатов

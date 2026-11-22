@@ -64,7 +64,7 @@ async function createGroupWith(page, memberName, groupTitle) {
   await page.waitForTimeout(200);
   await page.locator('#LeftColumn').hover();
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Group' }).click();
+  await page.getByRole('menuitem', { name: 'New group' }).click();
   const memberSearch = page.locator('#new-group-picker-search');
   await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await memberSearch.fill(memberName);

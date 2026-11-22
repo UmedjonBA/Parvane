@@ -571,11 +571,18 @@
 .crumbFolder {
   cursor: var(--custom-cursor, pointer);
 
+  overflow: hidden;
+
+  // Кнопка — неделимый блок: многоточие пути на неё не действует, обрезается она сама
+  max-width: 100%;
   padding: 0;
   border: 0;
 
   font: inherit;
   color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 
   background: none;
 

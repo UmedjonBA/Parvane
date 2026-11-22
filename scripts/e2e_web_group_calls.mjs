@@ -91,7 +91,7 @@ async function createGroup(page, members, title) {
   await page.waitForTimeout(200);
   await page.locator('#LeftColumn').hover();
   await page.locator('[data-add-for="chats"]').click();
-  await page.getByRole('menuitem', { name: 'New Group' }).click();
+  await page.getByRole('menuitem', { name: 'New group' }).click();
   const search = page.locator('#new-group-picker-search');
   await search.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   for (const member of members) {
@@ -187,7 +187,7 @@ try {
   await aliceSession.page.waitForTimeout(200);
   await aliceSession.page.locator('#LeftColumn').hover();
   await aliceSession.page.locator('[data-add-for="chats"]').click();
-  await aliceSession.page.getByRole('menuitem', { name: 'New Group' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'New group' }).click();
   const memberSearch = aliceSession.page.locator('#new-group-picker-search');
   await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await memberSearch.fill(bobName);
@@ -281,14 +281,14 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Выход одного участника: mesh остальных живёт ───────────────────────────
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End call' }).click();
   await aliceSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await waitActivePeers(bobSession.page, 1, 'bob after alice left');
   await waitActivePeers(carolSession.page, 1, 'carol after alice left');
 
   // ── Полный роспуск ─────────────────────────────────────────────────────────
-  await bobSession.page.getByRole('button', { name: 'End Call' }).click();
+  await bobSession.page.getByRole('button', { name: 'End call' }).click();
   await bobSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await carolSession.page.getByText('Group Call', { exact: true })
@@ -297,7 +297,7 @@ try {
   // ── Групповой ВИДЕОзвонок: кадры от двух других участников у каждого ────────
   await openGroupChat(aliceSession.page, groupTitle);
   await aliceSession.page.getByRole('button', { name: 'More actions' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Video Call' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'Video call' }).click();
   await aliceSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await acceptGroupCall(bobSession.page, 'bob (video)');
@@ -331,8 +331,8 @@ try {
       assert(luma.variance > 5, `${name}: tile for ${peer} is blank or frozen (${JSON.stringify(luma)})`);
     }
   }
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
-  await bobSession.page.getByRole('button', { name: 'End Call' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End call' }).click();
+  await bobSession.page.getByRole('button', { name: 'End call' }).click();
   await carolSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
@@ -343,7 +343,7 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const carolGumBefore = await carolSession.page.evaluate(() => globalThis.__parvaneGumCalls);
   const declinedAt = Date.now();
-  await carolSession.page.getByRole('button', { name: 'End Call' }).click();
+  await carolSession.page.getByRole('button', { name: 'End call' }).click();
   await acceptGroupCall(bobSession.page, 'bob (carol declined)');
   await waitActivePeers(aliceSession.page, 1, 'alice with bob only');
   assert.equal(
@@ -384,7 +384,7 @@ try {
   ]);
   console.log('OK: отказавшую позвали снова — она в идущем звонке');
   for (const { page } of [aliceSession, bobSession]) {
-    await page.getByRole('button', { name: 'End Call' }).click();
+    await page.getByRole('button', { name: 'End call' }).click();
   }
   await carolSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
@@ -405,7 +405,7 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const aliceGumBeforeReverse = await aliceSession.page.evaluate(() => globalThis.__parvaneGumCalls);
   const reverseDeclinedAt = Date.now();
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End call' }).click();
   await aliceSession.page.getByText(`${groupTitle}: group call`, { exact: true })
     .waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   await carolSession.page.waitForFunction(
@@ -437,7 +437,7 @@ try {
   // Звонок Кэрол с Бобом пережил закрытие строки
   await waitActivePeers(carolSession.page, 1, 'carol with bob after alice row closed');
   console.log(`reversed-order group call decline: caller row closed in ${reverseDeclineMs} ms (call-level reject)`);
-  await carolSession.page.getByRole('button', { name: 'End Call' }).click();
+  await carolSession.page.getByRole('button', { name: 'End call' }).click();
   await bobSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
@@ -479,7 +479,7 @@ try {
   await carolSession.page.evaluate(() => {
     navigator.mediaDevices.getUserMedia = globalThis.__parvaneGumRestore;
   });
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End call' }).click();
   await bobSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
@@ -529,7 +529,7 @@ try {
   await aliceSession.page.locator('[data-call-invite-list]').getByRole('button', { name: bobName }).click();
   await waitingCard.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await waitingCard.getByRole('button', { name: 'Join', exact: true }).click();
-  await daveSession.page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await daveSession.page.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await Promise.all([
     waitActivePeers(aliceSession.page, 2, 'alice after bob joined from the card'),
     waitActivePeers(bobSession.page, 2, 'bob joined from the card'),
@@ -541,7 +541,7 @@ try {
   await daveSession.page.getByText('Line busy', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await waitActivePeers(aliceSession.page, 2, 'alice group call survives a 1-1 attempt');
   for (const { page } of [aliceSession, bobSession]) {
-    await page.getByRole('button', { name: 'End Call' }).click();
+    await page.getByRole('button', { name: 'End call' }).click();
   }
   await carolSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
@@ -581,7 +581,7 @@ try {
   assert.equal(blockedCall.mediaRequests, blockedCallProbe, 'Заблокированный контакт открыл микрофон');
   console.log(`OK: после отзыва ключа Кэрол не звонит, строка закрыта (${await carolRow.getAttribute('data-peer-state')})`);
 
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End call' }).click();
   await bobSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
@@ -608,7 +608,7 @@ try {
         const stats = await callMediaStats(session.page);
         assert(stats.every((entry) => entry.candidateType === 'relay'), `not relayed: ${JSON.stringify(stats)}`);
       }
-      await relaySessions[0].page.getByRole('button', { name: 'End Call' }).click();
+      await relaySessions[0].page.getByRole('button', { name: 'End call' }).click();
       console.log('OK: групповой звонок только через TURN');
     } finally {
       await Promise.all(relayContexts.map((context) => context.close()));

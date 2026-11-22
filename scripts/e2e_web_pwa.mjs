@@ -172,7 +172,7 @@ try {
   await shareSheet.locator('[data-share-to="note"]').click();
   await shareSheet.locator('[data-share-note-picker]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await shareSheet.locator('[data-share-note-new]').click();
-  await page.locator('.Notification').getByText(`Saved to the note «${SHARED_TEXT}»`).first()
+  await page.locator('.Notification').getByText(`Saved to the note “${SHARED_TEXT}”`).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   await shareSheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   const moreText = `${SHARED_TEXT} ещё`;
@@ -180,7 +180,7 @@ try {
   await shareSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await shareSheet.locator('[data-share-to="note"]').click();
   await shareSheet.locator(`[data-share-note="${SHARED_TEXT}"]`).click({ timeout: STEP_TIMEOUT_MS });
-  await page.locator('.Notification').getByText(`Saved to the note «${SHARED_TEXT}»`).first()
+  await page.locator('.Notification').getByText(`Saved to the note “${SHARED_TEXT}”`).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   await page.locator('#ParvaneKnowledge, [data-note-view]').getByText(moreText).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

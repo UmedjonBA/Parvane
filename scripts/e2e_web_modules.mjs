@@ -265,7 +265,7 @@ async function runServerOffPart(suffix) {
   assert(addBox.y + addBox.height <= ribbonBox.y, '«+» перекрывает ленту');
   assert.equal(await add.getAttribute('aria-label'), 'Add record');
   await add.click();
-  await mobile.getByRole('menuitem', { name: 'New Group' }).waitFor({ state: 'visible', timeout: WAIT_MS });
+  await mobile.getByRole('menuitem', { name: 'New group' }).waitFor({ state: 'visible', timeout: WAIT_MS });
   // Открытое меню: на кнопке «×» «Close menu», нажатие закрывает меню
   await mobile.getByRole('button', { name: 'Close menu' }).click();
   await mobile.waitForFunction(() => !document.querySelector('.Menu .backdrop'), undefined, { timeout: WAIT_MS });

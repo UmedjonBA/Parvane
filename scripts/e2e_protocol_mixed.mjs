@@ -210,9 +210,9 @@ async function runV2CallScenario(alicePage, bobPage) {
   await expectMediaFlowing(alicePage, { audio: true });
   await expectMediaFlowing(bobPage, { audio: true });
   assert.equal((await aliceSas.innerText()).trim(), (await bobSas.innerText()).trim(), 'SAS звонка не совпал');
-  await alicePage.getByRole('button', { name: 'End Call' }).click();
-  await alicePage.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
-  await bobPage.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await alicePage.getByRole('button', { name: 'End call' }).click();
+  await alicePage.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await bobPage.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   assert.deepEqual(callSignalsV1.alice.slice(before.alice), [], 'alice: сигналы звонка ушли v1-путём');
   assert.deepEqual(callSignalsV1.bob.slice(before.bob), [], 'bob: сигналы звонка ушли v1-путём');
   // История: сервер v2-звонки не записывает (D-08) — запись делает сам клиент

@@ -149,7 +149,7 @@ try {
     await alice.page.locator('.MiddleHeader').getByText(title).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     if (isVideo) {
       await alice.page.getByRole('button', { name: 'More actions' }).click();
-      await alice.page.getByRole('menuitem', { name: 'Video Call' }).click();
+      await alice.page.getByRole('menuitem', { name: 'Video call' }).click();
     } else {
       await alice.page.getByRole('button', { name: 'Call', exact: true }).click();
     }
@@ -170,7 +170,7 @@ try {
     console.log(`   путь медиа у alice: ${(await callMediaStats(alice.page))
       .map((p) => `${p.connectionState}/${p.candidateType}`).join(', ')}`);
     for (const session of [alice, bob, carol]) {
-      await session.page.getByRole('button', { name: 'End Call' }).click().catch(() => undefined);
+      await session.page.getByRole('button', { name: 'End call' }).click().catch(() => undefined);
       await session.page.getByText('Group Call', { exact: true }).waitFor({ state: 'detached', timeout: CALL_TIMEOUT_MS });
     }
   };

@@ -30,7 +30,7 @@ try {
   await page.locator('.chat-list .Loading').waitFor({ state: 'detached', timeout: 10000 })
     .catch(() => assert.fail('chat list stuck in spinner'));
   // «Новое сообщение» открывает выбор собеседника, «Назад» возвращает список
-  await chatsEmpty.getByRole('button', { name: 'New Message' }).click();
+  await chatsEmpty.getByRole('button', { name: 'New message' }).click();
   await chatsEmpty.waitFor({ state: 'hidden', timeout: 10000 });
   await page.keyboard.press('Escape');
   await chatsEmpty.waitFor({ state: 'visible', timeout: 10000 });

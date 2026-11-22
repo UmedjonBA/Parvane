@@ -185,15 +185,15 @@ try {
   console.log('OK: камера включается в голосовом звонке и выключается обратно');
 
   // ── Завершение звонка ──────────────────────────────────────────────────────
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
-  await aliceSession.page.getByRole('button', { name: 'End Call' })
+  await aliceSession.page.getByRole('button', { name: 'End call' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
-  await bobSession.page.getByRole('button', { name: 'End Call' })
+  await bobSession.page.getByRole('button', { name: 'End call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Видеозвонок: рендер удалённого потока и локального превью ──────────────
   await aliceSession.page.getByRole('button', { name: 'More actions' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Video Call' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'Video call' }).click();
   await bobSession.page.getByText('is calling you...', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.getByRole('button', { name: 'Accept' }).click();
@@ -241,16 +241,16 @@ try {
   await aliceSession.page.getByRole('button', { name: 'Unmute', exact: true }).click();
   await bobSession.page.locator('[data-remote-muted]').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: «микрофон выключен» у собеседника');
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
-  await bobSession.page.getByRole('button', { name: 'End Call' })
+  await aliceSession.page.getByRole('button', { name: 'End call' }).click();
+  await bobSession.page.getByRole('button', { name: 'End call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Отклонение повторного вызова ───────────────────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await bobSession.page.getByText('is calling you...', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await bobSession.page.getByRole('button', { name: 'End Call' }).click();
-  await aliceSession.page.getByRole('button', { name: 'End Call' })
+  await bobSession.page.getByRole('button', { name: 'End call' }).click();
+  await aliceSession.page.getByRole('button', { name: 'End call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.getByRole('button', { name: 'Accept' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
@@ -262,7 +262,7 @@ try {
   const handle = await bobSession.page.locator('[data-call-handle]').innerText();
   assert.equal(handle.trim(), `@${alice.split('@')[0]} · in contacts`, `входящий без «@ник · в контактах»: ${handle}`);
   await bobSession.page.getByRole('button', { name: 'Reply with message', exact: true }).click();
-  await aliceSession.page.getByRole('button', { name: 'End Call' })
+  await aliceSession.page.getByRole('button', { name: 'End call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.locator('[data-call-screen]').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -351,7 +351,7 @@ try {
         .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
       await findCallTimer(daveSession.page)
         .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-      await carolSession.page.getByRole('button', { name: 'End Call' }).click();
+      await carolSession.page.getByRole('button', { name: 'End call' }).click();
       console.log('OK: relay-only звонок через TURN с ephemeral-кредами');
     } finally {
       await carolContext.close();
@@ -395,7 +395,7 @@ try {
       .waitFor({ state: 'visible', timeout: 12000 }).then(() => { frankRang = true; }).catch(() => {});
     await erinSession.page.getByRole('button', { name: 'Call', exact: true }).click();
     const blockedStarted = Date.now();
-    await erinSession.page.getByRole('button', { name: 'End Call' })
+    await erinSession.page.getByRole('button', { name: 'End call' })
       .waitFor({ state: 'detached', timeout: 10000 });
     assert(Date.now() - blockedStarted < 10000, 'blocked call did not end quickly');
     assert.equal(await erinSession.page.getByText('Line busy', { exact: true }).count(), 0, 'blocked call shows busy');

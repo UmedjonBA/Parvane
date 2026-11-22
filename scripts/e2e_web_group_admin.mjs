@@ -81,7 +81,7 @@ try {
   await aliceSession.page.waitForTimeout(200);
   await aliceSession.page.locator('#LeftColumn').hover();
   await aliceSession.page.locator('[data-add-for="chats"]').click();
-  await aliceSession.page.getByRole('menuitem', { name: 'New Group' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'New group' }).click();
   const memberSearch = aliceSession.page.locator('#new-group-picker-search');
   await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await memberSearch.fill(bobName);
@@ -213,7 +213,7 @@ try {
   await aliceSession.page.waitForTimeout(200);
   await aliceSession.page.locator('#LeftColumn').hover();
   await aliceSession.page.locator('[data-add-for="chats"]').click();
-  await aliceSession.page.getByRole('menuitem', { name: 'New Channel' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'New channel' }).click();
   // Шаг 1: выбор подписчиков, floating-стрелка — далее. Пикер, как в Telegram,
   // показывает контакты; bob — участник удалённой группы без личной переписки,
   // его находят поиском (как в «New Group», см. createGroupViaUi)
@@ -224,7 +224,7 @@ try {
   await aliceSession.page.getByRole('button', { name: 'Continue To Channel Info' }).click();
   // Шаг 2: имя канала (label tt не связан с input — берём поле напрямую),
   // floating — создать
-  await aliceSession.page.getByRole('heading', { name: 'New Channel' })
+  await aliceSession.page.getByRole('heading', { name: 'New channel' })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const channelName = aliceSession.page
     .locator('#LeftColumn .input-group:has(label:has-text("Channel name")) input');
@@ -254,7 +254,7 @@ try {
   await showChatList(aliceSession.page);
   await aliceSession.page.locator('#LeftColumn').hover();
   await aliceSession.page.locator('[data-add-for="chats"]').click();
-  await aliceSession.page.getByRole('menuitem', { name: 'New Channel' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'New channel' }).click();
   const writersSearch = aliceSession.page.locator('#new-group-picker-search');
   await writersSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   for (const name of [bobName, carolName]) {

@@ -76,7 +76,7 @@ try {
     `строка разбора — день, время, название: ${firstRow}`);
   assert.ok(await importScreen.locator('[data-import-item], [data-import-problem]').last()
     .evaluate((el) => el.hasAttribute('data-import-problem')), 'непонятое — на своём месте в порядке текста');
-  await visible(importScreen.locator('[data-import-hint]').filter({ hasText: 'Line «чт вечер ???» is not understood' }),
+  await visible(importScreen.locator('[data-import-hint]').filter({ hasText: 'Line “чт вечер ???” is not understood' }),
     'подсказка называет непонятую строку');
   assert.equal(await importScreen.locator('#planner-schedule-list').count(), 0, 'у расписания нет группы');
   assert.equal(await importScreen.getByRole('button', { name: 'Close' }).count(), 0, 'на компьютере нет «×»');
@@ -259,7 +259,7 @@ try {
   await sportLayer.click();
   await visible(search.locator('[data-search-found]').filter({ hasText: /^found [67] · in layers that are on$/ }),
     'ряд выключенного слоя «Спорт» в выдачу не попадает');
-  await visible(search.locator('[data-search-hint]').filter({ hasText: 'The «Спорт» layer is off on the left' }),
+  await visible(search.locator('[data-search-hint]').filter({ hasText: 'The “Спорт” layer is off on the left' }),
     'подсказка называет выключенный слой');
   await sportLayer.click();
   await visible(search.locator('[data-search-found]').filter({ hasText: /^found [78]$/ }), 'слой включён — ряд снова найден');

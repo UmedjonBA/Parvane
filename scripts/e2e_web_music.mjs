@@ -175,7 +175,7 @@ try {
     await full.getByRole('button', { name: 'Pause', exact: true }).click();
     await full.getByRole('button', { name: 'Repeat: off' }).click();
     await full.locator('[data-music-repeat="all"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await full.locator('[data-music-queue-note]').getByText('Source: album «Берег».').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await full.locator('[data-music-queue-note]').getByText('Source: album “Берег”.').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await full.getByRole('button', { name: 'Add to favorites' }).click();
     await full.getByRole('button', { name: 'Remove from favorites' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
@@ -275,7 +275,7 @@ try {
   await withFullPlayer(page, async (opened) => {
     await opened.locator('[data-music-repeat="all"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     // Источник на компьютере — в сноске под очередью (подпись сверху — только на телефоне)
-    await opened.locator('[data-music-queue-note]').getByText('Source: album «Берег».').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await opened.locator('[data-music-queue-note]').getByText('Source: album “Берег”.').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
   console.log('OK: очередь, играющий трек, повтор и источник пережили перезагрузку');
 
@@ -506,7 +506,7 @@ try {
   const albumRow = (id) => wide.locator(`[data-music-tracks] [data-track="${id}"]`);
   await albumRow('t1').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await addToPlaylist(page, albumRow('t1'), 'Дорога');
-  await page.getByText('Added to «Дорога»').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.getByText('Added to “Дорога”').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await addToPlaylist(page, albumRow('t3'), 'Дорога');
   await addToPlaylist(page, albumRow('t1'), 'Дорога');
   await page.getByText('This track is already in the playlist').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -515,7 +515,7 @@ try {
   await createForm.locator('[data-music-add-current][aria-checked="true"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await createForm.getByPlaceholder('for example: For the road').fill('Вечер');
   await createForm.getByRole('button', { name: 'Create', exact: true }).click();
-  await page.getByText('Playlist «Вечер» created').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.getByText('Playlist “Вечер” created').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Телефон (доска `XpMusic`): в шторке трека плейлисты — чипами внизу; где трек уже есть — чип выделен
   await page.setViewportSize(PHONE);
   await albumRow('t1').locator('[data-music-menu]').click();

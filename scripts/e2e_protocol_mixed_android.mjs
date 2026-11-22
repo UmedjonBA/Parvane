@@ -173,8 +173,8 @@ try {
   await waitCount(X_CONNECTED, connectedBefore, 'медиа звонка web → X');
   await page.getByText(/^\d+:\d{2}$/).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await expectMediaFlowing(page, { audio: true });
-  await page.getByRole('button', { name: 'End Call' }).click();
-  await page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await page.getByRole('button', { name: 'End call' }).click();
+  await page.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   ok('звонок web → X соединился, звук идёт');
   connectedBefore = incomingCount(X_CONNECTED);
   xCommand({ op: 'call', peer: bob, video: false });
@@ -183,8 +183,8 @@ try {
   await waitCount(X_CONNECTED, connectedBefore, 'медиа звонка X → web');
   await page.getByText(/^\d+:\d{2}$/).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await expectMediaFlowing(page, { audio: true });
-  await page.getByRole('button', { name: 'End Call' }).click();
-  await page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await page.getByRole('button', { name: 'End call' }).click();
+  await page.getByRole('button', { name: 'End call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   ok('звонок X → web соединился, звук идёт');
 
   // web → X: группа v2

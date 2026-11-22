@@ -36,7 +36,7 @@ const contexts = await Promise.all([1, 2, 3].map(() => browser.newContext(contex
 const sessions = {};
 
 const incoming = (page) => page.getByText('is calling you...', { exact: true });
-const endCall = (page) => page.getByRole('button', { name: 'End Call' });
+const endCall = (page) => page.getByRole('button', { name: 'End call' });
 
 try {
   const suffix = `${Date.now()}-${process.pid}`;

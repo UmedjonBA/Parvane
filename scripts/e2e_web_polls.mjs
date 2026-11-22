@@ -113,7 +113,7 @@ try {
   await aliceSession.page.waitForTimeout(200);
   await aliceSession.page.locator('#LeftColumn').hover();
   await aliceSession.page.locator('[data-add-for="chats"]').click();
-  await aliceSession.page.getByRole('menuitem', { name: 'New Group' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'New group' }).click();
   const memberSearch = aliceSession.page.locator('#new-group-picker-search');
   await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await memberSearch.fill(bobName);
