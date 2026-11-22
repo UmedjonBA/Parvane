@@ -3353,6 +3353,11 @@
 "ParvanePrivacyEncryption" = "Encryption";
 "ParvanePrivacyEncryptionHint" = "Chats, files, notes and module records are encrypted on the device. Tap the key to copy it and show it to people who want to verify you.";
 "ParvanePrivacyKeyCopied" = "Security key copied";
+"ParvaneSecurityKeyTitle" = "Security key";
+"ParvaneSecurityKeyScreenHint" = "With this code the other person can make sure they are writing to you. Compare it in person or over a call.";
+"ParvaneSecurityKeyShowQr" = "Show QR";
+"ParvaneSecurityKeyHideQr" = "Hide QR";
+"ParvaneSecurityKeyChangedHint" = "If the key of someone you talk to changes, their chat shows a warning and offers to compare the code again.";
 "ParvaneAuthCodeResendIn" = "Didn't get it? You can send it again in {time}";
 "ParvaneAuthCodeNotReceived" = "Didn't get it?";
 "ParvaneAuthCodeResend" = "Send again";

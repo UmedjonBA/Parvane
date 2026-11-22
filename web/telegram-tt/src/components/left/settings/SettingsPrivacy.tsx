@@ -5,7 +5,6 @@ import { SettingsScreens } from '../../../types';
 
 import { selectIsCurrentUserFrozen } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
-import { copyTextToClipboard } from '../../../util/clipboard';
 import { callApi } from '../../../api/gramjs';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -17,6 +16,7 @@ import PrivacySignIn from './profile/PrivacySignIn';
 import ProfileChoiceSheet from './profile/ProfileChoiceSheet';
 import ProfileIcon from './profile/ProfileIcon';
 import ProfileSwitchRow from './profile/ProfileSwitchRow';
+import SecurityKeySheet from './profile/SecurityKeySheet';
 
 import styles from './profile/Profile.module.scss';
 
@@ -153,11 +153,12 @@ const SettingsPrivacy = ({
     if (openChoice === 'groups') handleGroupAddChange(isAllowed);
   });
 
-  const handleCopyKey = useLastCallback(() => {
-    if (!ownFingerprint) return;
-    copyTextToClipboard(ownFingerprint);
-    showNotification({ message: lang('ParvanePrivacyKeyCopied') });
+  // «Ваш ключ безопасности» открывает экран ключа (доска `RpProfileC`): код, «Скопировать», «Показать QR»
+  const [isKeyOpen, setIsKeyOpen] = useState(false);
+  const handleOpenKey = useLastCallback(() => {
+    if (ownFingerprint) setIsKeyOpen(true);
   });
+  const handleCloseKey = useLastCallback(() => setIsKeyOpen(false));
 
   const rowClass = buildClassName(styles.setRow, styles.setRowAction);
   const labels = useMemo<Record<Audience, string>>(() => ({
@@ -240,7 +241,7 @@ const SettingsPrivacy = ({
           title={oldLang('ParvaneSecurityKeyOwnHint')}
           data-privacy-row="key"
           data-security-key={ownFingerprint}
-          onClick={handleCopyKey}
+          onClick={handleOpenKey}
         >
           <span className={styles.setTitle}>{oldLang('ParvaneSecurityKeyOwn')}</span>
           <span className={styles.setValue}>
@@ -260,6 +261,7 @@ const SettingsPrivacy = ({
       </div>
       <div className={styles.hint}>{lang('ParvanePrivacyEncryptionHint')}</div>
 
+      <SecurityKeySheet isOpen={isKeyOpen} fingerprint={ownFingerprint} onClose={handleCloseKey} />
       <ProfileChoiceSheet
         isOpen={Boolean(sheet)}
         title={sheet?.title || ''}

@@ -1067,3 +1067,34 @@
     max-width: 35rem;
   }
 }
+
+// «Ключ безопасности» (доска `RpProfileC`): код группами по четыре знака, две кнопки, QR
+.keyCode {
+  padding: 1rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.7;
+  text-align: center;
+  letter-spacing: 0.04em;
+
+  background: var(--pv-panel);
+}
+
+.keyButtons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.keyQr {
+  overflow: hidden;
+  align-self: center;
+
+  width: 12.5rem;
+  height: 12.5rem;
+  border-radius: var(--pv-radius-card);
+}

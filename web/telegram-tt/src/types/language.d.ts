@@ -2553,6 +2553,11 @@ export interface LangPair {
   'ParvanePrivacyEncryption': undefined;
   'ParvanePrivacyEncryptionHint': undefined;
   'ParvanePrivacyKeyCopied': undefined;
+  'ParvaneSecurityKeyTitle': undefined;
+  'ParvaneSecurityKeyScreenHint': undefined;
+  'ParvaneSecurityKeyShowQr': undefined;
+  'ParvaneSecurityKeyHideQr': undefined;
+  'ParvaneSecurityKeyChangedHint': undefined;
   'ParvaneAuthCodeNotReceived': undefined;
   'ParvaneAuthCodeResend': undefined;
   'ParvaneAuthCodeResent': undefined;

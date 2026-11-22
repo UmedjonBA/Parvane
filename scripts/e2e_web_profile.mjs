@@ -372,6 +372,15 @@ try {
   await page.keyboard.press('Escape');
   await hidden(page.locator('.Modal [data-password-form]'));
   await shown(privacy.locator('[data-security-key]'));
+  // «Ваш ключ безопасности» открывает экран ключа (доска `RpProfileC`): код группами по четыре знака, QR по кнопке
+  await privacy.locator('[data-security-key]').click();
+  const keyCode = page.locator('.Modal [data-security-key-code]');
+  await shown(keyCode);
+  assert.match((await keyCode.innerText()).trim(), /^([0-9A-F]{4}( |\n|$))+/, 'код ключа — группами по четыре знака');
+  await page.locator('.Modal [data-security-key-qr]').click();
+  await shown(page.locator('.Modal [data-security-key-qr-image] svg'));
+  await page.keyboard.press('Escape');
+  await hidden(keyCode);
   console.log('OK: «Конфиденциальность» — строки «кто может» с выбором в шторке, смена пароля, ключ');
 
   await profileRow(page, 'Devices and account').click();

@@ -3170,6 +3170,11 @@
 "ParvanePrivacyEncryption" = "Шифрование";
 "ParvanePrivacyEncryptionHint" = "Переписка, файлы, заметки и записи модулей шифруются на устройстве. Нажмите на ключ, чтобы скопировать его и показать тем, кто хочет вас проверить.";
 "ParvanePrivacyKeyCopied" = "Ключ безопасности скопирован";
+"ParvaneSecurityKeyTitle" = "Ключ безопасности";
+"ParvaneSecurityKeyScreenHint" = "По этому коду собеседник может убедиться, что пишет именно вам. Сверьте его при встрече или по звонку.";
+"ParvaneSecurityKeyShowQr" = "Показать QR";
+"ParvaneSecurityKeyHideQr" = "Скрыть QR";
+"ParvaneSecurityKeyChangedHint" = "Если ключ собеседника изменился, в чате с ним появится предупреждение и предложение сверить код заново.";
 "ParvaneAuthCodeResendIn" = "Не пришло? Отправить ещё раз можно через {time}";
 "ParvaneAuthCodeNotReceived" = "Не пришло?";
 "ParvaneAuthCodeResend" = "Отправить ещё раз";
