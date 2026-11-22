@@ -194,4 +194,25 @@ fi
 docker compose ps
 REMOTE
 
+# Бот Telegram (отдельный VPS): шлёт в Hello версию протокола движка — устаревший бот gateway отвергает, и
+# регистрация через Telegram молча перестаёт работать. Обновляется, когда файл на VPS отличается от репозитория
+BOT_DEST="${PARVANE_DEPLOY_BOT_SSH_DEST:-root@84.19.3.252}"
+BOT_DIR=/opt/parvane-tg-bot
+BOT_SRC="$REPO/backend/infra/telegram-bot/parvane_tg_bot.py"
+if [[ "${PARVANE_DEPLOY_SKIP_BOT:-0}" != "1" ]]; then
+  log "Бот Telegram ($BOT_DEST)"
+  want="$(sha256sum "$BOT_SRC" | cut -d' ' -f1)"
+  have="$(ssh -o BatchMode=yes "$BOT_DEST" "sha256sum $BOT_DIR/parvane_tg_bot.py" | cut -d' ' -f1)" || have=""
+  if [[ -n "$have" && "$have" == "$want" ]]; then
+    echo "бот актуален"
+  else
+    ssh -o BatchMode=yes "$BOT_DEST" "cp -a $BOT_DIR/parvane_tg_bot.py $BOT_DIR/parvane_tg_bot.py.prev-\$(date +%Y%m%d%H%M)"
+    scp -q -o BatchMode=yes "$BOT_SRC" "$BOT_DEST:$BOT_DIR/parvane_tg_bot.py"
+    ssh -o BatchMode=yes "$BOT_DEST" "systemctl restart parvane-tg-bot && sleep 15 && systemctl is-active parvane-tg-bot \
+      && ! journalctl -u parvane-tg-bot --since '-14 s' --no-pager | grep -q 'Welcome v2'" \
+      || { echo "бот после обновления не связался с gateway — journalctl -u parvane-tg-bot на $BOT_DEST" >&2; exit 1; }
+    echo "бот обновлён"
+  fi
+fi
+
 log "Готово: https://$PARVANE_DEPLOY_PUBLIC_HOST:${PARVANE_DEPLOY_PUBLIC_HTTPS_PORT:-20443}"

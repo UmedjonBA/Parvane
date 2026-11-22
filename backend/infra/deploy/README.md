@@ -34,6 +34,7 @@ DuckDNS в серверном `.env` (`DUCKDNS_TOKEN`, НЕ в репо), дом
 backend/infra/deploy/deploy.sh                 # всё: web dist + образы + заливка + up
 PARVANE_DEPLOY_SKIP_WEB_BUILD=1 backend/infra/deploy/deploy.sh   # без пересборки веба
 PARVANE_DEPLOY_SKIP_IMAGES=1 backend/infra/deploy/deploy.sh      # только конфиги/статика
+PARVANE_DEPLOY_SKIP_BOT=1 backend/infra/deploy/deploy.sh         # не сверять бота Telegram на VPS
 ```
 
 Образы собираются ЛОКАЛЬНО podman'ом под **baseline x86-64** (Xeon 5160 без
