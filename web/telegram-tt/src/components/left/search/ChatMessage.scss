@@ -28,11 +28,8 @@
 
         color: var(--color-text);
 
-        background: #cae3f7;
-
-        .theme-dark & {
-          --color-text: #000;
-        }
+        // Parvane: совпадение — тёплая подсветка акцента макета вместо голубой
+        background: color-mix(in srgb, var(--pv-accent) 28%, transparent);
       }
     }
 

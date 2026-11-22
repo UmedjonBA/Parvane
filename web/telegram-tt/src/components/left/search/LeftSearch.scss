@@ -45,9 +45,12 @@
     padding-top: 0.625rem;
     padding-left: 0.5rem;
 
-    font-size: 1rem;
-    font-weight: var(--font-weight-medium);
-    color: var(--color-text-secondary);
+    // Parvane: подпись раздела — как `.cap` макета
+    font-size: var(--pv-font-size-caption);
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 
     &-first {
       padding-top: 0.75rem;

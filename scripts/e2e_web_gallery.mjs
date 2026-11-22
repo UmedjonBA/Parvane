@@ -1043,6 +1043,26 @@ async function galleryChat() {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
   }
+  // Поиск по сообщениям (экран форка): телефон — Escape в списке чатов, компьютер — поле «Поиск» списка
+  await step(page, 'chat-phone-search', async () => {
+    await openChat(peer.split('@')[0]);
+    await page.locator('#MiddleColumn .MiddleHeader .back-button button:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(600);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(800);
+  });
+  await step(page, 'chat-phone-search-query', async () => {
+    await page.locator('#LeftColumn input[type="text"]:visible, #LeftColumn input[type="search"]:visible').first().fill('клиент');
+    await page.waitForTimeout(2000);
+  });
+  await resize(page, DESK);
+  await step(page, 'chat-desk-search-query', async () => { await page.waitForTimeout(1500); });
+  await step(page, 'chat-desk-search-empty', async () => {
+    await page.locator('#LeftColumn input[type="text"]:visible, #LeftColumn input[type="search"]:visible').first().fill('');
+    await page.waitForTimeout(1000);
+  });
+  await page.keyboard.press('Escape');
+  await resize(page, PHONE);
   // Телефон: «Новое сообщение», новая группа и новый канал (доска `ZpChat2`)
   const toChatList = async () => {
     for (let attempt = 0; attempt < 4; attempt++) {

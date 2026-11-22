@@ -35,8 +35,10 @@
       transition: transform 0.25s;
     }
 
+    // Parvane (доски макета): «назад» — шеврон «‹» без хвоста: средняя черта стрелки прозрачна
     &.state-back {
       transform: rotate(180deg);
+      background-color: transparent;
 
       &::before {
         transform: rotate(45deg) scaleX(0.75) translate(0.375rem, -0.1875rem);
