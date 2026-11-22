@@ -25,6 +25,7 @@ import {
   linkSecondDevice,
   openProfile,
 } from './e2e_web_helpers.mjs';
+import { shootAuthScreen } from './e2e_web_auth_shots.mjs';
 
 const PASSWORD = 'Parvane-devices-e2e-password';
 // Клиентский кэш списка устройств контакта (DEVICE_LIST_TTL_MS в e2e.ts) + запас
@@ -213,6 +214,7 @@ try {
   const signedOut = bobDevice2.page.locator('[data-signed-out]');
   await signedOut.waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
   await signedOut.getByText('wiped', { exact: true }).waitFor({ state: 'visible', timeout: 5000 });
+  await shootAuthScreen(bobDevice2.page, 'signed-out');
   await signedOut.locator('[data-signed-out-sign-in]').click();
   await signedOut.waitFor({ state: 'detached', timeout: 10000 });
   await bobDevice2.page.locator('.Transition_slide-active > #auth-phone-number-form')

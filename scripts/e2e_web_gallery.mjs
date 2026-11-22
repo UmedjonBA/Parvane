@@ -930,6 +930,20 @@ async function galleryStates() {
   });
   await resize(page, DESK);
   await step(page, 'states-desk-first-run', async () => { await page.waitForTimeout(800); });
+  // «Нужно обновить приложение»: сервер требует новую версию (доска `XpAuth-03`). Первый запуск сначала пройден:
+  // окно поверх него перехватило бы нажатия обработчика первого запуска из хелперов
+  await page.evaluate(() => localStorage.setItem('parvane:modules-first-run', 'shown'));
+  await reloadPage(page);
+  await page.waitForTimeout(3000);
+  for (const [name, size] of [['states-desk-upgrade', DESK], ['states-phone-upgrade', PHONE]]) {
+    await resize(page, size);
+    await step(page, name, async () => {
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent('parvane-upgrade-required')));
+      await page.waitForTimeout(1500);
+    });
+    await page.evaluate(() => document.querySelector('[data-upgrade-later]')?.click());
+    await page.waitForTimeout(500);
+  }
   await page.context().close();
 }
 

@@ -185,6 +185,14 @@
   justify-content: flex-end;
 }
 
+// Телефон: кнопки окна столбиком во всю ширину, главная сверху
+.buttonsStack {
+  @media (max-width: 600px) {
+    flex-direction: column-reverse;
+    flex-wrap: nowrap;
+  }
+}
+
 .textButton {
   height: var(--pv-touch-size);
   border: 0;

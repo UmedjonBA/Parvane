@@ -84,7 +84,7 @@ const UpgradeRequired = ({ isAppUpdateAvailable }: StateProps) => {
             </div>
           </div>
           <p className={styles.foot}>{lang('ShellUpgradeReadOnly')}</p>
-          <div className={styles.buttons}>
+          <div className={buildClassName(styles.buttons, styles.buttonsStack)}>
             <button type="button" className={kit.btn} data-upgrade-later onClick={postponeUpgrade}>
               {lang('ShellUpgradeLater')}
             </button>
