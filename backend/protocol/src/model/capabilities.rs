@@ -133,6 +133,11 @@ impl GroupFacts {
         if !p.send_messages && !self.channel {
             return true;
         }
+        // Канал: участник без права писать (в том числе снятый автор с ключом прежней эпохи) — скрыть; у автора
+        // ограничений по типу нет, как у админа
+        if self.channel {
+            return !self.writers.contains(author);
+        }
         let _ = now_ms;
         !match &c.kind {
             Some(content::Kind::Media(m)) if m.kind == MediaKind::Animation as i32 => p.send_stickers_gifs,
@@ -262,5 +267,22 @@ mod tests {
         assert!(c.send_media && c.delete_everyone && c.pin);
         let media = Content { kind: Some(content::Kind::Media(Default::default())), ..Default::default() };
         assert!(g.hides("m@x", &media, 0) && !g.hides("o@x", &media, 0) && !g.hides("stranger@x", &media, 0));
+    }
+
+    /// Канал: пишет и показывается участник с правом писать; сообщение участника без права (снятый автор с ключом
+    /// прежней эпохи) скрывается у получателя.
+    #[test]
+    fn channel_writer_writes_and_others_are_hidden() {
+        let mut g = GroupFacts { owner: "o@x".into(), channel: true, ..Default::default() };
+        for u in ["w@x", "m@x"] {
+            g.members.insert(u.into(), (Role::Member as i32, AdminRights::default(), 0));
+        }
+        g.writers.insert("w@x".into());
+        assert!(g.can_write("w@x", 0) && !g.can_write("m@x", 0) && g.can_write("o@x", 0));
+        assert!(g.capabilities("w@x", 0).send_text && !g.capabilities("m@x", 0).send_text);
+        let text = Content { kind: Some(content::Kind::Text(Default::default())), ..Default::default() };
+        let media = Content { kind: Some(content::Kind::Media(Default::default())), ..Default::default() };
+        assert!(!g.hides("w@x", &text, 0) && !g.hides("w@x", &media, 0) && !g.hides("o@x", &text, 0));
+        assert!(g.hides("m@x", &text, 0));
     }
 }
