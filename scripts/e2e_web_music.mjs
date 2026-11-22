@@ -588,6 +588,11 @@ try {
   await card.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const cardOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(cardOverflow <= 0, `карточка трека переполняет телефон: ${cardOverflow}`);
+  // Кадр карточки трека в чате для сверки с доской `MusicChat`
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-chat-track-phone.png` });
+  }
   await page.setViewportSize(WIDE);
   await page.locator('#LeftColumn .chat-list').getByText(/Track: .*Harbor Lights/).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -610,6 +615,14 @@ try {
   const playlistCard = page.locator('[data-music-playlist-card="В дорогу"]');
   await playlistCard.getByText('Северный ветер').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await playlistCard.getByText(/^1 track/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Кадр карточек трека и плейлиста в чате на телефоне (доска `MusicChat`)
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.setViewportSize(PHONE);
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-chat-cards-phone.png` });
+    await page.setViewportSize(WIDE);
+    await page.waitForTimeout(800);
+  }
   await playlistCard.getByRole('button', { name: 'Open', exact: true }).click();
   const sharedSheet = page.locator('[data-music-playlist-sheet]');
   await sharedSheet.locator('[data-track="t1"]').getByText('Северный ветер').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
