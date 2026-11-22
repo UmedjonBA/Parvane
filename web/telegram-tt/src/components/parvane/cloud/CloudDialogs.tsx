@@ -38,7 +38,7 @@ const CloudNameDialogBase = ({
   isOpen, title, label, confirmLabel, initialName, note, canShare, takenNames, isFolder, onSubmit, onClose,
 }: NameProps) => {
   const lang = useLang();
-  const [name, setName] = useState('');
+  const [typedName, setName] = useState('');
   const [isShared, setIsShared] = useState(false);
   const [hasTried, setHasTried] = useState(false);
   const inputRef = useRef<HTMLInputElement>();
@@ -54,6 +54,9 @@ const CloudNameDialogBase = ({
     }
     wasOpenRef.current = isOpen;
   }, [isOpen, initialName]);
+  // В самом кадре открытия поле уже несёт прежнее имя: пустое поле на кадр давало склейку прежнего имени с
+  // набранным, когда выделение и ввод попадали по разные стороны от перерисовки (cloud_links под нагрузкой)
+  const name = isOpen && !wasOpenRef.current ? (initialName || '') : typedName;
 
   // Поле получает фокус, когда шторка уже на экране
   useEffect(() => {
