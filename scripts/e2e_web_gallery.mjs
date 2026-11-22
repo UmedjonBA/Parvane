@@ -614,7 +614,32 @@ async function galleryChat() {
     await page.waitForTimeout(500);
   };
   await phoneInfo('RpChat-02', peer.split('@')[0]);
-  await phoneInfo('ZpChat2-03', 'Linux-чат');
+  await phoneInfo('ZpChat2-04', 'Linux-чат');
+  // Телефон: «Новое сообщение», новая группа и новый канал (доска `ZpChat2`)
+  const toChatList = async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await page.locator('[data-add-for="chats"]:visible').first().isVisible().catch(() => false)) break;
+      await page.locator('#RightColumn .close-button:visible, #MiddleColumn .MiddleHeader .back-button button:visible')
+        .first().click({ timeout: 2000 }).catch(() => page.keyboard.press('Escape'));
+      await page.waitForTimeout(600);
+    }
+  };
+  await step(page, 'ZpChat2-01', async () => {
+    await toChatList();
+    await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await step(page, 'ZpChat2-03', async () => {
+    await page.getByText('Новый канал', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'ZpChat2-02', async () => {
+    await toChatList();
+    await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByText('Новая группа', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
   await page.context().close();
   await bob.page.context().close();
 }

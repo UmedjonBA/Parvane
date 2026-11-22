@@ -120,6 +120,31 @@
     }
   }
 
+  // Шаг 1 (доска `ZpChat2-02`): поле поиска по макету на фоне, люди — строками панели с линиями, под именем ник
+  .pv-new-chat-picker {
+    > .custom-scroll:first-child {
+      padding: 0.75rem 1rem;
+      border-bottom: 0;
+    }
+
+    #new-group-picker-search {
+      height: var(--pv-input-height);
+      padding: 0 0.875rem;
+      border: 1px solid var(--pv-line2);
+      border-radius: var(--pv-radius);
+
+      background: var(--pv-bg);
+      box-shadow: none;
+    }
+  }
+
+  .pv-new-chat-item {
+    margin: 0;
+    border-bottom: 1px solid var(--pv-line);
+    border-radius: 0;
+    background: var(--pv-panel);
+  }
+
   .pv-new-chat-hint {
     flex: none;
 

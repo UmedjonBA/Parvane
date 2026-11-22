@@ -127,9 +127,10 @@ const NewChatStep1: FC<OwnProps & StateProps> = ({
           isLoading={isSearching}
           isSearchable
           allowMultiple
-          withStatus
+          withPeerUsernames
           itemInputType="checkbox"
-          withDefaultPadding
+          className="pv-new-chat-picker"
+          itemClassName="pv-new-chat-item"
           onSelectedIdsChange={onSelectedMemberIdsChange}
           onFilterChange={handleFilterChange}
         />
