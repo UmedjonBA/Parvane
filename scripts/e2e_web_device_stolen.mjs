@@ -58,6 +58,10 @@ try {
   await left.first().click();
   let wizard = device1.page.locator('[data-stolen-wizard]');
   await wizard.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Кадр мастера для сверки с доской `ZdProfileY` (смена ширины через границу телефона закрыла бы окно)
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await device1.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/stolen-desk.png` });
+  }
   assert.match(await wizard.innerText(), /Mark «.+» as stolen/, 'шаг 1 вышедшего — отметка украденным');
   assert.equal(await wizard.locator('[data-stolen-password]').count(), 0, 'пароль для отметки не нужен');
   assert.equal(await wizard.locator('[data-stolen-sign-out-only]').count(), 0, '«Просто выйти» вышедшему не нужно');

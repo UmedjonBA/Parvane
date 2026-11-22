@@ -117,6 +117,25 @@
   color: var(--pv-muted);
 }
 
+// «Версия и система»: подпись в одну строку, значение занимает остаток и обрезается
+.envTitle {
+  flex: none;
+}
+
+.envValue {
+  flex: 1 1 0;
+  max-width: none;
+  text-align: end;
+}
+
+// Подпись раздела формы прописными: «Где», «Что приложим» (доска `ZdProfileY`)
+.labelCaps {
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .field {
   display: flex;
   flex-direction: column;

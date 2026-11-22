@@ -286,8 +286,9 @@
       max-width: 45rem;
     }
 
-    // «Модули / План» — две колонки карточек во всю ширину страницы (доска `RdPlanSet`)
-    &[data-settings-page="plan"] > * {
+    // «Модули / План» и «Сообщить об ошибке» — две колонки во всю ширину страницы (доски `RdPlanSet`, `ZdProfileY`)
+    &[data-settings-page="plan"] > *,
+    &[data-settings-page="bug"] > * {
       max-width: none;
     }
   }

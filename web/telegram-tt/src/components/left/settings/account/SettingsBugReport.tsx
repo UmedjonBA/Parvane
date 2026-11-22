@@ -157,7 +157,7 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
         />
       </div>
       <div className={styles.field}>
-        <p className={styles.label}>{lang('ParvaneBugWhere')}</p>
+        <p className={buildClassName(styles.label, styles.labelCaps)}>{lang('ParvaneBugWhere')}</p>
         <div className={styles.chips} role="group" aria-label={lang('ParvaneBugWhere')}>
           {BUG_REPORT_AREAS.map((item) => (
             <button
@@ -179,7 +179,7 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
 
   const attachments = (
     <div className={styles.screenColumn}>
-      <p className={styles.label}>{lang('ParvaneBugAttach')}</p>
+      <p className={buildClassName(styles.label, styles.labelCaps)}>{lang('ParvaneBugAttach')}</p>
       <div className={profile.group}>
         <ProfileSwitchRow
           title={lang('ParvaneBugAttachLog')}
@@ -196,8 +196,8 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
           data-bug-shot
         />
         <div className={profile.setRow} data-bug-environment>
-          <span className={profile.setTitle}>{lang('ParvaneBugEnvironment')}</span>
-          <span className={profile.setValue}>{environment}</span>
+          <span className={styles.envTitle}>{lang('ParvaneBugEnvironment')}</span>
+          <span className={buildClassName(profile.setValue, styles.envValue)}>{environment}</span>
         </div>
         <button
           type="button"
@@ -227,6 +227,7 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
     <div
       className={buildClassName('settings-content custom-scroll', profile.screen, styles.screen)}
       data-bug-report
+      data-settings-page="bug"
     >
       <p className={profile.hint} data-bug-recipient>{lang('ParvaneBugRecipient', { address: recipient })}</p>
       <div className={buildClassName(isDesktop && styles.twoColumns)}>
