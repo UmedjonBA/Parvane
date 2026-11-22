@@ -99,16 +99,15 @@ const MusicMenu = ({
 
   if (!anchor) {
     return (
-      <PvSheet isOpen title={cover ? undefined : title} isTight onClose={onClose}>
-        {Boolean(cover) && (
-          <div className={styles.menuHead}>
-            {cover}
-            <div className={styles.menuHeadText}>
-              <div className={styles.menuHeadTitle}>{title}</div>
-              {facts && <div className={sheets.menuFacts}>{facts}</div>}
-            </div>
-          </div>
-        )}
+      <PvSheet
+        isOpen
+        title={title}
+        subtitle={cover ? facts : undefined}
+        headBefore={cover}
+        noClose={Boolean(cover)}
+        isTight
+        onClose={onClose}
+      >
         {!cover && facts && <div className={sheets.menuFacts}>{facts}</div>}
         <div className={sheets.menuList} role="menu" aria-label={title}>{renderRows(actions)}</div>
         {footer}

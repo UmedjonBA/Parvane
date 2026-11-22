@@ -22,6 +22,11 @@
 
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  // Телефон: кнопка во всю ширину (доска `ZpMusicX`)
+  @media (max-width: 760px) {
+    align-self: stretch;
+  }
 }
 
 .list {
@@ -170,6 +175,22 @@
   flex-direction: column;
   gap: 0.25rem;
   margin-top: 0.5rem;
+}
+
+// Телефон: недавние запросы — строки 52 px полосой панели до краёв экрана (доска `ZpMusicX`)
+.recent .line {
+  @media (max-width: 760px) {
+    min-height: var(--pv-settings-row-height);
+    margin: 0 -1rem -0.25rem;
+    padding: 0 0.5rem 0 1rem;
+    border-block: 1px solid var(--pv-line);
+
+    background: var(--pv-panel);
+
+    & + .line {
+      border-top: 0;
+    }
+  }
 }
 
 .recentItem {

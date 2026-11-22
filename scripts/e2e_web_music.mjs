@@ -422,7 +422,9 @@ try {
   }
   const sheetOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(sheetOverflow <= 0, `горизонтальное переполнение со шторкой меню: ${sheetOverflow}`);
-  await page.locator('.Modal').getByRole('button', { name: 'Close' }).click();
+  // Шторка трека — без крестика (доска `XpMusic`): в шапке обложка, название и «исполнитель · время»
+  assert.equal(await page.locator('.Modal').getByRole('button', { name: 'Close' }).count(), 0, 'у шторки трека крестика нет');
+  await page.keyboard.press('Escape');
   await sheetMenu.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: телефон — меню трека шторкой по доске');
 

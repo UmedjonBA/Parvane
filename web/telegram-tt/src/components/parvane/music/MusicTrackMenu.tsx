@@ -29,6 +29,7 @@ import MusicMenu from './MusicMenu';
 import MusicPlaylistChips from './MusicPlaylistChips';
 
 import sheets from '../cloud/CloudSheets.module.scss';
+import music from './Music.module.scss';
 
 export type MusicTrackExtra = {
   // «Убрать из плейлиста», «Убрать из очереди», «Убрать с устройства»
@@ -176,7 +177,14 @@ const MusicTrackMenu = ({
     <MusicMenu
       title={track.title}
       facts={facts}
-      cover={<MusicCover coverId={track.coverId} toneId={track.albumId || track.id} size={40} />}
+      cover={(
+        <MusicCover
+          coverId={track.coverId}
+          toneId={track.albumId || track.id}
+          size={40}
+          className={music.trackCover}
+        />
+      )}
       actions={actions}
       anchor={anchor}
       footer={isDesk ? undefined : <MusicPlaylistChips track={track} onNew={handleNewPlaylist} onDone={onClose} />}

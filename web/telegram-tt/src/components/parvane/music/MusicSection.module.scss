@@ -122,26 +122,6 @@
   min-width: 16.5rem;
 }
 
-.menuHead {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  margin: -0.5rem 0 0.75rem;
-}
-
-.menuHeadText {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.menuHeadTitle {
-  overflow: hidden;
-  font-weight: var(--font-weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 // Окно «Новый плейлист»
 .field {
   display: flex;

@@ -36,7 +36,13 @@ const MusicAccessPicker = ({ value, noPersonal, onChange }: OwnProps) => {
   return (
     <div className={styles.access} data-music-access={value}>
       <span className={styles.fieldLabel}>{lang('MusicAccessLabel')}</span>
-      <PvSegment items={items} value={value} label={lang('MusicAccessLabel')} onChange={onChange} />
+      <PvSegment
+        items={items}
+        value={value}
+        label={lang('MusicAccessLabel')}
+        className={styles.accessSegment}
+        onChange={onChange}
+      />
       <span className={styles.hint}>{lang(HINT_KEYS[value])}</span>
       {value !== 'me' && <span className={styles.hint}>{lang('MusicAccessLater')}</span>}
     </div>
