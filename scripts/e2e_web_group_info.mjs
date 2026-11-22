@@ -433,6 +433,11 @@ try {
   await requestsItem.click();
   const requestRow = rightReq.locator('.ListItem, .JoinRequest').filter({ hasText: nick('carol') }).first();
   await requestRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Кадр экрана заявок для сверки с доской `RpPick-03`
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await alicePage.waitForTimeout(800);
+    await alicePage.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/join-requests.png` });
+  }
   await rightReq.getByRole('button', { name: 'Accept', exact: true }).first().click();
   await sessions.carol.page.locator('#LeftColumn .ListItem').filter({ hasText: groupTitle }).first()
     .waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
