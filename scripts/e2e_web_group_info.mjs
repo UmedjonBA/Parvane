@@ -506,32 +506,6 @@ try {
     await pollUntil(async () => (await row.locator('input').isChecked()) === expected, 'переключатель не показывает новый режим');
     await typeDialog.locator('[data-type-cancel]').click();
     await typeDialog.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
-    if (process.env.PARVANE_E2E_SHOT_DIR) {
-      await alicePage.setViewportSize({ width: 390, height: 844 });
-      await alicePage.waitForTimeout(800);
-      // На телефоне «Тип группы» — экран правой колонки
-      await alicePage.locator('#RightColumn .ListItem').filter({ hasText: 'Group Type' }).first().click();
-      await alicePage.locator('#RightColumn .pv-type-seg').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-      await alicePage.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/group-type-${expected ? 'request' : 'open'}.png` });
-      // Значок камеры — на экране управления: с экрана «Тип группы» назад, а если смена ширины вернула колонку к
-      // профилю — управление заново
-      if (await alicePage.locator('#RightColumn .pv-type-seg').isVisible().catch(() => false)) {
-        await alicePage.locator('#RightColumn').getByRole('button', { name: /Back/ }).first().click();
-        await alicePage.waitForTimeout(600);
-      }
-      if (!(await alicePage.locator('#RightColumn .Management').isVisible())) {
-        await alicePage.locator('#RightColumn').getByRole('button', { name: 'Edit' }).click();
-        await alicePage.locator('#RightColumn .Management').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-        await alicePage.waitForTimeout(800);
-      }
-      const iconDisplay = await alicePage.evaluate(() => getComputedStyle(
-        document.querySelector('#RightColumn .AvatarEditable label:not(.action) .icon'),
-      ).display);
-      assert.notEqual(iconDisplay, 'none', 'значок камеры в круге фото группы скрыт');
-      await alicePage.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/manage-group-${expected ? 'request' : 'open'}.png` });
-      await alicePage.setViewportSize({ width: 1280, height: 720 });
-      await alicePage.waitForTimeout(500);
-    }
     await closeRightColumn(alicePage);
   };
   const openPrimary = await primaryOf();

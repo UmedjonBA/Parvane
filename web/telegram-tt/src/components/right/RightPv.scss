@@ -332,8 +332,27 @@
       padding: 0;
     }
 
+    // Состояние имени («Свободно», «Занято») — строкой под полем, а не подписью на рамке (доска `XpChat`)
     .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
       margin: 0;
+
+      > label {
+        position: static;
+        transform: none;
+
+        order: 1;
+
+        padding: 0;
+
+        font-size: var(--pv-font-size-caption);
+        white-space: normal;
+
+        opacity: 1;
+        background: none;
+      }
     }
   }
 
