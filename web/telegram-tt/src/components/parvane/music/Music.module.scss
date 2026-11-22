@@ -969,6 +969,15 @@
   min-width: 0;
 }
 
+// Телефон (доска `RpMusicA-03`): исполнители под буквой — строками на фоне, без карточки
+@media (max-width: 600px) {
+  .letterGroups .tracks {
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+}
+
 .letterIndex {
   position: sticky;
   top: 0;

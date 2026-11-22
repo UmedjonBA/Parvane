@@ -579,6 +579,30 @@ async function galleryMusic() {
     await music.locator('[data-music-back]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
     await tab(2).click({ timeout: STEP_TIMEOUT_MS });
   });
+  // Телефон: альбом, исполнители, плеер во весь экран (доски `RpMusicA`, `MusicPlayer`)
+  const libraryRow = (kind) => music.locator(`[data-music-library] [data-view="${kind}"]:visible`).first();
+  const musicBack = () => music.locator('[data-music-back]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
+  await step(page, 'music-phone-albums', async () => { await libraryRow('albums').click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'RpMusicA-01', async () => {
+    await music.locator('[data-music-albums] button:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  await step(page, 'MusicPlayer-01', async () => {
+    await page.locator('[data-music-mini]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'music-phone-artists', async () => {
+    await musicBack();
+    await musicBack();
+    await libraryRow('artists').click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await step(page, 'music-phone-offline', async () => {
+    await musicBack();
+    await libraryRow('offline').click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
   await page.context().close();
 }
 
