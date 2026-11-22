@@ -21,6 +21,7 @@ import { selectChat, selectChatFullInfo, selectIsChatRestricted, selectTabState 
 import { formatInteger } from '../../../util/textFormat';
 import renderText from '../../common/helpers/renderText';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -34,6 +35,7 @@ import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
 import TextArea from '../../ui/TextArea';
+import GroupTypeDialog from './GroupTypeDialog';
 
 import './Management.scss';
 
@@ -110,6 +112,8 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   } = getActions();
 
   const [isDeleteDialogOpen, openDeleteDialog, closeDeleteDialog] = useFlag();
+  const [isTypeOpen, openType, closeType] = useFlag();
+  const { isMobile } = useAppLayout();
   const currentTitle = chat.title;
   const currentAbout = chatFullInfo?.about || '';
 
@@ -145,6 +149,10 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   }, [progress]);
 
   const handleClickEditType = useLastCallback(() => {
+    if (!isMobile) {
+      openType();
+      return;
+    }
     onScreenSelect(ManagementScreens.ChatPrivacyType);
   });
 
@@ -373,6 +381,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
         confirmHandler={handleDeleteGroup}
         confirmIsDestructive
       />
+      <GroupTypeDialog chatId={chatId} isOpen={isTypeOpen} onClose={closeType} />
     </div>
   );
 };

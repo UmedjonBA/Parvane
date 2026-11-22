@@ -101,7 +101,7 @@ function serviceMessage(page, text) {
 async function toggleGroupL2(page, title) {
   const right = await openGroupManagement(page, title);
   await right.locator('.ListItem').filter({ hasText: 'Group Type' }).first().click();
-  const row = right.locator('.Management .ListItem').filter({ hasText: 'Enhanced privacy' });
+  const row = page.locator('.pv-type-dialog .Management .ListItem').filter({ hasText: 'Enhanced privacy' });
   await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await row.locator('.ListItem-button').click();
   await page.keyboard.press('Escape');

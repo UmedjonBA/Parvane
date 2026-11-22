@@ -15,13 +15,14 @@ import ListItem from '../../ui/ListItem';
 type OwnProps = {
   chatId: string;
   isActive: boolean;
+  onOpen?: NoneToVoidFunction;
 };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
 // Parvane (доска `XpChat`; REPORT-2): раздел «Жалобы» экрана «Тип группы» — переход к жалобам участников с числом
 // открытых. Показывается только админу, который вправе удалять сообщения или блокировать
-const ManageReportsEntry = ({ chatId, isActive }: OwnProps) => {
+const ManageReportsEntry = ({ chatId, isActive, onOpen }: OwnProps) => {
   const { requestNextManagementScreen } = getActions();
   const lang = useLang();
   const [openCount, setOpenCount] = useState<number | undefined>();
@@ -34,6 +35,7 @@ const ManageReportsEntry = ({ chatId, isActive }: OwnProps) => {
 
   const handleClick = useLastCallback(() => {
     requestNextManagementScreen({ screen: ManagementScreens.Reports });
+    onOpen?.();
   });
 
   return (

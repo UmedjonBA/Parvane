@@ -7,6 +7,15 @@ const MINUTES_IN_HOUR = 60;
 const MINUTES_IN_DAY = 1440;
 const MS_IN_MINUTE = 60000;
 export const MS_IN_DAY = MINUTES_IN_DAY * MS_IN_MINUTE;
+const SHORT_MONTH_LETTERS = 3;
+
+/** Короткая дата досок «Здоровья»: «16 окт», «15 ноя» — месяц тремя буквами без точки; `noDay` — один месяц */
+export function formatShortDate(code: string | undefined, date: Date, noDay?: boolean) {
+  const options: Intl.DateTimeFormatOptions = noDay ? { month: 'short' } : { day: 'numeric', month: 'short' };
+  return new Intl.DateTimeFormat(code, options).formatToParts(date)
+    .map(({ type, value }) => (type === 'month' ? value.replace(/\.$/, '').slice(0, SHORT_MONTH_LETTERS) : value))
+    .join('');
+}
 
 // Показатели тела в порядке плиток сводки; остальные виды идут за ними по алфавиту
 export const BODY_KINDS = ['weight', 'pressure', 'pulse', 'steps'];

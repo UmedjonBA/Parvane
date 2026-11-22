@@ -17,6 +17,7 @@ import { copyTextToClipboard } from '../../../util/clipboard';
 import { callApi } from '../../../api/gramjs';
 import renderText from '../../common/helpers/renderText';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -24,6 +25,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Avatar from '../../common/Avatar';
 import DeleteChatModal from '../../common/DeleteChatModal';
 import PvSwitch from '../../parvane/notes/PvSwitch';
+import GroupTypeDialog from '../management/GroupTypeDialog';
 import GroupInfoShared from './GroupInfoShared';
 
 import styles from './GroupInfo.module.scss';
@@ -67,6 +69,8 @@ const GroupInfo = ({
   } = getActions();
   const lang = useLang();
   const [isLeaveOpen, openLeave, closeLeave] = useFlag();
+  const [isTypeOpen, openType, closeType] = useFlag();
+  const { isMobile } = useAppLayout();
   const [mediaCount, setMediaCount] = useState<number>();
 
   useEffect(() => {
@@ -95,6 +99,10 @@ const GroupInfo = ({
   });
 
   const handleOpenType = useLastCallback(() => {
+    if (!isMobile) {
+      openType();
+      return;
+    }
     requestNextManagementScreen({ screen: ManagementScreens.ChatPrivacyType });
   });
 
@@ -211,7 +219,7 @@ const GroupInfo = ({
         </button>
         <GroupInfoShared chat={chat} shared={shared} canChange={canChangeShared} currentUserId={currentUserId} />
       </div>
-
+      <GroupTypeDialog chatId={chatId} isChannel={isChannel} isOpen={isTypeOpen} onClose={closeType} />
     </div>
   );
 };

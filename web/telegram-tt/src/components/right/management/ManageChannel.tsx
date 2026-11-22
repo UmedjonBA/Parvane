@@ -15,6 +15,7 @@ import { getChatAvatarHash, getHasAdminRight, isChatPublic } from '../../../glob
 import { selectChat, selectChatFullInfo, selectIsChatRestricted, selectTabState } from '../../../global/selectors';
 import { formatInteger } from '../../../util/textFormat';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -28,6 +29,7 @@ import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
 import TextArea from '../../ui/TextArea';
+import GroupTypeDialog from './GroupTypeDialog';
 
 import './Management.scss';
 
@@ -84,6 +86,8 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
   const currentAbout = chatFullInfo?.about || '';
 
   const [isDeleteDialogOpen, openDeleteDialog, closeDeleteDialog] = useFlag();
+  const [isTypeOpen, openType, closeType] = useFlag();
+  const { isMobile } = useAppLayout();
   const [isProfileFieldsTouched, setIsProfileFieldsTouched] = useState(false);
   const [title, setTitle] = useState(currentTitle);
   const [about, setAbout] = useState(currentAbout);
@@ -118,6 +122,10 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
   const removedUsersCount = chatFullInfo?.kickedMembers?.length || 0;
 
   const handleClickEditType = useLastCallback(() => {
+    if (!isMobile) {
+      openType();
+      return;
+    }
     onScreenSelect(ManagementScreens.ChatPrivacyType);
   });
 
@@ -308,6 +316,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
         confirmHandler={handleDeleteChannel}
         confirmIsDestructive
       />
+      <GroupTypeDialog chatId={chatId} isChannel isOpen={isTypeOpen} onClose={closeType} />
     </div>
   );
 };

@@ -112,7 +112,8 @@
 
 // ── экраны управления ─────────────────────────────────────────────────────────
 
-#RightColumn .Management {
+#RightColumn .Management,
+.pv-type-dialog .Management {
   > .custom-scroll,
   > .panel-content {
     padding: 0 0 5.5rem;
@@ -272,7 +273,8 @@
 }
 
 // «Тип группы» (доска `XpChat`): сегмент «Закрытая / Публичная», поле «Имя группы на сервере» с подписью над ним
-#RightColumn .Management {
+#RightColumn .Management,
+.pv-type-dialog .Management {
   .pv-type-seg {
     display: flex;
 
@@ -372,4 +374,42 @@
     border-block: 1px solid var(--pv-line);
     background: var(--pv-panel);
   }
+}
+
+// «Тип группы» окном поверх чата на компьютере (доска `XdChat`): окно 520 px, разделы карточками, «Отмена /
+// Сохранить» внизу. Поля окна задаёт сама шторка — свои боковые отступы экрана колонки здесь не нужны
+.pv-type-dialog .modal-dialog {
+  max-width: 32.5rem;
+}
+
+.pv-type-dialog .Management {
+  > .panel-content {
+    overflow: visible;
+    height: auto;
+    padding: 0;
+    background: none;
+  }
+
+  .pv-type-seg {
+    margin: 0;
+  }
+
+  .pv-type-field,
+  .pv-island-title,
+  .pv-island-description {
+    padding-inline: 0;
+  }
+
+  .pv-island {
+    overflow: hidden;
+    border: 1px solid var(--pv-line);
+    border-radius: var(--pv-radius);
+  }
+}
+
+.pv-type-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding-top: 0.75rem;
 }

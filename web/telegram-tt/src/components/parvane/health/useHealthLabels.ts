@@ -3,8 +3,8 @@ import type { HealthEntry } from './healthTypes';
 import { formatDate } from '../planner/plannerFormat';
 import { FOOD_KIND, WORKOUT_KIND, workoutTitleKey } from './healthDayFormat';
 import {
-  dayRelation, entryClock, formatNumber, formatValue, kindTitleKey, MOOD_KIND, MS_IN_DAY, NO_SLEEP_TAG, splitDuration,
-  unitKey,
+  dayRelation, entryClock, formatNumber, formatShortDate, formatValue, kindTitleKey, MOOD_KIND, MS_IN_DAY, NO_SLEEP_TAG,
+  splitDuration, unitKey,
 } from './healthFormat';
 
 import useLang from '../../../hooks/useLang';
@@ -28,7 +28,7 @@ export default function useHealthLabels(today: string) {
     const relation = dayRelation(day, today);
     if (relation === 'today') return lang('HealthToday');
     if (relation === 'yesterday') return lang('HealthYesterday');
-    return formatDate(lang.code, new Date(`${day}T12:00:00`), { day: 'numeric', month: 'short' });
+    return formatShortDate(lang.code, new Date(`${day}T12:00:00`));
   });
 
   const duration = useLastCallback((minutes: number) => {
@@ -51,7 +51,7 @@ export default function useHealthLabels(today: string) {
     const dateText = formatDate(lang.code, date, { day: 'numeric', month: 'long' });
     if (relation === 'today') return capitalize(lang('HealthToday'));
     if (relation === 'yesterday') return capitalize(lang('HealthYesterday'));
-    if (!isWithinWeek(day, today)) return withDate ? dateText : formatDate(lang.code, date, DAY_SHORT);
+    if (!isWithinWeek(day, today)) return withDate ? dateText : formatShortDate(lang.code, date);
     const weekday = capitalize(formatDate(lang.code, date, { weekday: 'long' }));
     return withDate ? `${weekday}, ${dateText}` : weekday;
   });
@@ -94,7 +94,6 @@ export default function useHealthLabels(today: string) {
   };
 }
 
-const DAY_SHORT = { day: 'numeric', month: 'short' } as const;
 const WEEK_DAYS = 7;
 
 function isWithinWeek(day: string, today: string) {

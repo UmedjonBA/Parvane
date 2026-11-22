@@ -492,20 +492,26 @@ try {
     return list.result?.invites?.find((item) => item.isPermanent);
   };
   const toggleJoinMode = async (expected) => {
-    // «Вступление по заявке» — в разделе «Доступ» экрана «Тип группы» (доска `XpChat`)
+    // «Вступление по заявке» — в разделе «Доступ» окна «Тип группы» (на компьютере — окно поверх чата, доска `XdChat`)
     const rightMode = await openGroupManagement(alicePage, groupTitle);
     await rightMode.getByText('Choose photo').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await rightMode.locator('.ListItem').filter({ hasText: 'Group Type' }).first().click();
-    const row = rightMode.locator('.Management .ListItem', { hasText: 'Join by request' }).first();
+    const typeDialog = alicePage.locator('.pv-type-dialog');
+    const row = typeDialog.locator('.Management .ListItem', { hasText: 'Join by request' }).first();
     await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await pollUntil(async () => !(await row.getAttribute('class')).includes('disabled'), 'переключатель режима недоступен');
     await row.locator('.ListItem-button').click();
     await alicePage.locator('.Modal .modal-dialog').getByRole('button', { name: 'Confirm' }).click();
     await pollUntil(async () => Boolean((await primaryOf())?.isRequestNeeded) === expected, 'основная ссылка не сменила режим');
     await pollUntil(async () => (await row.locator('input').isChecked()) === expected, 'переключатель не показывает новый режим');
+    await typeDialog.locator('[data-type-cancel]').click();
+    await typeDialog.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
     if (process.env.PARVANE_E2E_SHOT_DIR) {
       await alicePage.setViewportSize({ width: 390, height: 844 });
       await alicePage.waitForTimeout(800);
+      // На телефоне «Тип группы» — экран правой колонки
+      await alicePage.locator('#RightColumn .ListItem').filter({ hasText: 'Group Type' }).first().click();
+      await alicePage.locator('#RightColumn .pv-type-seg').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
       await alicePage.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/group-type-${expected ? 'request' : 'open'}.png` });
       // Значок камеры — на экране управления: с экрана «Тип группы» назад, а если смена ширины вернула колонку к
       // профилю — управление заново

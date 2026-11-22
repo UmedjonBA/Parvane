@@ -92,8 +92,10 @@ try {
   await sendText(page, before);
   const right = await openGroupManagement(page, title);
   await right.locator('.ListItem').filter({ hasText: 'Group Type' }).first().click();
-  const screen = right.locator('.Management').last();
-  // Тип — сегмент «Закрытая / Публичная» (доска `XpChat`)
+  // На компьютере «Тип группы» — окно поверх чата (доска `XdChat`); тип — сегмент «Закрытая / Публичная»
+  const typeRow = right.locator('.ListItem').filter({ hasText: 'Group Type' }).first();
+  const typeDialog = page.locator('.pv-type-dialog');
+  const screen = typeDialog.locator('.Management');
   await screen.getByRole('radio', { name: 'Public', exact: true }).first().click();
   const linkInput = screen.locator('.settings-input input');
   await linkInput.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -101,10 +103,13 @@ try {
   await linkInput.fill(`${origin}/@${name}`);
   await screen.getByText(/is available/).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await screen.locator('[data-public-warning]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // «Готово» текстом в шапке (доска `XpChat`) появляется после проверки имени
-  const save = right.locator('[data-type-done]');
-  await save.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await save.click();
+  // «Сохранить» внизу окна доступно после проверки имени; после сохранения окно закрывается
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/XdChat-type-dialog.png` });
+  }
+  assert.equal(await right.locator('[data-type-done]').count(), 0, '«Готово» в шапке колонки — только на телефоне');
+  await typeDialog.locator('[data-type-save]:not([disabled])').click();
+  await typeDialog.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await waitFor(async () => (await chatUsernameOf(page, title)) === name, STEP_TIMEOUT_MS, 'группа не стала публичной');
   console.log(`OK: группа публичная @${name}`);
 
@@ -112,6 +117,7 @@ try {
   const readOptions = async () => (
     await callProviderForChat(page, 'parvaneGetPublicOptions', title, undefined, { chat: '$chat' })
   ).result;
+  await typeRow.click();
   for (const [option, expected] of [['preview', { isPreview: true, isHistory: false }],
     ['history', { isPreview: true, isHistory: true }]]) {
     const toggle = screen.locator(`[data-public-option="${option}"]`);
@@ -123,6 +129,8 @@ try {
       return current?.isPreview === expected.isPreview && current?.isHistory === expected.isHistory;
     }, STEP_TIMEOUT_MS, `настройка ${option} не сохранилась`);
   }
+  await typeDialog.locator('[data-type-cancel]').click();
+  await typeDialog.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await closeRightColumn(page);
   await openGroupChatByTitle(page, title);
   await sendText(page, afterPublic);

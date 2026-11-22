@@ -23,6 +23,8 @@ type OwnProps = {
   // Экран телефона (доски `PhFilesMore`, `XpFiles`, `ZpFilesX`): закрытие слева — стрелкой «‹» (`back`) либо
   // крестиком «Отмена» (`cancel`), без крестика справа
   startClose?: 'back' | 'cancel';
+  // Окно без крестика: закрывают кнопки внизу (доска `XdChat`)
+  noClose?: boolean;
   // Список строк: строки стоят вплотную
   isTight?: boolean;
   children: React.ReactNode;
@@ -33,7 +35,8 @@ type OwnProps = {
 // Шторка прототипа: окно сверху по центру на компьютере, лист снизу с ручкой на телефоне.
 // Название слева, крестик справа
 const PvSheet = ({
-  isOpen, title, subtitle, className, headBefore, headAfter, isWide, startClose, isTight, children, onClose, onEnter,
+  isOpen, title, subtitle, className, headBefore, headAfter, isWide, startClose, noClose, isTight, children, onClose,
+  onEnter,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -60,7 +63,7 @@ const PvSheet = ({
           </div>
         ) : <h2 className={kit.sheetTitle} dir="auto">{title}</h2>}
         {headAfter}
-        {!startClose && (
+        {!startClose && !noClose && (
           <button type="button" className={kit.ib} aria-label={lang('Close')} onClick={onClose}>
             <PvIcon name="x" />
           </button>

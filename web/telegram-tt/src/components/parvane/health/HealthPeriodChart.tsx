@@ -4,8 +4,9 @@ import type { HealthPeriod } from './healthPeriods';
 import type { HealthMetricView, HealthSleepView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDate } from '../planner/plannerFormat';
-import { formatNumber, KIND_COLORS, WEEKDAY_KEYS } from './healthFormat';
+import {
+  formatNumber, formatShortDate, KIND_COLORS, WEEKDAY_KEYS,
+} from './healthFormat';
 import { chartSlots, PERIOD_KEYS } from './healthPeriods';
 
 import useLang from '../../../hooks/useLang';
@@ -28,8 +29,6 @@ const PAD_Y = 10;
 const RANGE_KINDS = ['pressure'];
 // Пульс за неделю — столбиками по дням (доска `RpHealth`), за месяц — линией
 const WEEK_BAR_KINDS = ['pulse'];
-const DATE_SHORT = { day: 'numeric', month: 'short' } as const;
-const MONTH_SHORT = { month: 'short' } as const;
 
 // Parvane (spec 041; доски `HealthWeight`, `RpHealth`, `XpHealth`, `DeskHealthDetail`, `RdHealth`): график
 // подробного экрана за выбранный период. Линия — с осью значений, пунктиром цели и точкой последнего значения;
@@ -52,11 +51,11 @@ const HealthPeriodChart = ({
     const slot = slots[index];
     if (period === 'year') {
       const isEdge = index === 0 || index === slots.length - 1;
-      return isEdge ? formatDate(lang.code, new Date(`${slot.key}-15T12:00:00`), MONTH_SHORT) : '';
+      return isEdge ? formatShortDate(lang.code, new Date(`${slot.key}-15T12:00:00`), true) : '';
     }
     if (period === 'week') return lang(WEEKDAY_KEYS[slot.weekday]);
     const isShown = index === 0 || index === slots.length - 1 || index === Math.floor(slots.length / 2);
-    return isShown ? formatDate(lang.code, new Date(`${slot.key}T12:00:00`), DATE_SHORT) : '';
+    return isShown ? formatShortDate(lang.code, new Date(`${slot.key}T12:00:00`)) : '';
   }
 
   function renderBars() {

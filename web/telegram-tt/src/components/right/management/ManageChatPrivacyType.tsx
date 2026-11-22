@@ -44,6 +44,8 @@ import RadioGroup from '../../ui/RadioGroup';
 import ManageJoinMode from './ManageJoinMode';
 import ManageReportsEntry from './ManageReportsEntry';
 
+import kit from '../../parvane/notes/PvKit.module.scss';
+
 // Parvane (spec 023): приватной ссылки на этом экране нет (ссылки — экран «Ссылки-приглашения»), коллекционных
 // имён, бота-привратника и запрета пересылки — тоже
 const IS_PRIVATE_LINK_SUPPORTED = false;
@@ -61,8 +63,10 @@ type PrivacyType = 'private' | 'public';
 
 type OwnProps = {
   chatId: string;
-  onClose: NoneToVoidFunction;
   isActive: boolean;
+  // Окно поверх чата на компьютере (доска `XdChat`): «Отмена / Сохранить» внизу вместо «Готово» в шапке колонки
+  isDialog?: boolean;
+  onClose: NoneToVoidFunction;
 };
 
 type StateProps = {
@@ -89,6 +93,7 @@ type StateProps = {
 const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   chat,
   isActive,
+  isDialog,
   isChannel,
   progress,
   isUsernameAvailable,
@@ -141,8 +146,9 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
     || (privacyType === 'private' && isPublic),
   );
 
+  // Окно закрывает сам `Modal` (Escape, «назад»)
   useHistoryBack({
-    isActive,
+    isActive: isActive && !isDialog,
     onBack: onClose,
   });
 
@@ -298,13 +304,28 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   const isLoading = progress === ManagementProgress.InProgress;
 
   // «Готово» текстом в шапке (доска `XpChat`): видно, когда есть что сохранить
-  const isSaveShown = isActive && canUpdate && Boolean(canEditType);
+  const isSaveShown = isActive && !isDialog && canUpdate && Boolean(canEditType);
   useLayoutEffect(() => {
     setRightHeaderAction(isSaveShown
       ? { label: lang('ParvaneTypeDone'), isDisabled: isLoading, onClick: handleSave }
       : undefined);
   }, [isSaveShown, isLoading, handleSave, lang]);
   useLayoutEffect(() => () => setRightHeaderAction(undefined), []);
+  // Окно: «Сохранить» применяет тип и имя и закрывает окно; без правок типа — просто закрывает (выключатели
+  // применяются сразу). Неверное либо занятое имя — кнопка недоступна
+  const previousProgress = usePreviousDeprecated(progress);
+  useEffect(() => {
+    if (isDialog && previousProgress === ManagementProgress.InProgress && progress === ManagementProgress.Complete) {
+      onClose();
+    }
+  }, [isDialog, previousProgress, progress, onClose]);
+  const handleDialogSave = useLastCallback(() => {
+    if (canUpdate && canEditType) {
+      handleSave();
+      return;
+    }
+    onClose();
+  });
   const shouldRenderUsernamesManage = privacyType === 'public' && chat.usernames && chat.usernames.length > 0;
 
   function renderPurchaseLink() {
@@ -348,15 +369,15 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
           </button>
         </div>
         {privacyType === 'private' && !IS_PRIVATE_LINK_SUPPORTED ? (
-          <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
+          <IslandDescription>
             {lang('ParvanePrivateGroupInfo')}
           </IslandDescription>
         ) : privacyType === 'private' ? (
           <>
-            <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <IslandTitle>
               {oldLang('InviteLink.InviteLink')}
             </IslandTitle>
-            <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <Island>
               {privateInviteLink ? (
                 <>
                   <LinkField link={privateInviteLink} className="invite-link" noTitle />
@@ -376,7 +397,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
                 <Loading />
               )}
             </Island>
-            <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <IslandDescription>
               {oldLang(`${langPrefix1}PrivateLinkHelp`)}
             </IslandDescription>
           </>
@@ -413,7 +434,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
         {((isPublic && canChangeInfo) || canInvite) && (
           <>
             <IslandTitle>{lang('ParvaneTypeAccess')}</IslandTitle>
-            <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <Island>
               {isPublic && canChangeInfo && (
                 <>
                   <SwitchField
@@ -454,7 +475,9 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
             <IslandDescription>{oldLang('ParvaneL2Info')}</IslandDescription>
           </>
         )}
-        {canModerate && <ManageReportsEntry chatId={chat.id} isActive={isActive} />}
+        {canModerate && (
+          <ManageReportsEntry chatId={chat.id} isActive={isActive} onOpen={isDialog ? onClose : undefined} />
+        )}
         {IS_USERNAMES_MANAGE_SUPPORTED && shouldRenderUsernamesManage && (
           <ManageUsernames
             chatId={chat.id}
@@ -464,10 +487,10 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
         )}
         {IS_JOIN_GUARD_SUPPORTED && !(isChannel && isPublic) && (
           <>
-            <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <IslandTitle>
               {oldLang('MemberRequests')}
             </IslandTitle>
-            <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <Island>
               <SwitchField
                 checked={isJoinRequestEnabled}
                 onChange={handleApproveNewSubscribersChange}
@@ -475,7 +498,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
                 teactExperimentControlled
               />
             </Island>
-            <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <IslandDescription>
               {guardBot
                 ? lang('GuardManagedByDescription', {
                   approvalInfo,
@@ -487,12 +510,12 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
         )}
         {IS_FORWARDING_SUPPORTED && (
           <>
-            <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <IslandTitle>
               {oldLang(isChannel
                 ? 'ChannelVisibility.Forwarding.ChannelTitle'
                 : 'ChannelVisibility.Forwarding.GroupTitle')}
             </IslandTitle>
-            <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <Island>
               <RadioGroup
                 selected={isProtected ? 'protected' : 'allowed'}
                 name="forwarding-type"
@@ -508,6 +531,22 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
           </>
         )}
       </div>
+      {isDialog && (
+        <div className="pv-type-actions">
+          <button type="button" className={kit.btn} data-type-cancel onClick={onClose}>
+            {lang('Cancel')}
+          </button>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnAcc)}
+            disabled={isLoading || (isProfileFieldsTouched && !canUpdate)}
+            data-type-save
+            onClick={handleDialogSave}
+          >
+            {lang('Save')}
+          </button>
+        </div>
+      )}
       <ConfirmDialog
         isOpen={isUsernameLostDialogOpen}
         onClose={closeUsernameLostDialog}
@@ -560,7 +599,8 @@ function getApprovalInfoKey(isChannel: boolean, isPublic: boolean) {
 export default memo(withGlobal<OwnProps>(
   (global, { chatId }): Complete<StateProps> => {
     const chat = selectChat(global, chatId)!;
-    const { isUsernameAvailable, checkedUsername, error } = selectManagement(global, chatId);
+    // Окно открывается и из сведений группы, где состояния управления ещё нет
+    const { isUsernameAvailable, checkedUsername, error } = selectManagement(global, chatId) || {};
     const fullInfo = selectChatFullInfo(global, chatId);
     const guardBotId = fullInfo?.guardBotId;
 
@@ -586,6 +626,6 @@ export default memo(withGlobal<OwnProps>(
     };
   },
   (global, { chatId }) => {
-    return Boolean(selectChat(global, chatId) && selectManagement(global, chatId));
+    return Boolean(selectChat(global, chatId));
   },
 )(ManageChatPrivacyType));
