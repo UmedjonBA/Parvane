@@ -28,6 +28,7 @@ const PV_CSS: Record<string, [string, string]> = {
   '--pv-red': ['#9d0006', '#fb4934'],
 };
 const TELEGRAM_PANEL = { light: '#ffffff', dark: '#212121' };
+const TONE_NAMES = ['--pv-blue', '--pv-purple', '--pv-orange', '--pv-aqua', '--pv-green', '--pv-red', '--pv-yellow'];
 
 describe('цветовые схемы', () => {
   it('тона своих разделов есть у каждой схемы в обеих темах; тёмный текст читается на акценте', () => {
@@ -64,6 +65,23 @@ describe('цветовые схемы', () => {
     });
   });
 
+  it('тона видов записей и кнопка с акцентом читаются в обеих темах', () => {
+    COLOR_SCHEMES.forEach((scheme) => {
+      (['light', 'dark'] as const).forEach((theme) => {
+        const tokens = buildSchemeTokens(scheme, theme);
+        const panel = new Color(scheme === 'telegram' ? TELEGRAM_PANEL[theme] : tokens['--pv-panel']);
+        TONE_NAMES.forEach((name) => {
+          expect(new Color(tokens[name]).contrast(panel, 'WCAG21'), `${scheme} ${theme} ${name}`).toBeGreaterThan(3);
+        });
+        const ink = new Color(tokens['--pv-accent-ink']);
+        expect(ink.contrast(new Color(tokens['--pv-at']), 'WCAG21'), `${scheme} ${theme}`).toBeGreaterThan(4.5);
+        if (scheme !== 'telegram') {
+          expect(new Color(tokens['--pv-muted']).contrast(panel, 'WCAG21'), `${scheme} ${theme}`).toBeGreaterThan(4);
+        }
+      });
+    });
+  });
+
   it('«Telegram» ничего не заменяет', () => {
     expect(buildSchemeColors('telegram')).toEqual({});
     expect(getSchemeChatColors('telegram', 'dark')).toBeUndefined();
@@ -87,6 +105,17 @@ describe('цветовые схемы', () => {
         const text = new Color(colors['--color-text'][mode]);
         expect(WHITE.contrast(accent, 'WCAG21'), `акцент, режим ${mode}`).toBeGreaterThan(3);
         expect(text.contrast(panel, 'WCAG21'), `текст, режим ${mode}`).toBeGreaterThan(4.5);
+      });
+    });
+
+    it(`${scheme}: время и акцент своего сообщения читаются на его фоне`, () => {
+      const colors = buildSchemeColors(scheme);
+      [0, 1].forEach((mode) => {
+        const own = new Color(colors['--color-background-own'][mode]);
+        ['--color-message-meta-own', '--color-accent-own'].forEach((property) => {
+          expect(new Color(colors[property][mode]).contrast(own, 'WCAG21'), `${property}, режим ${mode}`)
+            .toBeGreaterThan(3);
+        });
       });
     });
 

@@ -53,7 +53,36 @@ type Tones = {
   yellow: string;
 };
 
+// Цвета мессенджера по смыслу (ошибка, успех, выделение), которых нет в `themes.json`: у «Telegram» — прежние
+// значения `styles/_variables.scss`, у остальных схем — тона схемы
+type Semantic = {
+  error: string;
+  warning: string;
+  success: string;
+  selection: string;
+};
+
+const TELEGRAM_SEMANTIC: Semantic = {
+  error: '#e53935',
+  warning: '#fb8c00',
+  success: '#4fae4e',
+  selection: '#3993fb',
+};
+
+// Тёмная палитра «Telegram» (`themes.json`, вторые значения) — для экранов, которые всегда тёмные
+const TELEGRAM_DARK: Pick<Palette, 'bg' | 'panel' | 'raised' | 'lineStrong' | 'text' | 'muted' | 'faint'> = {
+  bg: '#0f0f0f',
+  panel: '#212121',
+  raised: '#2c2c2c',
+  lineStrong: '#3b3b3d',
+  text: '#ffffff',
+  muted: '#aaaaaa',
+  faint: '#717579',
+};
+
 const STORAGE_KEY = 'parvane:color-scheme';
+const MARK_SHARE = '35%';
+const WAVE_FILL_ALPHA = '66';
 const FLAT_BACKGROUND_CLASS = 'color-scheme-flat';
 const LIGHT = 0;
 const DARK = 1;
@@ -130,7 +159,7 @@ const PALETTES: Record<Exclude<ColorScheme, 'telegram'>, [light: Palette, dark: 
     accent: '#8839ef',
     link: '#1e66f5',
     own: '#e0d5f7',
-    ownAccent: '#40a02b',
+    ownAccent: '#2d7a1d',
   }, {
     bg: '#11111b',
     panel: '#1e1e2e',
@@ -153,13 +182,14 @@ const PALETTES: Record<Exclude<ColorScheme, 'telegram'>, [light: Palette, dark: 
     hover: '#f0ead8',
     line: '#e4ddc8',
     lineStrong: '#d3cbb7',
-    text: '#586e75',
-    muted: '#839496',
+    // Основной текст и подписи темнее канонических base00/base0: те не дотягивают до читаемости на base3
+    text: '#2f474e',
+    muted: '#586e75',
     faint: '#93a1a1',
     accent: '#268bd2',
     link: '#268bd2',
     own: '#f1e5bb',
-    ownAccent: '#859900',
+    ownAccent: '#5f6d00',
   }, {
     bg: '#00212b',
     panel: '#002b36',
@@ -215,7 +245,8 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
   }, {
     accent: '#8774e1',
     accentText: '#9d8df0',
-    accentInk: '#ffffff',
+    // На светлом фиолетовом белый текст не читается — тёмный, как у остальных тёмных схем
+    accentInk: '#0f0f0f',
     blue: '#6ab3f3',
     purple: '#cb86db',
     orange: '#f5a25d',
@@ -231,10 +262,10 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     blue: '#5e81ac',
     purple: '#8f6a8a',
     orange: '#b8654f',
-    aqua: '#5f9ea0',
-    green: '#6f8f5a',
+    aqua: '#4b7d7e',
+    green: '#617c4e',
     red: '#bf616a',
-    yellow: '#a8842c',
+    yellow: '#8f7025',
   }, {
     accent: '#88c0d0',
     accentText: '#88c0d0',
@@ -244,7 +275,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     orange: '#d08770',
     aqua: '#8fbcbb',
     green: '#a3be8c',
-    red: '#bf616a',
+    red: '#cb7d85',
     yellow: '#ebcb8b',
   }],
   catppuccin: [{
@@ -253,11 +284,11 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     accentInk: '#eff1f5',
     blue: '#1e66f5',
     purple: '#8839ef',
-    orange: '#fe640b',
-    aqua: '#179299',
-    green: '#40a02b',
+    orange: '#c94f09',
+    aqua: '#148288',
+    green: '#368624',
     red: '#d20f39',
-    yellow: '#df8e1d',
+    yellow: '#a56915',
   }, {
     accent: '#cba6f7',
     accentText: '#cba6f7',
@@ -277,20 +308,20 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     blue: '#268bd2',
     purple: '#6c71c4',
     orange: '#cb4b16',
-    aqua: '#2aa198',
-    green: '#859900',
+    aqua: '#238780',
+    green: '#708100',
     red: '#dc322f',
-    yellow: '#b58900',
+    yellow: '#987300',
   }, {
     accent: '#2aa198',
     accentText: '#2aa198',
     accentInk: '#002b36',
     blue: '#268bd2',
-    purple: '#6c71c4',
-    orange: '#cb4b16',
+    purple: '#797ec9',
+    orange: '#d26437',
     aqua: '#2aa198',
     green: '#859900',
-    red: '#dc322f',
+    red: '#e25552',
     yellow: '#b58900',
   }],
 };
@@ -328,7 +359,7 @@ function mix(from: string, to: string, ratio: number) {
   return new Color(from).mix(new Color(to), ratio, { space: 'srgb' }).toString({ format: 'hex' });
 }
 
-function buildMode(p: Palette): Record<string, string> {
+function buildMode(p: Palette, t: Tones): Record<string, string> {
   const shade = mix(p.accent, '#000000', 0.14);
   const accentTint = mix(p.panel, p.accent, 0.12);
   const ownTint = mix(p.own, p.text, 0.14);
@@ -374,7 +405,7 @@ function buildMode(p: Palette): Record<string, string> {
     '--color-reply-own-active': ownTint,
     '--color-reply-own-active-apple': ownTint,
     '--color-accent-own': p.ownAccent,
-    '--color-message-meta-own': mix(p.own, p.text, 0.6),
+    '--color-message-meta-own': mix(p.own, p.text, 0.7),
     '--color-own-links': p.ownAccent,
     '--color-code': p.link,
     '--color-code-own': p.ownAccent,
@@ -391,13 +422,16 @@ function buildMode(p: Palette): Record<string, string> {
     '--color-borders-read-story': p.faint,
     '--color-forum-unread-topic-hover': p.hover,
     '--color-forum-hover-unread-topic-hover': p.raised,
+    '--color-green': t.green,
+    '--color-green-darker': mix(t.green, '#000000', 0.16),
+    '--color-success': t.green,
   };
 }
 
 /** Замены переменных темы для схемы; у «Telegram» замен нет. */
 export function buildSchemeColors(scheme: ColorScheme): SchemeColors {
   if (scheme === 'telegram') return {};
-  const [light, dark] = PALETTES[scheme].map(buildMode);
+  const [light, dark] = PALETTES[scheme].map((palette, index) => buildMode(palette, TONES[scheme][index]));
   return Object.fromEntries(Object.keys(light).map((property) => [property, [light[property], dark[property]]]));
 }
 
@@ -408,14 +442,29 @@ export function getSchemeChatColors(scheme: ColorScheme, theme: ThemeKey) {
   return { background: palette.bg, pattern: `${palette.lineStrong}99`, panel: palette.panel };
 }
 
+/** Цвета волны голосового сообщения (рисуется на canvas, переменные CSS недоступны): входящего и своего.
+ * `undefined` — прежние цвета мессенджера. */
+export function getSchemeWaveColors(scheme: ColorScheme, theme: ThemeKey) {
+  if (scheme === 'telegram') return undefined;
+  const palette = PALETTES[scheme][theme === 'dark' ? DARK : LIGHT];
+  return {
+    fill: `${palette.link}${WAVE_FILL_ALPHA}`,
+    progress: palette.link,
+    fillOwn: `${palette.ownAccent}${WAVE_FILL_ALPHA}`,
+    progressOwn: palette.ownAccent,
+  };
+}
+
 /** Образцы схемы для выбора в настройках. */
 export function getSchemeSwatches(scheme: ColorScheme, theme: ThemeKey) {
   if (scheme === 'telegram') {
     return theme === 'dark'
       ? ['#0F0F0F', '#212121', '#8774E1', '#FFFFFF'] : ['#E4E4E5', '#FFFFFF', '#3390EC', '#000000'];
   }
-  const palette = PALETTES[scheme][theme === 'dark' ? DARK : LIGHT];
-  return [palette.bg, palette.panel, palette.accent, palette.text];
+  const index = theme === 'dark' ? DARK : LIGHT;
+  const palette = PALETTES[scheme][index];
+  // Акцент своих экранов (`--pv-accent`), как у образцов макета: у тёмной Gruvbox он жёлтый, а не оранжевый
+  return [palette.bg, palette.panel, TONES[scheme][index].accent, palette.text];
 }
 
 /** Переменные `--pv-*` своих экранов — имена токенов `pv.css` с приставкой: акцент, цвета видов записей и
@@ -425,7 +474,23 @@ export function buildSchemeTokens(scheme: ColorScheme, theme: ThemeKey): Record<
   const index = theme === 'dark' ? DARK : LIGHT;
   const tones = TONES[scheme][index];
   const palette = scheme === 'telegram' ? undefined : PALETTES[scheme][index];
+  const darkPalette = scheme === 'telegram' ? TELEGRAM_DARK : PALETTES[scheme][DARK];
+  const semantic: Semantic = scheme === 'telegram' ? TELEGRAM_SEMANTIC : {
+    error: tones.red, warning: tones.orange, success: tones.green, selection: tones.accent,
+  };
   return {
+    ...buildSemanticColors(semantic),
+    // Подсветка найденного текста
+    '--pv-mark': `color-mix(in srgb, ${tones.yellow} ${MARK_SHARE}, transparent)`,
+    // Тёмная палитра схемы при любой теме — для экранов, которые всегда тёмные (видеозвонок, просмотр файла)
+    '--pv-dk-bg': darkPalette.bg,
+    '--pv-dk-panel': darkPalette.panel,
+    '--pv-dk-raised': darkPalette.raised,
+    '--pv-dk-line2': darkPalette.lineStrong,
+    '--pv-dk-fg': darkPalette.text,
+    '--pv-dk-muted': darkPalette.muted,
+    '--pv-dk-faint': darkPalette.faint,
+    '--pv-dk-red': TONES[scheme][DARK].red,
     '--pv-accent': tones.accent,
     '--pv-at': tones.accentText,
     '--pv-accent-ink': tones.accentInk,
@@ -454,4 +519,23 @@ export function buildSchemeTokens(scheme: ColorScheme, theme: ThemeKey): Record<
     '--pv-muted': palette?.muted || 'var(--color-text-secondary)',
     '--pv-faint': palette?.faint || 'var(--color-gray)',
   };
+}
+
+function buildSemanticColors({
+  error, warning, success, selection,
+}: Semantic): Record<string, string> {
+  return {
+    '--color-error': error,
+    '--color-error-shade': mix(error, '#000000', 0.08),
+    '--color-error-rgb': toRgbChannels(error),
+    '--color-warning': warning,
+    '--color-text-green': success,
+    '--color-text-green-rgb': toRgbChannels(success),
+    '--color-selection-highlight': selection,
+    '--color-selection-highlight-emoji': `rgba(${toRgbChannels(selection)}, 0.7)`,
+  };
+}
+
+function toRgbChannels(hex: string) {
+  return new Color(hex).to('srgb').coords.map((channel) => Math.round((channel ?? 0) * 255)).join(', ');
 }
