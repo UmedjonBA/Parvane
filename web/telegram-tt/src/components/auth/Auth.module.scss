@@ -939,6 +939,23 @@
   color: var(--pv-red);
 
   background: color-mix(in srgb, var(--pv-red) 14%, transparent);
+
+  // Телефон: значок слева, красный квадрат со скруглением (доска `RpProfileC`)
+  @media (max-width: 600px) {
+    margin: 0;
+    border-radius: var(--pv-radius-dialog);
+    color: var(--pv-accent-ink);
+    background: var(--pv-red);
+  }
+}
+
+// «Восстановить аккаунт» во всю ширину
+.deletionRestore {
+  display: flex;
+
+  > * {
+    width: 100%;
+  }
 }
 
 .deletionDays {

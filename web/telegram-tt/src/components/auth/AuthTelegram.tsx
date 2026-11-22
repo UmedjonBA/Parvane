@@ -264,7 +264,7 @@ const AuthTelegram = ({ auth }: StateProps) => {
       data-telegram-mode={isLogin ? 'login' : 'register'}
       data-telegram-expired={isExpired ? 'true' : undefined}
     >
-      <AuthBar title={barTitle} subtitle={isLogin ? account : undefined} step={barStep} isLined onBack={handleBack} />
+      <AuthBar title={barTitle} subtitle={isLogin ? account : barStep} isLined onBack={handleBack} />
       <div className={styles.page}>
         <div className={buildClassName(styles.dialog, styles.dialogWide)}>
           <div className={styles.onlyDesk}><AuthLogo isSmall /></div>

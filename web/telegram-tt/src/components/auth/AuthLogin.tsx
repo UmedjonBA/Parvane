@@ -155,7 +155,8 @@ const AuthLogin = ({ isPasswordStep, auth }: OwnProps & StateProps) => {
     <div id={isPasswordStep ? 'auth-password-form' : 'auth-phone-number-form'} className={styles.root}>
       <div className={buildClassName(styles.page, styles.pageStart)}>
         <div className={styles.split}>
-          <div className={styles.side}>
+          {/* Телефон, аккаунт ждёт удаления (доска `RpProfileC`): экран без шапки входа */}
+          <div className={buildClassName(styles.side, isMobile && isDeletionPending && styles.hidden)}>
             <AuthLogo />
             <div>
               <h1 className={styles.name}>Parvane</h1>

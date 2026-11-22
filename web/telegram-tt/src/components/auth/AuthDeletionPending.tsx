@@ -57,10 +57,10 @@ const AuthDeletionPending = () => {
     return (
       <>
         <div>
-          <h2 className={buildClassName(styles.headTitle, styles.noteCenter)}>
+          <h2 className={styles.headTitle}>
             {lang('ParvaneDeletionTitle', { date })}
           </h2>
-          <p className={buildClassName(styles.muted, styles.noteCenter)}>{text}</p>
+          <p className={styles.muted}>{text}</p>
         </div>
         <div className={styles.deletionDays} data-deletion-days={days}>
           <span className={styles.deletionCount}>
@@ -80,7 +80,7 @@ const AuthDeletionPending = () => {
       {pending && renderDates(pending)}
       {isExportAsked && <p className={styles.small} data-deletion-export-note>{lang('ParvaneDeletionExportNote')}</p>}
       <div className={styles.deletionButtons}>
-        <span data-restore-account>
+        <span className={styles.deletionRestore} data-restore-account>
           <button type="button" className={buildClassName(styles.button, styles.grow)} onClick={handleRestore}>
             {lang('ParvaneRestoreAccount')}
           </button>
