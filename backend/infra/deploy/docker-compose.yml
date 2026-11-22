@@ -240,6 +240,25 @@ services:
       XDG_CACHE_HOME: /tmp
       HOME: /tmp
 
+  # Туннель к прокси на VPS бота (backend/infra/music-proxy): с прод-сервера источники «Найти и скачать» закрыты.
+  # Включается вместе с music-fetch; адрес прокси для него — PARVANE_MUSIC_FETCH_PROXY=http://<логин>:<пароль>@music-tunnel:18088
+  music-tunnel:
+    image: localhost/parvane-music-tunnel:latest
+    profiles: ["music-fetch"]
+    restart: unless-stopped
+    # ssh без записи своего uid в /etc/passwd не работает — идёт от root контейнера; ключ на проде (600, владелец —
+    # пользователь сервера) читает только с DAC_OVERRIDE, остальных возможностей нет
+    cap_drop: ["ALL"]
+    cap_add: ["DAC_OVERRIDE"]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    pids_limit: 32
+    volumes:
+      - ./music-tunnel:/keys:ro
+    environment:
+      MUSIC_TUNNEL_DEST: ${PARVANE_MUSIC_TUNNEL_DEST:-musictunnel@84.19.3.252}
+
   # Музыкальный сервер: наружу не опубликован, пользователя называет только шард music (заголовок Remote-User
   # от доверенной сети compose). Внешние обращения выключены: ни Last.fm, ни Spotify, ни телеметрии.
   navidrome:

@@ -64,6 +64,10 @@ if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
   log "Сборка образа music-fetch (podman)"
   podman build --http-proxy=false --no-cache -t parvane-music-fetch "$BACKEND/infra/music-fetch"
 
+  log "Сборка образа music-tunnel (podman)"
+  podman build --http-proxy=false -f "$BACKEND/infra/music-proxy/Dockerfile.tunnel" -t parvane-music-tunnel \
+    "$BACKEND/infra/music-proxy"
+
   # Скрытый сервис Tor (spec 025): маленький образ alpine + tor
   log "Сборка образа tor (podman)"
   podman build --http-proxy=false -f "$BACKEND/infra/deploy/Dockerfile.tor" -t parvane-tor "$BACKEND/infra/deploy"
@@ -72,6 +76,7 @@ if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
   podman save --format docker-archive parvane-shards | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
   podman save --format docker-archive parvane-tor | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
   podman save --format docker-archive parvane-music-fetch | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
+  podman save --format docker-archive parvane-music-tunnel | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
 fi
 
 # WEB-07: раннер web-e2e собирает в тот же dist диагностическую сборку (хуки

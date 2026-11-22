@@ -1,0 +1,6 @@
+# Туннель «Найти и скачать» → прокси на VPS бота (OPERATIONS.md, «Музыка»): к VPS снаружи открыт только ssh, поэтому
+# прокси (tinyproxy на 127.0.0.1:18088 VPS) достаётся пересылкой порта. Ключ создаётся на проде (~/parvane/music-tunnel),
+# на VPS ему разрешена только пересылка на 127.0.0.1:18088. Обрыв — контейнер выходит, compose перезапускает.
+FROM docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+RUN apk add --no-cache openssh-client
+ENTRYPOINT ["/bin/sh", "-c", "exec ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/keys/known_hosts -i /keys/id_ed25519 -L 0.0.0.0:18088:127.0.0.1:18088 \"$MUSIC_TUNNEL_DEST\""]

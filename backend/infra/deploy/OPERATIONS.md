@@ -535,7 +535,17 @@ docker compose exec federation federation_admin unpin <домен>    # прин
 
 Необязательно и по умолчанию выключено. Включение: профиль `music-fetch` вместе с `music` и
 `PARVANE_MUSIC_FETCH_URL=http://music-fetch:9350` в `.env`. Образ собирает `deploy.sh` при каждой выкладке (свежий
-yt-dlp); сервис идёт под uid шарда (10001). Сервис (`backend/infra/music-fetch`) ищет эталон трека
+yt-dlp); сервис идёт под uid шарда (10001).
+
+**Прокси источников (прод).** С прод-сервера YouTube и SoundCloud закрыты (DNS и обрыв TLS), каталог Deezer открыт.
+Источники идут через tinyproxy на VPS бота (84.19.3.252, `/etc/tinyproxy/tinyproxy.conf` из
+`backend/infra/music-proxy/tinyproxy.conf` + строка `BasicAuth parvane <пароль>`; слушает 127.0.0.1:18088). Снаружи к
+VPS открыты только 22, 443 и 3478, поэтому прод достаёт прокси ssh-туннелем — сервис compose `music-tunnel` (профиль
+`music-fetch`, образ `parvane-music-tunnel` собирает `deploy.sh`). Ключ туннеля создан на проде
+(`~/parvane/music-tunnel/id_ed25519`, там же `known_hosts` с закреплённым ключом VPS); на VPS это пользователь
+`musictunnel` без оболочки, в `authorized_keys` — `restrict,port-forwarding,permitopen="127.0.0.1:18088"`. В `.env`
+прода: `PARVANE_MUSIC_FETCH_PROXY=http://parvane:<пароль>@music-tunnel:18088`. Проверка: `docker compose logs
+music-tunnel`, на VPS `systemctl status tinyproxy`. Сервис (`backend/infra/music-fetch`) ищет эталон трека
 в каталоге и файлы в источниках (YouTube, SoundCloud через yt-dlp) и качает в папку библиотеки; шард `music` сверяет
 найденное с эталоном и ведёт лимиты. Источники — на ответственности администратора.
 Настройки шарда: `PARVANE_MUSIC_ADD_PER_DAY` (30), `PARVANE_MUSIC_QUOTA_BYTES` (5 ГиБ на человека),
