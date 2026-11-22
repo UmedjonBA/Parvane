@@ -83,7 +83,7 @@
 }
 
 .reaction {
-  background-color: #ed504f;
+  background-color: var(--color-error);
 }
 
 .poll {
@@ -112,7 +112,8 @@
   background-color: var(--color-gray);
 }
 
-.selected:not(.onAvatar) {
+// Белый счётчик — только на залитом акцентом выбранном чате «Telegram»
+:global(html:not(.color-scheme-flat)) .selected:not(.onAvatar) {
   .badge:not(.pinned) {
     color: var(--color-chat-active);
     background-color: var(--color-white);

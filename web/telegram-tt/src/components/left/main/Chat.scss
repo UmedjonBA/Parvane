@@ -175,7 +175,7 @@
     border-radius: 50%;
 
     opacity: 0.5;
-    background-color: #0ac630;
+    background-color: var(--color-green);
 
     transition: opacity 200ms, transform 200ms;
 
@@ -337,9 +337,28 @@
     }
   }
 
+  // Parvane: в «Telegram» выбранный чат залит акцентом с белым текстом; в остальных схемах — приподнятый фон с
+  // обычным текстом, как в макете (`DeskChats`)
   @media (min-width: 600px) {
-    &.selected:not(.forum),
-    &.selected:not(.forum):hover {
+    html.color-scheme-flat &.selected:not(.forum),
+    html.color-scheme-flat &.selected:not(.forum):hover {
+      --background-color: var(--color-background-selected) !important;
+
+      .avatar-badge {
+        --_color-outline: var(--color-background-selected) !important;
+      }
+
+      .ChatCallStatus {
+        border-color: var(--color-background-selected) !important;
+      }
+
+      .ListItem-button {
+        --background-color: var(--color-background-selected) !important;
+      }
+    }
+
+    html:not(.color-scheme-flat) &.selected:not(.forum),
+    html:not(.color-scheme-flat) &.selected:not(.forum):hover {
       --background-color: var(--color-chat-active) !important;
 
       .title .custom-emoji {
