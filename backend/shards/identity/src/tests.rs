@@ -646,6 +646,7 @@ async fn password_change_requires_old_password_and_resets_trust() {
 #[tokio::test]
 async fn verify_active_rejects_revoked_and_binds_device() {
     let pool = test_pool().await;
+    insert_user(&pool, "bob@local").await;
     let (enc, dec) = make_keys();
     let now = now_unix() as usize;
     let tok = |dev: Option<&str>| {
@@ -1177,6 +1178,25 @@ async fn password_change_invalidates_tokens_of_other_devices() {
     assert!(verify_active(&pool, &dec, &fresh).await.is_ok(), "новый вход после смены действует");
     // То же видит identity.token.verify (шарды и gateway)
     let claims = jwt_decode(&dec, &thief).unwrap().claims;
+    assert!(token_rejection(&pool, &claims).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn token_of_missing_account_is_rejected() {
+    // Аккаунт удалён либо базу аккаунтов начали заново: подпись и срок токена верны, но аккаунта нет —
+    // токен не действует ни для входа, ни для продления (`identity.session.renew` спрашивает то же)
+    let pool = test_pool().await;
+    let (enc, dec) = make_keys();
+    let now = now_unix() as usize;
+    let mk = |sub: &str| jwt_encode(&enc, &Claims {
+        sub: sub.into(), iat: now, exp: now + 3600, dev: Some("dev-1".into()), jti: None, cg: None,
+    }).unwrap();
+    sqlx::query("INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, 0)")
+        .bind("live@local").bind("live@local").bind("x").execute(&pool).await.unwrap();
+    assert!(verify_active(&pool, &dec, &mk("live@local")).await.is_ok(), "живой аккаунт входит");
+    let gone = mk("gone@local");
+    assert!(verify_active(&pool, &dec, &gone).await.is_err(), "токен аккаунта, которого нет, не действует");
+    let claims = jwt_decode(&dec, &gone).unwrap().claims;
     assert!(token_rejection(&pool, &claims).await.unwrap().is_some());
 }
 

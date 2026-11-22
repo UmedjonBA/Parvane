@@ -456,8 +456,8 @@ pub(crate) async fn verify_active(pool: &SqlitePool, decoding: &DecodingKey, tok
 }
 
 /// Почему живой (по подписи и сроку) токен всё же недействителен: устройство
-/// отозвано (P-06) либо пароль сменён после выдачи токена (ID-06) — кроме
-/// токенов устройства, с которого пароль сменили.
+/// отозвано (P-06), аккаунта нет (удалён, ник сменён), аккаунт ждёт удаления либо пароль сменён после выдачи
+/// токена (ID-06) — кроме токенов устройства, с которого пароль сменили.
 pub(crate) async fn token_rejection(pool: &SqlitePool, claims: &Claims) -> Result<Option<&'static str>> {
     if is_device_revoked(pool, &claims.sub, claims.dev.as_deref()).await? {
         return Ok(Some("устройство отозвано"));
@@ -472,20 +472,22 @@ pub(crate) async fn token_rejection(pool: &SqlitePool, claims: &Claims) -> Resul
     if crate::v2::deletion_pending(&claims.sub).await.context("проверка удаления аккаунта")? {
         return Ok(Some("аккаунт удаляется"));
     }
-    // Ник сменён (spec 026): токены прежнего адреса недействительны
-    if row.is_none() && crate::v2::alias_held(&claims.sub).await.context("проверка прежнего ника")? {
-        return Ok(Some("ник сменён — войдите заново"));
-    }
-    if let Some((changed_at, keep_dev, cred_gen)) = row {
-        // PV-018: токен с поколением сравнивается точно; без поколения (выдан до обновления) — по секундам
-        let issued_before = match claims.cg {
-            Some(cg) => cg < cred_gen,
-            None => (claims.iat as i64) < changed_at,
-        };
-        let is_keeper = !keep_dev.is_empty() && claims.dev.as_deref() == Some(keep_dev.as_str());
-        if issued_before && !is_keeper {
-            return Ok(Some("пароль сменён — войдите заново"));
+    // Аккаунта с этим адресом нет: ник сменён (spec 026) либо аккаунт удалён, либо базу аккаунтов начали заново —
+    // подпись и срок токена этого не знают, и без проверки токен действовал до конца срока
+    let Some((changed_at, keep_dev, cred_gen)) = row else {
+        if crate::v2::alias_held(&claims.sub).await.context("проверка прежнего ника")? {
+            return Ok(Some("ник сменён — войдите заново"));
         }
+        return Ok(Some("аккаунта нет — войдите заново"));
+    };
+    // PV-018: токен с поколением сравнивается точно; без поколения (выдан до обновления) — по секундам
+    let issued_before = match claims.cg {
+        Some(cg) => cg < cred_gen,
+        None => (claims.iat as i64) < changed_at,
+    };
+    let is_keeper = !keep_dev.is_empty() && claims.dev.as_deref() == Some(keep_dev.as_str());
+    if issued_before && !is_keeper {
+        return Ok(Some("пароль сменён — войдите заново"));
     }
     Ok(None)
 }
