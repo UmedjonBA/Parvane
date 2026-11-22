@@ -147,7 +147,7 @@ const SettingsDataStorage = ({ isActive, onReset }: OwnProps) => {
       <div className={styles.hint}>{lang('ParvaneStorageHint')}</div>
 
       <div className={styles.caption}>{lang('MusicOfflineSettingsTitle')}</div>
-      <div className={styles.group}>
+      <div className={buildClassName(styles.group, styles.groupPadded)}>
         <MusicOfflineSettings withLimit withRules />
       </div>
 

@@ -136,7 +136,7 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
         <label className={styles.label} htmlFor="parvane-bug-text">{lang('ParvaneBugWhat')}</label>
         <textarea
           id="parvane-bug-text"
-          className={kit.textarea}
+          className={buildClassName(kit.textarea, styles.area)}
           placeholder={lang('ParvaneBugReportPlaceholder')}
           maxLength={DESCRIPTION_MAX_LENGTH}
           value={description}
@@ -148,7 +148,7 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
         <label className={styles.label} htmlFor="parvane-bug-steps">{lang('ParvaneBugSteps')}</label>
         <textarea
           id="parvane-bug-steps"
-          className={kit.textarea}
+          className={buildClassName(kit.textarea, styles.area)}
           placeholder={lang('ParvaneBugStepsPlaceholder')}
           maxLength={DESCRIPTION_MAX_LENGTH}
           value={steps}

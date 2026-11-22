@@ -865,6 +865,35 @@
   color: var(--pv-muted);
 }
 
+// Поле формы по макету (`pv.css .inp`, доски `RpProfileB`): 48 px, рамка, фон страницы
+.fieldInput {
+  width: 100%;
+  min-width: 0;
+  height: var(--pv-input-height);
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
+  outline: none;
+
+  &::placeholder {
+    color: var(--pv-muted);
+  }
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
+}
+
+.fieldInputError,
+.fieldInputError:focus {
+  border-color: var(--pv-red);
+}
+
 .fieldHint {
   margin-top: 0.25rem;
   font-size: var(--pv-font-size-caption);
@@ -930,7 +959,9 @@
 }
 
 .statusTitle {
+  font-size: var(--pv-font-size);
   font-weight: var(--font-weight-semibold);
+  line-height: 1.3;
 }
 
 .statusSub,
@@ -954,9 +985,24 @@
   padding: 0.75rem 1rem 0;
 }
 
+// Группа с чужими строками без собственных полей (настройки офлайна «Музыки» в «Данных и памяти»)
+.groupPadded {
+  padding: 0.25rem 1rem;
+}
+
+// «Куда сохранить», «Выбрать файл» — полоса панели во всю ширину экрана (доска `RpProfileB`)
 .fileRow {
   padding-inline: 0;
   border-top: 0;
+
+  @media (max-width: 925px) {
+    width: calc(100% + 2rem);
+    margin: 0.375rem -1rem 0;
+    padding-inline: 1rem;
+    border-block: 1px solid var(--pv-line);
+
+    background: var(--pv-panel);
+  }
 }
 
 // Кнопка-чип в конце строки (`.chip`: «Создать», «Очистить»)

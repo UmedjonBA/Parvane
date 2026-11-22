@@ -133,7 +133,7 @@ const KeysFileForm = ({
           <span className={styles.fieldLabel}>{lang('ParvaneKeysFilePassword')}</span>
           <input
             type="password"
-            className={buildClassName('form-control', isShort && tab === 'save' && 'error')}
+            className={buildClassName(styles.fieldInput, isShort && tab === 'save' && styles.fieldInputError)}
             autoComplete="new-password"
             value={password}
             disabled={isBusy}
@@ -148,9 +148,10 @@ const KeysFileForm = ({
               <span className={styles.fieldLabel}>{lang('ParvaneKeysFileRepeat')}</span>
               <input
                 type="password"
-                className={buildClassName('form-control', isMismatch && 'error')}
+                className={buildClassName(styles.fieldInput, isMismatch && styles.fieldInputError)}
                 autoComplete="new-password"
                 value={repeat}
+                placeholder={lang('PleaseReEnterPassword')}
                 disabled={isBusy}
                 aria-invalid={isMismatch || undefined}
                 data-keys-password-repeat

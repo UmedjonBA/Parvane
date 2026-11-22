@@ -111,7 +111,7 @@ const ChangePasswordDialog = ({ isOpen, sessions, onClose }: OwnProps & StatePro
         <span className={styles.fieldLabel}>{lang(labelKey)}</span>
         <input
           type="password"
-          className={buildClassName('form-control', field === 'repeat' && isMismatch && 'error')}
+          className={buildClassName(styles.fieldInput, field === 'repeat' && isMismatch && styles.fieldInputError)}
           autoComplete={autoComplete}
           value={values[field]}
           disabled={isBusy}
