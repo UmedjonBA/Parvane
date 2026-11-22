@@ -2118,7 +2118,8 @@
       "carbs": 48,
       "fat": 14,
       "protein": 22
-     }
+     },
+     "computed": true
     }
    ]
   },
@@ -2153,6 +2154,73 @@
      "value": 1420,
      "unit": "kcal",
      "tag": "breakfast"
+    }
+   ]
+  },
+  {
+   "text": "ккал 2200 белки 140",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 2200,
+     "unit": "kcal",
+     "tag": "breakfast",
+     "parts": {
+      "protein": 140
+     }
+    }
+   ]
+  },
+  {
+   "text": "белки 140",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 560,
+     "unit": "kcal",
+     "tag": "breakfast",
+     "parts": {
+      "protein": 140
+     },
+     "computed": true
+    }
+   ]
+  },
+  {
+   "text": "белки 140 ккал 2200",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 2200,
+     "unit": "kcal",
+     "tag": "breakfast",
+     "parts": {
+      "protein": 140
+     }
+    }
+   ]
+  },
+  {
+   "text": "140 г белка, жиры 70",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 1190,
+     "unit": "kcal",
+     "tag": "breakfast",
+     "parts": {
+      "fat": 70,
+      "protein": 140
+     },
+     "computed": true
     }
    ]
   },

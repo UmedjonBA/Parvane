@@ -3,7 +3,8 @@
 //!
 //! Еда: «завтрак овсянка, яйцо, кофе 430 ккал б 22 ж 14 у 48», «съел гречку с курицей 520 ккал», «на ужин паста»,
 //! «творог 200 г 240 ккал». Фраза без слова приёма и без глагола — еда, только если названы калории; со словом
-//! приёма хватает БЖУ (калории считаются: 4 · Б + 9 · Ж + 4 · У) либо одного названия в начале фразы.
+//! приёма хватает БЖУ (калории считаются: 4 · Б + 9 · Ж + 4 · У) либо одного названия в начале фразы; БЖУ словом
+//! без названия («белки 140») — тоже еда.
 //! Тренировка: «бег 35 минут 6,2 км», «зал 1:20, 6 упражнений», «плавал 40 мин» — нужна длительность либо
 //! расстояние. Приём, не названный словом, определяется по времени записи.
 
@@ -34,6 +35,8 @@ pub(super) struct Found {
     pub day: Option<i64>,
     /// Еда без единого числа («на ужин паста»): догадка по слову приёма — чужой ввод («План») ей не верит.
     pub guess: bool,
+    /// Калории не названы, а посчитаны из БЖУ: целью питания такое число не становится.
+    pub computed: bool,
 }
 
 /// Значение записи еды либо тренировки в разумном диапазоне (общая проверка разбора и форм).
@@ -330,8 +333,11 @@ impl Parser<'_> {
         let name: String = self.slice(a, b).chars().take(MAX_NAME_CHARS).collect();
         let has_macros = parts.iter().any(|p| p.0 != "fiber");
         let at_start = i == 0 || !self.free(i - 1) || self.sep(i - 1).is_some();
-        let accepted = kcal.is_some() || (trigger.is_some() && has_macros) || (strong && at_start && !name.is_empty());
-        if !accepted || (trigger.is_none() && name.is_empty() && kcal.is_none()) {
+        // «белки 140», «140 г белка» без названия и слова приёма — тоже еда (и цель питания в строке целей); одна
+        // буква в начале («б 22») без слова приёма ничего не значит
+        let bare_macros = name.is_empty() && has_macros && first.chars().count() != 1 && self.macro_at(i).is_some();
+        let accepted = kcal.is_some() || (trigger.is_some() && has_macros) || bare_macros || (strong && at_start && !name.is_empty());
+        if !accepted || (trigger.is_none() && name.is_empty() && kcal.is_none() && !bare_macros) {
             return None;
         }
         let (start, day, lead_minute) = self.lead_before(i, today);
@@ -349,11 +355,11 @@ impl Parser<'_> {
         }
         if !(1.0..=MAX_KCAL).contains(&value) && (kcal.is_some() || has_macros) || parts.iter().any(|p| !part_in_range(p.0, p.1)) {
             problems.push(Problem { text: self.slice(start, end), code: "range" });
-            return Some((Found { kind: "", tag: "", name: String::new(), value: 0.0, unit: "", parts: Vec::new(), minute: None, day: None, guess: false }, start, end));
+            return Some((Found { kind: "", tag: "", name: String::new(), value: 0.0, unit: "", parts: Vec::new(), minute: None, day: None, guess: false, computed: false }, start, end));
         }
         parts.sort_by(|x, y| x.0.cmp(y.0));
         let guess = kcal.is_none() && !has_macros;
-        Some((Found { kind: KIND_FOOD, tag, name, value, unit: "kcal", parts, minute: minute.or(lead_minute), day, guess }, start, end))
+        Some((Found { kind: KIND_FOOD, tag, name, value, unit: "kcal", parts, minute: minute.or(lead_minute), day, guess, computed: kcal.is_none() && has_macros }, start, end))
     }
 
     /// Длительность тренировки: единица обязательна («35 минут», «1 ч 20», «1:20», «час»).
@@ -446,9 +452,9 @@ impl Parser<'_> {
         let km_ok = km.map_or(true, |d| d > 0.0);
         if !(0.0..=MAX_WORKOUT_MIN).contains(&value) || !km_ok || parts.iter().any(|p| !part_in_range(p.0, p.1)) {
             problems.push(Problem { text: self.slice(start, end), code: "range" });
-            return Some((Found { kind: "", tag: "", name: String::new(), value: 0.0, unit: "", parts: Vec::new(), minute: None, day: None, guess: false }, start, end));
+            return Some((Found { kind: "", tag: "", name: String::new(), value: 0.0, unit: "", parts: Vec::new(), minute: None, day: None, guess: false, computed: false }, start, end));
         }
-        Some((Found { kind: KIND_WORKOUT, tag, name: String::new(), value, unit: "min", parts, minute: minute.or(lead_minute), day, guess: false }, start, end))
+        Some((Found { kind: KIND_WORKOUT, tag, name: String::new(), value, unit: "min", parts, minute: minute.or(lead_minute), day, guess: false, computed: false }, start, end))
     }
 }
 
@@ -457,7 +463,7 @@ pub(super) fn scan(p: &mut Parser, today: i64, problems: &mut Vec<Problem>) -> V
     let mut out = Vec::new();
     let mut i = 0;
     while i < p.toks.len() {
-        if !p.free(i) || (p.word(i).is_none() && p.kcal_at(i).is_none()) {
+        if !p.free(i) || (p.word(i).is_none() && p.kcal_at(i).is_none() && p.macro_at(i).is_none()) {
             i += 1;
             continue;
         }

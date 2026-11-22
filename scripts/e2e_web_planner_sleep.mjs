@@ -162,6 +162,26 @@ try {
     document.querySelector('[data-health-goals] input[data-goal="sleep_bed"]')?.value === '23:15'
     && document.querySelector('[data-health-goals] input[data-goal="sleep_wake"]')?.value === '06:45'
   ), undefined, { timeout: STEP_TIMEOUT_MS });
+  // Цели питания без названия блюда: калории и белки; калории, посчитанные из одних белков, целью не становятся.
+  // Блок питания пока выключен, поля скрыты: принятая строка очищается, значения сверяются после «Включить блоки»
+  await goalsLine.fill('ккал 2200 белки 140');
+  await page.waitForFunction(() => /calories · protein/i.test(
+    document.querySelector('[data-health-goals-understood]')?.textContent || '',
+  ), undefined, { timeout: STEP_TIMEOUT_MS }).catch(async () => {
+    assert.fail(`разбор целей питания: «${await understood.innerText().catch(() => '')}»`);
+  });
+  await goalsLine.press('Enter');
+  await page.waitForFunction(() => document.querySelector('[data-health-goals-line]')?.value === '',
+    undefined, { timeout: STEP_TIMEOUT_MS });
+  await goalsLine.fill('белки 150');
+  await page.waitForFunction(() => /^[^·]*protein[^·]*$/i.test(
+    document.querySelector('[data-health-goals-understood]')?.textContent || '',
+  ), undefined, { timeout: STEP_TIMEOUT_MS }).catch(async () => {
+    assert.fail(`разбор одной цели белков: «${await understood.innerText().catch(() => '')}»`);
+  });
+  await goalsLine.press('Enter');
+  await page.waitForFunction(() => document.querySelector('[data-health-goals-line]')?.value === '',
+    undefined, { timeout: STEP_TIMEOUT_MS });
   // Сон: отбой и подъём, длительность считается, «Напоминать об отбое» — настройка устройства
   await goalsPage.locator('input[data-goal="sleep_bed"]').fill('23:30');
   await goalsPage.locator('input[data-goal="sleep_wake"]').fill('07:00');
@@ -180,6 +200,8 @@ try {
   await page.locator('button[data-block="food"]').click();
   await page.locator('[data-module-settings="health"]').click();
   await goalsPage.locator('input[data-goal="kcal"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await goalsPage.locator('input[data-goal="kcal"]').inputValue(), '2200', 'цель калорий из строки');
+  assert.equal(await goalsPage.locator('input[data-goal="protein"]').inputValue(), '150', 'цель белков из строки');
   console.log('OK: «Цели здоровья» — цели строкой, сон с длительностью, «Напоминать об отбое», «Включить блоки»');
   assert.deepEqual(errors, [], `ошибки страницы: ${errors.join('; ')}`);
   console.log('e2e_web_planner_sleep: OK');

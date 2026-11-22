@@ -316,7 +316,7 @@ function toGoals(entries: HealthParsedEntry[]): Understood[] {
     if (!out.some((item) => item.goal === goal)) out.push({ goal, value });
   };
   entries.forEach(({
-    kind, value, time, endTime, atMs, endMs, parts,
+    kind, value, time, endTime, atMs, endMs, parts, computed,
   }) => {
     // «отбой 23:15 подъём 6:45» движок понимает одной ночью: её начало и конец — цели отбоя и подъёма
     if (kind === 'sleep' && endMs > atMs && endTime) {
@@ -337,7 +337,8 @@ function toGoals(entries: HealthParsedEntry[]): Understood[] {
     }
     if (kind === FOOD_KIND) {
       // «ккал 2200 белки 140»: калории и БЖУ — цели питания
-      if (value > 0) add('kcal', value);
+      // Калории, посчитанные движком из БЖУ, целью не становятся
+      if (value > 0 && !computed) add('kcal', value);
       MACRO_GOALS.forEach((macro) => {
         if (parts?.[macro]) add(macro, parts[macro]);
       });

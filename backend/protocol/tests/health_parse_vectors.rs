@@ -34,7 +34,7 @@ fn free_text_matches_shared_cases() {
                 if e["value2"].as_f64().unwrap() != 0.0 {
                     o["value2"] = e["value2"].clone();
                 }
-                for k in ["endDay", "endTime", "name", "tag", "parts", "guess"] {
+                for k in ["endDay", "endTime", "name", "tag", "parts", "guess", "computed"] {
                     if !e[k].is_null() {
                         o[k] = e[k].clone();
                     }
