@@ -46,3 +46,16 @@ export async function rebuildMusicMix() {
   await callMusic('parvaneMusicMixRebuild').catch(() => undefined);
   return loadMusicMix();
 }
+
+// Лист «настройки микса» (доска `MusicHome-04`): открыт с экрана микса либо шагом 2 после выбора исполнителей
+const [getIsMixSettingsOpen, setIsMixSettingsOpen] = createSignal(false);
+
+export { getIsMixSettingsOpen };
+
+export function openMixSettings() {
+  setIsMixSettingsOpen(true);
+}
+
+export function closeMixSettings() {
+  setIsMixSettingsOpen(false);
+}

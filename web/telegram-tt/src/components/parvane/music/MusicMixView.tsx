@@ -3,20 +3,20 @@ import {
 } from '../../../lib/teact/teact';
 
 import type {
-  MusicCatalogTrack, MusicMixMode, MusicTrack,
+  MusicCatalogTrack, MusicTrack,
 } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
 import { startFetch } from './fetch/musicFetch';
 import { formatTrackTime } from './musicFormat';
-import { getIsMusicMixFailed, getMusicMix, loadMusicMix, rebuildMusicMix } from './musicMix';
 import {
-  callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
+  getIsMusicMixFailed, getMusicMix, loadMusicMix, openMixSettings, rebuildMusicMix,
+} from './musicMix';
+import { getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
 import { goBackMusic, openMusicView } from './musicView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
-import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
@@ -34,12 +34,6 @@ type OwnProps = {
   onSendToChat: (track: MusicTrack) => void;
 };
 
-const MODES: MusicMixMode[] = ['normal', 'favorites', 'discover'];
-const MODE_KEYS = {
-  normal: 'MusicMixModeNormal', favorites: 'MusicMixModeFavorites', discover: 'MusicMixModeDiscover',
-} as const;
-const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
-
 // «Микс дня» (как в HomeMusic): 25 треков на сегодня из библиотеки сервера и похожего из каталога. «Слушать» играет
 // треки библиотеки; трек каталога — «Найти и скачать» (послушать до скачивания — следующим шагом). «Другой микс»
 // собирает заново; настройки — режим, час обновления, любимые исполнители
@@ -49,7 +43,6 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
   const isFailed = useDerivedState(getIsMusicMixFailed);
   const player = useDerivedState(getMusicPlayer);
   const current = getCurrentTrack(player);
-  const [isSettingsOpen, openSettings, closeSettings] = useFlag();
   const [queued, setQueued] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -67,16 +60,6 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
   const handleArtists = useLastCallback(() => openMusicView({ kind: 'mixArtists' }));
   const handleStar = useLastCallback((track: MusicTrack) => void setTrackStarred(track, !track.isStarred));
   const handleRetry = useLastCallback(() => void loadMusicMix());
-  const toggleSettings = useLastCallback(() => (isSettingsOpen ? closeSettings() : openSettings()));
-
-  const handleMode = useLastCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
-    await callMusic('parvaneMusicMixSettings', { mode: e.currentTarget.dataset.mode as MusicMixMode });
-    void loadMusicMix();
-  });
-  const handleHour = useLastCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    await callMusic('parvaneMusicMixSettings', { hour: Number(e.currentTarget.value) });
-    void loadMusicMix();
-  });
 
   const handleDownload = useLastCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
     const index = Number(e.currentTarget.dataset.index);
@@ -143,7 +126,7 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
             >
               {lang('MusicMixAnother')}
             </button>
-            <button type="button" className={kit.btn} aria-expanded={isSettingsOpen} onClick={toggleSettings}>
+            <button type="button" className={kit.btn} data-music-mix-settings-open onClick={openMixSettings}>
               {lang('MusicMixSettings')}
             </button>
           </>
@@ -152,41 +135,6 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
         barTitle={lang('MusicMixTitle')}
         onBack={goBackMusic}
       />
-      {isSettingsOpen && today && (
-        <section className={styles.mixSettings} data-music-mix-settings>
-          <div className={kit.chips} role="group">
-            {MODES.map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={buildClassName(kit.chip, today.settings.mode === mode && kit.chipOn)}
-                aria-pressed={today.settings.mode === mode}
-                data-mode={mode}
-                onClick={handleMode}
-              >
-                {lang(MODE_KEYS[mode])}
-              </button>
-            ))}
-          </div>
-          <label className={styles.mixSetting}>
-            <span>{lang('MusicMixHour')}</span>
-            <select className={kit.input} value={String(today.settings.hour)} onChange={handleHour}>
-              {HOURS.map((hour) => (
-                <option key={hour} value={String(hour)}>{`${String(hour).padStart(2, '0')}:00`}</option>
-              ))}
-            </select>
-          </label>
-          <div className={styles.mixSetting}>
-            <span>{lang('MusicArtists')}</span>
-            <span className={buildClassName(kit.muted, kit.grow)}>
-              {today.settings.artists.map((artist) => artist.name).join(', ')}
-            </span>
-            <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleArtists}>
-              {lang('MusicMixArtistsEdit')}
-            </button>
-          </div>
-        </section>
-      )}
       {isFailed && !mix && (
         <PvEmpty text={lang('MusicMixFailed')} actionText={lang('MusicFetchRetry')} onAction={handleRetry} />
       )}

@@ -193,8 +193,13 @@ try {
   await music.locator('[data-music-mix]').click();
   const picker = music.locator('[data-music-mix-artists]');
   await picker.locator('[data-music-mix-artist="Kora Mesh"]').click();
-  await visible(picker.getByText('Chosen 1 of 20'));
+  await visible(picker.getByText('Chosen 1'));
+  // «Дальше» — шаг 2: лист настроек микса (доска `MusicHome-04`)
   await picker.locator('[data-music-mix-artists-done]').click();
+  const mixSettings = page.locator('[data-music-mix-settings]');
+  await visible(mixSettings.getByRole('button', { name: 'Mix', exact: true }));
+  await mixSettings.locator('[data-music-mix-settings-done]').click();
+  await gone(mixSettings);
   music = await openMusic(page);
   await visible(music.locator('[data-music-mix="ready"]'), STEP_TIMEOUT_MS * 2);
   await music.locator('[data-music-mix]').click();
@@ -567,7 +572,8 @@ try {
   // Меню трека каталога (доска `RpMusicA-04`): «В Любимое» — скачать и сразу в «Любимое»
   const morning = await searchCatalog('утро', CATALOG_MORNING);
   await morning.locator('[data-music-menu]').click();
-  const catalogMenu = page.getByRole('menu').first();
+  const catalogMenu = page.locator('[role="menu"]:visible').first();
+  await visible(catalogMenu.getByRole('menuitem', { name: 'To favorites', exact: true }));
   const catalogItems = await catalogMenu.getByRole('menuitem').evaluateAll((items) => items.map((item) => item.getAttribute('aria-label')));
   assert.deepEqual(catalogItems.slice(0, 5), ['To favorites', 'Add to a playlist', 'Add to queue', 'Share', 'Add to the server'],
     `меню трека каталога: ${catalogItems}`);

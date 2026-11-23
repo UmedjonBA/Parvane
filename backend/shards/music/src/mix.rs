@@ -420,34 +420,41 @@ async fn artists(ctx: &Ctx, sub: &Subsonic, address: &str, r: pb::MixArtistsRequ
     let fetch = ctx.fetch.as_ref().ok_or(ErrorCode::Unavailable)?;
     let service = fetch.service()?;
     let query = r.query.trim();
-    if !query.is_empty() {
-        let v = service.catalog_call("artists", &[("q", query.to_string())]).await.map_err(|_| ErrorCode::Unavailable)?;
-        return Ok(pb::MixArtistsResponse { artists: v.get("artists").and_then(Value::as_array).into_iter().flatten().map(artist_pb).collect() }.encode_to_vec());
-    }
-    let mut out: Vec<pb::CatalogArtist> = Vec::new();
-    let mut seen = BTreeSet::new();
-    // Исполнители библиотеки с большим числом альбомов — сперва (их знают на этом сервере)
-    if let Ok(v) = sub.call(&nd_user(address), "getArtists", &[]).await {
-        let mut local: Vec<(String, u64)> = list(&v, &["artists", "index"])
+    // Исполнители библиотеки сервера: имя → число альбомов
+    let mut local: Vec<(String, u64)> = match sub.call(&nd_user(address), "getArtists", &[]).await {
+        Ok(v) => list(&v, &["artists", "index"])
             .iter()
             .flat_map(|i| i.get("artist").and_then(Value::as_array).cloned().unwrap_or_default())
             .map(|a| (a.get("name").and_then(Value::as_str).unwrap_or("").to_string(), a.get("albumCount").and_then(Value::as_u64).unwrap_or(0)))
             .filter(|(n, _)| !n.is_empty())
-            .collect();
-        local.sort_by(|a, b| b.1.cmp(&a.1));
-        for (name, _) in local.into_iter().take(8) {
-            if let Ok(v) = service.catalog_call("artists", &[("q", name)]).await {
-                if let Some(first) = v.get("artists").and_then(Value::as_array).and_then(|a| a.first()) {
-                    let a = artist_pb(first);
-                    if seen.insert(a.r#ref.clone()) {
-                        out.push(a);
-                    }
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    let names: BTreeSet<String> = local.iter().map(|(n, _)| n.to_lowercase()).collect();
+    let mark = |mut a: pb::CatalogArtist| {
+        a.on_server = names.contains(&a.name.to_lowercase());
+        a
+    };
+    if !query.is_empty() {
+        let v = service.catalog_call("artists", &[("q", query.to_string())]).await.map_err(|_| ErrorCode::Unavailable)?;
+        return Ok(pb::MixArtistsResponse { artists: v.get("artists").and_then(Value::as_array).into_iter().flatten().map(artist_pb).map(mark).collect() }.encode_to_vec());
+    }
+    let mut out: Vec<pb::CatalogArtist> = Vec::new();
+    let mut seen = BTreeSet::new();
+    // Исполнители библиотеки с большим числом альбомов — сперва (их знают на этом сервере)
+    local.sort_by(|a, b| b.1.cmp(&a.1));
+    for (name, _) in local.into_iter().take(8) {
+        if let Ok(v) = service.catalog_call("artists", &[("q", name)]).await {
+            if let Some(first) = v.get("artists").and_then(Value::as_array).and_then(|a| a.first()) {
+                let a = mark(artist_pb(first));
+                if seen.insert(a.r#ref.clone()) {
+                    out.push(a);
                 }
             }
         }
     }
     if let Ok(v) = service.catalog_call("artists", &[]).await {
-        for a in v.get("artists").and_then(Value::as_array).into_iter().flatten().map(artist_pb) {
+        for a in v.get("artists").and_then(Value::as_array).into_iter().flatten().map(artist_pb).map(mark) {
             if out.len() >= 40 {
                 break;
             }

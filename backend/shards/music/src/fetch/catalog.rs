@@ -98,7 +98,7 @@ fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
 }
 
 pub(crate) fn artist_pb(v: &Value) -> pb::CatalogArtist {
-    pb::CatalogArtist { r#ref: clip(v, "ref"), name: clip(v, "name"), picture_url: clip(v, "picture"), albums_count: num(v, "albums") }
+    pb::CatalogArtist { r#ref: clip(v, "ref"), name: clip(v, "name"), picture_url: clip(v, "picture"), albums_count: num(v, "albums"), on_server: false }
 }
 
 fn album_pb(v: &Value) -> pb::CatalogAlbum {

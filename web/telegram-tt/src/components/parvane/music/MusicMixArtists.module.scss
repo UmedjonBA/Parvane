@@ -1,0 +1,251 @@
+// Выбор исполнителей микса (доска `MusicHome-03`): шапка 56 px «Сделано для вас / шаг 1 из 2», крупный вопрос,
+// круги 76 px по три в ряд, внизу «Выбрано N · Пропустить · Дальше»
+.root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+// Телефон: экран во весь рост, без отступов ленты
+.rootPhone {
+  margin: -0.75rem -1rem -1.25rem;
+}
+
+.bar {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+
+  height: 3.5rem;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+}
+
+.barTitles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.barTitle {
+  font-size: 1.0625rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.barSub {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  padding: 1rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
+}
+
+.hint {
+  margin: -0.375rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--pv-muted);
+}
+
+.search {
+  height: 2.75rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+  row-gap: 1rem;
+  column-gap: 0.5rem;
+}
+
+.artist {
+  cursor: pointer;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  align-items: center;
+
+  min-width: 0;
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  color: var(--pv-fg);
+
+  background: none;
+}
+
+.picture {
+  position: relative;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 4.75rem;
+  height: 4.75rem;
+  margin-bottom: 0.375rem;
+  border-radius: 50%;
+
+  color: var(--pv-panel);
+
+  background: var(--artist-tone);
+}
+
+.artistOn .picture {
+  box-shadow: 0 0 0 0.25rem var(--pv-bg), 0 0 0 0.375rem var(--pv-at);
+}
+
+.glyph {
+  opacity: 0.85;
+}
+
+.image {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+
+  object-fit: cover;
+}
+
+.check {
+  position: absolute;
+  top: -0.25rem;
+  right: -0.25rem;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid var(--pv-bg);
+  border-radius: 50%;
+
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+}
+
+.name {
+  overflow: hidden;
+
+  max-width: 100%;
+
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.where {
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+}
+
+.bottom {
+  position: sticky;
+  bottom: 0;
+
+  display: flex;
+  flex: none;
+  gap: 0.625rem;
+  align-items: center;
+
+  padding: 0.75rem 1rem;
+
+  background: var(--pv-bg);
+}
+
+.count {
+  flex: 1 1 auto;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.skip {
+  border: 1px solid var(--pv-line);
+  background: var(--pv-raised);
+}
+
+.rootPhone .grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+// Лист настроек микса (доска `MusicHome-04`)
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.sheetCover {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 0.375rem;
+
+  color: var(--pv-panel);
+
+  background: var(--pv-green);
+}
+
+.sheetBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.sheetLabel {
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.sheetRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.sheetRowText {
+  flex: 1 1 auto;
+  font-size: 0.9375rem;
+}
+
+.sheetHour {
+  width: 6.5rem;
+  height: 2.5rem;
+}
+
+.sheetEdit {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+}
+
+.sheetDone {
+  width: 100%;
+}

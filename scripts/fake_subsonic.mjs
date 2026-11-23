@@ -201,6 +201,18 @@ http.createServer((req, res) => {
       return reply(res, {
         album: { ...albumOf(id), song: SONGS.filter((song) => song.albumId === id).map((song) => songOf(song, user)) },
       });
+    // Все исполнители одним указателем (подсказки исполнителей микса)
+    case '/rest/getArtists':
+      return reply(res, {
+        artists: {
+          index: [{
+            name: '#',
+            artist: ARTISTS.map((artist) => ({
+              ...artist, albumCount: ALBUMS.filter((album) => album.artistId === artist.id).length,
+            })),
+          }],
+        },
+      });
     case '/rest/getArtist': {
       const artist = ARTISTS.find((item) => item.id === id);
       if (!artist) return fail(res, 70);

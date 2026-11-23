@@ -778,6 +778,19 @@ async function galleryMusic() {
     await musicBack();
     await tab('home').click({ timeout: STEP_TIMEOUT_MS });
   });
+  await step(page, 'MusicHome-03', async () => {
+    await music.locator('[data-music-mix]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-mix-artists]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-mix-artist]').first().click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'MusicHome-04', async () => {
+    await music.locator('[data-music-mix-artists-done]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-music-mix-settings]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+    await page.waitForTimeout(800);
+  });
+  await page.locator('[data-music-mix-settings-done]').click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
+  await musicBack();
+  await tab('home').click({ timeout: STEP_TIMEOUT_MS });
   await step(page, 'MusicHome-02', async () => {
     await music.locator('[data-music-popular]').scrollIntoViewIfNeeded({ timeout: STEP_TIMEOUT_MS });
   });

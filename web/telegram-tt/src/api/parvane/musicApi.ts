@@ -140,6 +140,8 @@ export type MusicCatalogArtist = {
   name: string;
   pictureUrl: string;
   albumsCount: number;
+  // Есть в библиотеке сервера (выбор исполнителей микса)
+  isOnServer?: boolean;
 };
 
 export type MusicMixMode = 'normal' | 'favorites' | 'discover';
@@ -344,6 +346,7 @@ export function toCatalogArtist(raw: Json): MusicCatalogArtist {
     name: text(raw, 'name'),
     pictureUrl: text(raw, 'picture_url'),
     albumsCount: count(raw, 'albums_count'),
+    isOnServer: Boolean(field(raw, 'on_server')) || undefined,
   };
 }
 

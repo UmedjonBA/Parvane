@@ -1410,11 +1410,9 @@ export interface LangPair {
   'MusicMixModeNormal': undefined;
   'MusicMixModeFavorites': undefined;
   'MusicMixModeDiscover': undefined;
-  'MusicMixHour': undefined;
   'MusicMixArtistsEdit': undefined;
   'MusicMixQueued': undefined;
   'MusicMixFailed': undefined;
-  'MusicMixArtistsTitle': undefined;
   'MusicMixArtistsSearch': undefined;
   'MusicMixArtistsDone': undefined;
   'MusicMixArtistsEmpty': undefined;
@@ -1433,6 +1431,15 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicMixWhoTitle': undefined;
+  'MusicMixWhoHint': undefined;
+  'MusicMixSkip': undefined;
+  'MusicMixNextStep': undefined;
+  'MusicMixWhat': undefined;
+  'MusicMixWhatFamiliar': undefined;
+  'MusicMixWhatMixed': undefined;
+  'MusicMixWhatNew': undefined;
+  'MusicMixDailyAt': undefined;
   'MusicUndo': undefined;
   'MusicStarWhenAdded': undefined;
   'MusicFetchFirst': undefined;
@@ -5125,6 +5132,13 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'MusicSortBy': {
     'name': V;
+  };
+  'MusicMixStep': {
+    'step': V;
+    'total': V;
+  };
+  'MusicMixChosenCount': {
+    'count': V;
   };
   'MusicQueuedNextToast': {
     'name': V;
