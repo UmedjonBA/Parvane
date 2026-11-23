@@ -850,6 +850,13 @@ async function galleryMusic() {
     await music.locator('[data-music-library] [data-tab="artists"]').click({ timeout: STEP_TIMEOUT_MS });
     await music.locator('[data-music-library-artists] button').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
+  await step(page, 'MusicLibrary-06', async () => {
+    await music.locator('[data-music-library] [data-tab="artists"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-library] [data-item="offline"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-offline]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await musicBack();
+  await music.locator('[data-music-library] [data-tab="artists"]').click({ timeout: STEP_TIMEOUT_MS });
   await step(page, 'XpMusic-01', async () => {
     await music.locator('[data-music-library-artists] button').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);

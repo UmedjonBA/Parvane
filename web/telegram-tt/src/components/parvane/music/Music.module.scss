@@ -1351,18 +1351,9 @@
   background: linear-gradient(to right, var(--pv-green) var(--bar, 0%), var(--pv-line2) var(--bar, 0%));
 }
 
-.usageHead {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-}
-
 .offlineGroup {
-  border-top: 1px solid var(--pv-line);
-
-  &:first-child {
-    border-top: none;
-  }
+  display: flex;
+  flex-direction: column;
 }
 
 .offlineGroup .track {
@@ -1644,4 +1635,53 @@
 // Страница поверх ленты: строка-уведомление — сразу над мини-плеером (ленты нет)
 .rootPage {
   --parvane-music-toast-bottom: 4.75rem;
+}
+
+// «Скачано» (доска `MusicLibrary-06`): группа строкой 64 px, обложка 52 px, зелёная точка — на устройстве
+.offlineRow {
+  cursor: pointer;
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 4rem;
+  padding: 0.375rem 0;
+  border: none;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+}
+
+.offlineCover {
+  flex: none;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 0.375rem;
+}
+
+.offlineDot {
+  flex: none;
+
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-inline-end: 0.25rem;
+  border-radius: 50%;
+
+  background: var(--pv-green);
+}
+
+.offlineRelease {
+  align-self: flex-start;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.offlineNote {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
 }

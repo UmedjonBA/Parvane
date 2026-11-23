@@ -4,6 +4,7 @@ import type { MusicAlbum, MusicArtist, MusicInfo } from '../../../api/parvane/mu
 import type { ParvaneIconName } from '../../main/ParvaneIcon';
 
 import buildClassName from '../../../util/buildClassName';
+import { openMusicFileSheet } from './musicFiles';
 import { callMusic } from './musicPlayer';
 import { openMusicView, openNewPlaylist } from './musicView';
 import useMusicPages from './useMusicPages';
@@ -31,6 +32,8 @@ type AlbumSort = 'recent' | 'name';
 const TABS: Tab[] = ['playlists', 'albums', 'artists'];
 const TAB_KEYS = { playlists: 'MusicPlaylists', albums: 'MusicAlbums', artists: 'MusicArtists' } as const;
 const PAGE = 50;
+// Короче — слишком много ложных совпадений («A» и «ABBA»)
+const MERGE_MIN_KEY = 3;
 
 // Parvane (макет «Музыки» 23 ноя, доска `MusicLibrary`): вкладка «Медиатека» телефона — чипы «Плейлисты ·
 // Альбомы · Исполнители» и «…» (сортировка, сетка, «Не нравится», корзина, настройки). Плейлисты — общим списком
@@ -75,6 +78,10 @@ const MusicLibraryView = ({ info }: OwnProps) => {
   const handleOpenAlbum = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     openMusicView({ kind: 'album', id: e.currentTarget.dataset.id! });
   });
+  const handleMergeSuggest = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const artist = artists.items?.find((item) => item.id === e.currentTarget.dataset.id);
+    if (artist) openMusicFileSheet({ kind: 'merge', artistId: artist.id, name: artist.name });
+  });
   const handleOpenArtist = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     openMusicView({ kind: 'artist', id: e.currentTarget.dataset.id! });
   });
@@ -117,8 +124,23 @@ const MusicLibraryView = ({ info }: OwnProps) => {
 
   function renderArtists() {
     if (!artists.items) return artists.isFailed ? renderFailed(artists.reload) : <PvSkeleton />;
+    // «… и … — один исполнитель?» (доска `MusicLibrary-05`): объединяет администратор
+    const pair = info.isAdmin ? findSimilarArtists(artists.items) : undefined;
     return (
       <>
+        {pair && (
+          <div className={styles.merge} data-music-merge-suggest>
+            <span className={styles.mergeText}>
+              {lang('MusicMergeSuggest', {
+                first: <b key="first">{pair[0].name}</b>,
+                second: <b key="second">{pair[1].name}</b>,
+              }, { withNodes: true })}
+            </span>
+            <button type="button" className={styles.mergeButton} data-id={pair[0].id} onClick={handleMergeSuggest}>
+              {lang('MusicMergeShort')}
+            </button>
+          </div>
+        )}
         <div className={styles.list} data-music-library-artists>
           {artists.items.map((artist) => (
             <button
@@ -210,5 +232,16 @@ const MusicLibraryView = ({ info }: OwnProps) => {
     </div>
   );
 };
+
+// Похожие имена: одно — начало другого без регистра и знаков («Miyagi» и «MiyaGi & Эндшпиль»)
+function findSimilarArtists(list: MusicArtist[]): [MusicArtist, MusicArtist] | undefined {
+  const keys = list.map((artist) => artist.name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ''));
+  for (let i = 0; i < list.length; i++) {
+    for (let j = 0; j < list.length; j++) {
+      if (i !== j && keys[i].length >= MERGE_MIN_KEY && keys[j].startsWith(keys[i])) return [list[i], list[j]];
+    }
+  }
+  return undefined;
+}
 
 export default memo(MusicLibraryView);

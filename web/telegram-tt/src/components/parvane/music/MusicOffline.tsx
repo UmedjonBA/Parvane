@@ -1,12 +1,9 @@
 import { memo, useMemo, useState } from '../../../lib/teact/teact';
-import { getActions } from '../../../global';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
 import type { MusicOfflineGroup } from './musicLibrary';
-import { LeftColumnContent, SettingsScreens } from '../../../types';
 
 import buildClassName from '../../../util/buildClassName';
-import { setParvaneSection } from '../../../util/parvaneSection';
 import { estimateOfflineLeft } from './musicFormat';
 import { groupOffline } from './musicLibrary';
 import {
@@ -39,14 +36,13 @@ type OwnProps = {
   isPhone?: boolean;
 };
 
-const GROUP_KIND_KEYS = { playlist: 'MusicKindPlaylistLower', album: 'MusicKindAlbumLower' } as const;
+const GROUP_KIND_TITLES = { playlist: 'MusicKindPlaylist', album: 'MusicKindAlbum' } as const;
 const PERCENT = 100;
 
 // Parvane (spec 041 C3; доски `XpMusic`, `RdMusic`): «Загруженное» — треки на этом устройстве, играют без сети.
 // Сколько занято из предела (полоса), группы «плейлист / альбом / отдельные треки» с размером и «Убрать», ход
 // загрузки с паузой и отменой (без связи — ждёт и продолжается сама), докачка нового и качество, «Удалить всё»
 const MusicOffline = ({ isPhone }: OwnProps) => {
-  const { openLeftColumnContent, openSettingsScreen } = getActions();
   const lang = useLang();
   const state = useDerivedState(getOfflineState);
   const settings = useDerivedState(getOfflineSettings);
@@ -92,12 +88,6 @@ const MusicOffline = ({ isPhone }: OwnProps) => {
   const handleClear = useLastCallback(() => {
     cancelClear();
     void removeOffline();
-  });
-
-  const handleOpenDataSettings = useLastCallback(() => {
-    setParvaneSection('messenger');
-    openLeftColumnContent({ contentKey: LeftColumnContent.Settings });
-    openSettingsScreen({ screen: SettingsScreens.DataStorage });
   });
 
   function titleOf(group: MusicOfflineGroup) {
@@ -165,68 +155,67 @@ const MusicOffline = ({ isPhone }: OwnProps) => {
     );
   }
 
+  // Группа строкой (доска `MusicLibrary-06`): обложка, «Плейлист · N треков · 980 МБ», зелёная точка — на
+  // устройстве; нажатие раскрывает треки и «Убрать»
   function renderGroup(group: MusicOfflineGroup, index: number) {
     const key = `${group.kind}:${group.id}`;
     const isOpened = openedGroup === key;
     const facts = [
-      group.kind !== 'tracks' && lang(GROUP_KIND_KEYS[group.kind]),
+      group.kind !== 'tracks' && lang(GROUP_KIND_TITLES[group.kind]),
       lang('MusicTracksCount', { count: group.trackIds.length }, { pluralValue: group.trackIds.length }),
-      isPhone && formatMusicSize(lang, group.bytes),
+      formatMusicSize(lang, group.bytes),
     ].filter(Boolean).join(' · ');
     return (
       <li key={key} className={styles.offlineGroup} data-offline-group={key}>
-        <div className={styles.track}>
-          <button type="button" className={styles.trackMain} data-group={key} onClick={handleToggleGroup}>
-            <MusicCover
-              toneId={group.id || 'tracks'}
-              size={36}
-              glyph={group.kind === 'album' ? 'disc' : 'list'}
-              className={styles.trackCover}
-            />
-            <span className={styles.trackText}>
-              <span className={styles.trackTitle}>{titleOf(group)}</span>
-              <span className={buildClassName(kit.muted, kit.small)}>{facts}</span>
-            </span>
-            {!isPhone && (
-              <span className={buildClassName(kit.mono, kit.muted, kit.small)}>
-                {formatMusicSize(lang, group.bytes)}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            className={kit.btn}
-            data-index={index}
-            data-offline-release={key}
-            onClick={handleRelease}
-          >
-            {lang('MusicOfflineRelease')}
-          </button>
-          {!isPhone && group.kind === 'tracks' && (
-            <button type="button" className={kit.btn} data-group={key} onClick={handleToggleGroup}>
-              {lang(isOpened ? 'MusicOfflineHide' : 'MusicOfflineShow')}
-            </button>
-          )}
-        </div>
+        <button
+          type="button"
+          className={styles.offlineRow}
+          aria-expanded={isOpened}
+          data-group={key}
+          onClick={handleToggleGroup}
+        >
+          <MusicCover
+            toneId={group.id || 'tracks'}
+            size={52}
+            glyph={group.kind === 'album' ? 'disc' : group.kind === 'playlist' ? 'list' : 'music'}
+            className={styles.offlineCover}
+          />
+          <span className={styles.trackText}>
+            <span className={styles.trackTitle}>{titleOf(group)}</span>
+            <span className={buildClassName(kit.muted, kit.small)}>{facts}</span>
+          </span>
+          <span className={styles.offlineDot} aria-label={lang('MusicOfflineSavedMark')} role="img" />
+        </button>
         {isOpened && (
-          <ul className={styles.tracks} data-music-tracks>
-            {group.trackIds.map((id, position) => (
-              <MusicTrackRow
-                key={id}
-                track={tracksById.get(id)!}
-                index={position}
-                isCurrent={id === currentId}
-                isPlaying={player.isPlaying}
-                canQueue
-                onStar={handleStar}
-                extra={{
-                  removeLabel: lang('MusicOfflineRemoveTrack'),
-                  onRemove: () => void removeOffline([id]),
-                }}
-                onPlay={(at) => handlePlayGroup(group, at)}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className={styles.tracks} data-music-tracks>
+              {group.trackIds.map((id, position) => (
+                <MusicTrackRow
+                  key={id}
+                  track={tracksById.get(id)!}
+                  index={position}
+                  isCurrent={id === currentId}
+                  isPlaying={player.isPlaying}
+                  canQueue
+                  onStar={handleStar}
+                  extra={{
+                    removeLabel: lang('MusicOfflineRemoveTrack'),
+                    onRemove: () => void removeOffline([id]),
+                  }}
+                  onPlay={(at) => handlePlayGroup(group, at)}
+                />
+              ))}
+            </ul>
+            <button
+              type="button"
+              className={buildClassName(kit.btn, styles.offlineRelease)}
+              data-index={index}
+              data-offline-release={key}
+              onClick={handleRelease}
+            >
+              {lang('MusicOfflineRelease')}
+            </button>
+          </>
         )}
       </li>
     );
@@ -246,11 +235,17 @@ const MusicOffline = ({ isPhone }: OwnProps) => {
     </button>
   );
 
+  // «на этом телефоне · 1,8 из 4 ГБ» (доска `MusicLibrary-06`)
+  const usageShort = lang(isPhone ? 'MusicOfflineOnPhoneOf' : 'MusicOfflineOnComputerOf', {
+    used: formatMusicSize(lang, used), limit: formatMusicSize(lang, settings.limitBytes),
+  });
+
   return (
     <div className={styles.view} data-music-offline={count}>
       <MusicSectionHead
         title={lang('MusicOffline')}
         subtitle={isPhone ? undefined : <span data-offline-usage>{usage}</span>}
+        barSubtitle={usageShort}
         isPhone={isPhone}
         actions={isPhone ? undefined : (
           <>
@@ -262,31 +257,16 @@ const MusicOffline = ({ isPhone }: OwnProps) => {
         )}
         onBack={goBackMusic}
       />
-      {isPhone && (
-        <div className={styles.usageHead} data-offline-usage>
-          <span className={buildClassName(kit.caps, kit.grow)}>{lang('MusicOfflineOnDevice')}</span>
-          <span className={buildClassName(kit.mono, kit.small)}>
-            {[lang('MusicTracksCount', { count }, { pluralValue: count }), formatMusicSize(lang, used)].join(' · ')}
-          </span>
-        </div>
-      )}
-      <div
-        className={styles.bar}
-        role="meter"
-        aria-label={usage}
-        aria-valuemin={0}
-        aria-valuemax={settings.limitBytes}
-        aria-valuenow={used}
-        style={`--bar: ${Math.min(PERCENT, (used / settings.limitBytes) * PERCENT)}%`}
-      />
-      {isPhone && (
-        <div className={buildClassName(kit.muted, kit.small)}>
-          {lang('MusicOfflineLimitHint', { limit: formatMusicSize(lang, settings.limitBytes) })}
-          {' '}
-          <button type="button" className={styles.inlineLink} onClick={handleOpenDataSettings}>
-            {lang('MusicOfflineLimitLink')}
-          </button>
-        </div>
+      {!isPhone && (
+        <div
+          className={styles.bar}
+          role="meter"
+          aria-label={usage}
+          aria-valuemin={0}
+          aria-valuemax={settings.limitBytes}
+          aria-valuenow={used}
+          style={`--bar: ${Math.min(PERCENT, (used / settings.limitBytes) * PERCENT)}%`}
+        />
       )}
       {state.problem && (
         <div className={styles.error} role="alert" data-offline-problem={state.problem}>
@@ -295,6 +275,7 @@ const MusicOffline = ({ isPhone }: OwnProps) => {
       )}
       {!count && !state.pending && <PvEmpty text={lang('MusicOfflineEmpty')} data-music-empty />}
       {Boolean(groups.length) && <ul className={styles.tracks} data-offline-groups>{groups.map(renderGroup)}</ul>}
+      {Boolean(groups.length) && <p className={styles.offlineNote}>{lang('MusicOfflineNote')}</p>}
       {renderBatch()}
       {!isPhone && (
         <section className={styles.card}>

@@ -1431,6 +1431,9 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicOfflineSavedMark': undefined;
+  'MusicOfflineNote': undefined;
+  'MusicMergeShort': undefined;
   'MusicKeepOneTitle': undefined;
   'MusicKeepOneNote': undefined;
   'MusicKeepThis': undefined;
@@ -5144,6 +5147,18 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'MusicSortBy': {
     'name': V;
+  };
+  'MusicOfflineOnPhoneOf': {
+    'used': V;
+    'limit': V;
+  };
+  'MusicOfflineOnComputerOf': {
+    'used': V;
+    'limit': V;
+  };
+  'MusicMergeSuggest': {
+    'first': V;
+    'second': V;
   };
   'MusicMixStep': {
     'step': V;

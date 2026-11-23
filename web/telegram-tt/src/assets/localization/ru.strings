@@ -1713,6 +1713,12 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicOfflineOnPhoneOf" = "на этом телефоне · {used} из {limit}";
+"MusicOfflineOnComputerOf" = "на этом компьютере · {used} из {limit}";
+"MusicOfflineSavedMark" = "на устройстве";
+"MusicOfflineNote" = "Играет без сети. На сервере ничего не меняется.";
+"MusicMergeSuggest" = "{first} и {second} — один исполнитель?";
+"MusicMergeShort" = "Объединить";
 "MusicVersionsOf_one" = "{count} версия {name}";
 "MusicVersionsOf_few" = "{count} версии {name}";
 "MusicVersionsOf_many" = "{count} версий {name}";

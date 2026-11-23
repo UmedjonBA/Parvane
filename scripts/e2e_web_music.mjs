@@ -797,7 +797,7 @@ try {
   await visible(backInMusic.locator('[data-music-offline="3"]'), STEP_TIMEOUT_MS * 2);
   await visible(backInMusic.locator('[data-offline-usage]').getByText(/3 tracks · .* of 1 GB on this device/));
   const albumGroup = backInMusic.locator('[data-offline-group="album:al-1"]');
-  await visible(albumGroup.getByText('album · 3 tracks'));
+  await visible(albumGroup.getByText(/^Album · 3 tracks · /));
   await albumGroup.locator('[data-group]').first().click();
   // Оболочка приложения в кэше сервис-воркера целиком — для перезагрузки без сети ниже (PWA)
   await page.locator('html[data-app-shell]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS * 6 });
@@ -862,7 +862,7 @@ try {
   await offlineMusic.locator('[data-music-nav] [data-view="offline"]').click();
   const playlistGroup = offlineMusic.locator('[data-music-offline="1"] [data-offline-group^="playlist:"]');
   await visible(playlistGroup.getByText('Офлайн'), STEP_TIMEOUT_MS * 2);
-  await visible(playlistGroup.getByText('playlist · 1 track'));
+  await visible(playlistGroup.getByText(/^Playlist · 1 track · /));
   console.log('OK: загруженный плейлист — новый трек докачан, убранный стёрт с устройства, группа плейлиста');
 
   // ── Длинные списки страницами, исполнитель и его выпуски ─────────────────
