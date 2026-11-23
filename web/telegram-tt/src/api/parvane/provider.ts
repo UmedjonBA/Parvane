@@ -55,7 +55,7 @@ import { base64ToBytes, bytesToBase64 } from './v2/base64';
 import {
   createV2Controller, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
-import { loadProtocol, verifyMessageProof } from './v2/engine';
+import { engineStatic, loadProtocol, verifyMessageProof } from './v2/engine';
 import {
   type HOp, newStamp, peerForAddress, rowOpFromStored, rowTsMs,
 } from './v2/historyModel';
@@ -1307,6 +1307,12 @@ const syncController = createSyncController({
   polls,
   refreshPollMessage: refreshPollMessageFromSync,
   onAnonymousVote: (uuid) => messageController.scheduleAnonymousTally(uuid),
+  onReportClose: (groupAddress, from, opIds) => {
+    // Закрытие принимается только от модератора группы по её журналу (движок), иначе участник закрыл бы жалобы на себя
+    const members = v2Controller.groupInfo(groupAddress)?.members || [];
+    const { accepted } = engineStatic<{ accepted: string[] }>('reportRemoteClose', { from, members, opIds });
+    if (accepted.length) void stateJournal.closeReports(groupAddress, accepted);
+  },
   taskOffers,
   refreshTaskOfferMessage: refreshTaskOfferMessageFromSync,
   rememberSavedGif: rememberSavedGifFromSync,
@@ -2885,6 +2891,7 @@ const modReports = createModReports({
   ensureAllLoaded: () => syncController.ensureAllLoaded(),
   closedOps: (address) => stateJournal.reportClosedOps(address),
   close: (address, opIds) => stateJournal.closeReports(address, opIds),
+  notifyClosed: (address, opIds) => messageController.notifyReportsClosed(address, opIds),
   members: (address) => (v2Controller.groupInfo(address)?.members || [])
     .map((member) => ({ user: member.address, joinedMs: member.joined_ms })),
   setMemberHidden: (address, user, isHidden) => stateJournal.setMemberHidden(address, user, isHidden),

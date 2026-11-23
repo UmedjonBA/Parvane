@@ -67,6 +67,8 @@ type SyncDependencies = {
   refreshPollMessage: (uuid: string) => void;
   // POLL-1: у автора анонимного опроса изменились голоса — опубликовать итоги (с задержкой и сверкой)
   onAnonymousVote?: (uuid: string) => void;
+  // REPORT-4: другой админ закрыл жалобы группы — проверить его право (движок) и закрыть у себя
+  onReportClose?: (groupAddress: string, from: string, opIds: string[]) => void;
   // spec 011: задания в чат — карточки и решения (восстанавливаются из кэша истории)
   taskOffers: TaskOfferStore;
   refreshTaskOfferMessage: (uuid: string) => void;
@@ -178,6 +180,8 @@ export function createSyncController(deps: SyncDependencies) {
     syncPromise = undefined;
   }
 
+  // Служебное содержимое, которое не показывается строкой: опросы (голоса, закрытие) и закрытие жалоб (REPORT-4).
+  // `true` — сообщение обработано и в ленту не идёт
   function handlePollContent(stored: WireStoredMessage) {
     const content = stored.content;
     if (content.kind === 'poll') {
@@ -250,6 +254,13 @@ export function createSyncController(deps: SyncDependencies) {
           deps.refreshPollMessage(pollUuid);
           deps.onAnonymousVote?.(pollUuid);
         }
+      }
+      return true;
+    }
+    if (content.kind === 'mod_report_close') {
+      // Своё же закрытие с другого устройства приходит личным состоянием — здесь только чужое
+      if (content.report_group?.id && content.op_ids?.length && stored.from && stored.from !== deps.getStore().self) {
+        deps.onReportClose?.(`${V2_GROUP_PREFIX}${base64ToHex(content.report_group.id)}`, stored.from, content.op_ids);
       }
       return true;
     }
@@ -1070,4 +1081,9 @@ export function createSyncController(deps: SyncDependencies) {
     resetPromise,
     resolveDisplayNames,
   };
+}
+
+function base64ToHex(value: string) {
+  const bytes = atob(value);
+  return Array.from(bytes, (char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('');
 }

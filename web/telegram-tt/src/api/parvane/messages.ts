@@ -2229,8 +2229,26 @@ export function createMessageController(deps: MessageDependencies) {
     },
   };
 
+  // REPORT-4: закрытие жалоб общее для админов — остальным модераторам группы (тем же, кому уходят жалобы)
+  // служебное личное сообщение; группа его не видит. Сбой отправки не мешает закрытию у себя
+  async function notifyReportsClosed(address: string, opIds: string[]) {
+    const form = await reportForm(address, true);
+    if (!form.admins.length || !opIds.length) return;
+    const content: WireMessageContent = {
+      kind: 'mod_report_close',
+      report_group: { domain: store().self.split('@')[1] || '', id: hexToB64(address.slice(V2_GROUP_PREFIX.length)) },
+      op_ids: opIds,
+    };
+    for (const admin of form.admins) {
+      await publishInner(admin, content).catch((error: unknown) => {
+        deps.log(`закрытие жалоб админу не ушло: ${String(error)}`);
+      });
+    }
+  }
+
   return {
     reset,
+    notifyReportsClosed,
     // Ссылка на архив набора в облаке (PACK-3: свой набор — в журнал состояния); архив уже загружен — тот же
     packRefForSet: (setId: string) => buildPackRefForSet(setId, ''),
     // Квитанции, не ушедшие до перезагрузки или обрыва, — снова в путь (READ-1 п. 3)

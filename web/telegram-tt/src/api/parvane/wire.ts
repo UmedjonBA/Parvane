@@ -177,6 +177,8 @@ export type WireMessageContent = {
   accepted?: boolean;
   // kind=mod_report (spec 024, REPORT-1): жалоба админам группы — группа, причина, комментарий и сами сообщения
   report_group?: { domain: string; id: string };
+  // kind=mod_report_close (REPORT-4): закрытые жалобы — op_id сообщений группы
+  op_ids?: string[];
   reason?: string;
   comment?: string;
   reported?: WireReportedMessage[];

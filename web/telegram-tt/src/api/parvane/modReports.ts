@@ -50,6 +50,8 @@ export type ModReportsDeps = {
   /** Пересобранная карточка — в стор и на экран (иначе в чате она так и осталась бы текстом). */
   onCardRebuilt?: (message: ApiMessage) => void;
   close: (address: string, opIds: string[]) => Promise<boolean>;
+  /** Сообщить о закрытии остальным модераторам группы (REPORT-4). */
+  notifyClosed?: (address: string, opIds: string[]) => Promise<void>;
   /** Участники группы из её журнала: адрес и время вступления, мс. */
   members?: (address: string) => { user: string; joinedMs?: number }[];
   /** «Скрыть у меня сообщения этого участника» (REPORT-3): объект личного состояния и показ. */
@@ -135,7 +137,9 @@ export function createModReports(deps: ModReportsDeps) {
     async parvaneReportClose({ chatId, uuids }: { chatId: string; uuids: string[] }) {
       const address = deps.getStore().getAddressForId(chatId);
       if (!address || !uuids.length) return false;
-      return deps.close(address, uuids);
+      if (!(await deps.close(address, uuids))) return false;
+      void deps.notifyClosed?.(address, uuids);
+      return true;
     },
     /** Чаты групп, где сообщения участника скрыты у себя: профиль участника предлагает показать их снова. */
     parvaneMemberHiddenChats({ userId }: { userId: string }) {

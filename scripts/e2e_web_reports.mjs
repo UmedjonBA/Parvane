@@ -13,6 +13,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   assertNoPageErrors,
   closeRightColumn,
+  callProviderForChat,
   createGroupViaUi,
   expectToast,
   findMessage,
@@ -101,6 +102,13 @@ try {
     await sendText(a, `hi-${peer}-${suffix}`);
   }
   await createGroupViaUi(a, title, ['carol', 'dave', 'mallory'].map((n) => address(n).split('@')[0]));
+  // Кэрол — второй модератор (право удалять сообщения): жалобы других приходят и ей, закрытие — общее (REPORT-4)
+  await a.waitForFunction((t) => Object.values(window.__parvaneGetGlobal().chats.byId)
+    .some((chat) => chat.title === t), title, { timeout: LOGIN_TIMEOUT_MS });
+  const promoted = await callProviderForChat(a, 'updateChatAdmin', title, address('carol').split('@')[0], {
+    peer: '$chat', adminRights: { deleteMessages: true },
+  });
+  assert.equal(promoted.result, true, `promote failed: ${JSON.stringify(promoted)}`);
   await openGroupChatByTitle(m, title);
   await sendText(m, spam);
   await sendText(m, spam2);
@@ -193,9 +201,22 @@ try {
   assert.equal(await itemOf(reports, spam2).count(), 0, 'отклонённая жалоба вернулась после перезагрузки');
   console.log('OK: «Отклонить» помнится после перезагрузки');
 
+  // У второго модератора та же жалоба Дэйва (Кэрол сама жаловалась — её жалобы ей не приходят). Список — вызовом:
+  // экран «Жалобы» открывается из правки группы, а у Кэрол только право удалять сообщения
+  const carolOpen = async () => {
+    const inbox = await callProviderForChat(c, 'parvaneReportInbox', title, undefined, { chat: '$chat' });
+    return (inbox.result?.items || []).filter((item) => item.text?.includes(spam)).length;
+  };
+  for (let i = 0; i < 30 && await carolOpen() === 0; i += 1) await c.waitForTimeout(500);
+  assert.equal(await carolOpen(), 1, 'жалоба Дэйва не дошла до второго модератора');
+
   // «Удалить сообщение» из списка — у всех участников, жалоба закрыта
   await itemOf(reports, spam).locator('[data-report-action="delete"]').click();
   await reports.locator('[data-reports-empty]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Закрытие общее для модераторов (REPORT-4): у Кэрол жалоба тоже закрылась
+  for (let i = 0; i < 40 && await carolOpen() > 0; i += 1) await c.waitForTimeout(500);
+  assert.equal(await carolOpen(), 0, 'закрытие Алисы не дошло до второго модератора');
+  console.log('OK: жалоба, закрытая одним модератором, закрылась и у второго');
   await openGroupChatByTitle(c, title);
   await findMessageContainer(c, spam).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS * 2 }).catch(async () => {
     // Удалённое показывается заглушкой — исходного текста быть не должно
