@@ -282,6 +282,8 @@ services:
       ND_ENABLESHARING: "false"
       ND_ENABLEUSEREDITING: "false"
       ND_SCANNER_SCHEDULE: "@every 15m"
+      # Настоящий путь файла в ответах Subsonic: шард по нему узнаёт трек скачанного файла (у одинаковых треков пути разные)
+      ND_SUBSONIC_DEFAULTREPORTREALPATH: "true"
       ND_LOGLEVEL: warn
 
   push:

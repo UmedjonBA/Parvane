@@ -87,6 +87,24 @@ service MusicService {
   rpc SharedJoin(SharedJoinRequest) returns (SharedJoinResponse) {
     option (parvane.core.v2.method) = {name: "music.shared.join" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  rpc CatalogSearch(CatalogSearchRequest) returns (CatalogSearchResponse) {
+    option (parvane.core.v2.method) = {name: "music.catalog.search" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc CatalogArtist(CatalogArtistRequest) returns (CatalogArtistResponse) {
+    option (parvane.core.v2.method) = {name: "music.catalog.artist" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc CatalogAlbum(CatalogAlbumRequest) returns (CatalogAlbumResponse) {
+    option (parvane.core.v2.method) = {name: "music.catalog.album" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SearchHistory(SearchHistoryRequest) returns (SearchHistoryResponse) {
+    option (parvane.core.v2.method) = {name: "music.search.history" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SearchRemember(SearchRememberRequest) returns (SearchRememberResponse) {
+    option (parvane.core.v2.method) = {name: "music.search.remember" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SearchForget(SearchForgetRequest) returns (SearchForgetResponse) {
+    option (parvane.core.v2.method) = {name: "music.search.forget" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
 }
 
 message Track {
@@ -263,6 +281,12 @@ message CatalogTrack {
   uint32 year = 6;
   // Трек уже есть в библиотеке сервера: скачивать не нужно.
   string library_track_id = 7 [(parvane.core.v2.max_len) = 64];
+  // Запись каталога (`dz:<id>` — Deezer): по ней сервис скачивания берёт полные теги и обложку; пусто — нет.
+  string ref = 8 [(parvane.core.v2.max_len) = 64];
+  // Обложка для списков (~250 px), адрес каталога; пусто — нет.
+  string cover_url = 9 [(parvane.core.v2.max_len) = 512];
+  // Альбом трека в каталоге (`dz:<id>`); пусто — нет.
+  string album_ref = 10 [(parvane.core.v2.max_len) = 64];
 }
 
 message FetchCatalogRequest {
@@ -351,10 +375,14 @@ message FetchStartRequest {
   string candidate_id = 3 [(parvane.core.v2.max_len) = 256];
   // «Найти и скачать «запрос»»: эталон сервер берёт из каталога сам (лучшее совпадение со строкой); `track` не нужен.
   string query = 4 [(parvane.core.v2.max_len) = 256];
+  // «Скачать альбом»: все треки альбома каталога (`dz:<id>`), которых ещё нет в библиотеке, — по задаче на трек.
+  string album_ref = 5 [(parvane.core.v2.max_len) = 64];
 }
 // Отказы: LIMIT — исчерпан суточный лимит либо место; DUPLICATE — трек уже качается.
 message FetchStartResponse {
   FetchJob job = 1;
+  // «Скачать альбом»: задачи по трекам (первая — и в `job`).
+  repeated FetchJob jobs = 2 [(parvane.core.v2.max_items) = 200];
 }
 
 message FetchStatusRequest {}
@@ -587,3 +615,81 @@ message SharedJoinRequest {
 message SharedJoinResponse {
   SharedPlaylist playlist = 1;
 }
+
+// ── Поиск по каталогу (HomeMusic): исполнители, альбомы и треки каталога, страницы исполнителя и альбома ────────
+// Каталог — внешний (Deezer через сервис скачивания); сервер видит запросы. Есть ли трек в библиотеке — `library_track_id`.
+
+message CatalogArtist {
+  string ref = 1 [(parvane.core.v2.max_len) = 64];
+  string name = 2 [(parvane.core.v2.max_len) = 512];
+  // Фото для списков (~250 px); пусто — нет.
+  string picture_url = 3 [(parvane.core.v2.max_len) = 512];
+  uint32 albums_count = 4;
+}
+
+// Насколько альбом каталога уже в библиотеке сервера.
+enum OwnedStatus {
+  OWNED_STATUS_UNSPECIFIED = 0;
+  OWNED_STATUS_NONE = 1;
+  OWNED_STATUS_PARTIAL = 2;
+  OWNED_STATUS_FULL = 3;
+}
+
+message CatalogAlbum {
+  string ref = 1 [(parvane.core.v2.max_len) = 64];
+  string title = 2 [(parvane.core.v2.max_len) = 512];
+  string artist = 3 [(parvane.core.v2.max_len) = 512];
+  string artist_ref = 4 [(parvane.core.v2.max_len) = 64];
+  string cover_url = 5 [(parvane.core.v2.max_len) = 512];
+  uint32 year = 6;
+  // album, single, ep, compile — как у каталога.
+  string record_type = 7 [(parvane.core.v2.max_len) = 16];
+  uint32 tracks_count = 8;
+  Explicit explicit = 9;
+  // Только на странице альбома (известен треклист); в списках — UNSPECIFIED.
+  OwnedStatus owned = 10;
+}
+
+message CatalogSearchRequest {
+  string query = 1 [(parvane.core.v2.max_len) = 256];
+  // Треки с этого места (следующая страница — `next_offset` ответа); исполнители и альбомы — только при 0.
+  uint32 offset = 2;
+}
+message CatalogSearchResponse {
+  repeated CatalogArtist artists = 1 [(parvane.core.v2.max_items) = 12];
+  repeated CatalogAlbum albums = 2 [(parvane.core.v2.max_items) = 12];
+  repeated CatalogTrack tracks = 3 [(parvane.core.v2.max_items) = 50];
+  // Есть ли ещё треки и с какого места просить.
+  bool has_more = 4;
+  uint32 next_offset = 5;
+}
+
+message CatalogArtistRequest {
+  string ref = 1 [(parvane.core.v2.max_len) = 64];
+}
+// Альбомы, синглы и сборники исполнителя, новые первыми.
+message CatalogArtistResponse {
+  CatalogArtist artist = 1;
+  repeated CatalogAlbum albums = 2 [(parvane.core.v2.max_items) = 200];
+}
+
+message CatalogAlbumRequest {
+  string ref = 1 [(parvane.core.v2.max_len) = 64];
+}
+message CatalogAlbumResponse {
+  CatalogAlbum album = 1;
+  repeated CatalogTrack tracks = 2 [(parvane.core.v2.max_items) = 200];
+}
+
+// История поиска «Музыки» — на сервере, общая для устройств аккаунта: 30 последних разных запросов, новые первыми.
+message SearchHistoryRequest {}
+message SearchHistoryResponse {
+  repeated string queries = 1 [(parvane.core.v2.max_items) = 30, (parvane.core.v2.max_len) = 256];
+}
+message SearchRememberRequest {
+  string query = 1 [(parvane.core.v2.max_len) = 256];
+}
+message SearchRememberResponse {}
+// Очистить историю целиком.
+message SearchForgetRequest {}
+message SearchForgetResponse {}

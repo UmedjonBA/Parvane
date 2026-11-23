@@ -119,7 +119,7 @@ fn query_of(t: &pb::CatalogTrack) -> Query {
 }
 
 fn catalog_pb(q: &Query, year: u32, library_track_id: String) -> pb::CatalogTrack {
-    pb::CatalogTrack { artist: q.artist.clone(), title: q.title.clone(), album: q.album.clone(), duration_secs: q.duration_secs, explicit: explicit_pb(q.explicit), year, library_track_id }
+    pb::CatalogTrack { artist: q.artist.clone(), title: q.title.clone(), album: q.album.clone(), duration_secs: q.duration_secs, explicit: explicit_pb(q.explicit), year, library_track_id, ..Default::default() }
 }
 
 fn candidate_pb(r: &Ranked) -> pb::FetchCandidate {
@@ -458,7 +458,7 @@ impl Fetch {
 
     fn job_reply(&self, id: &str) -> Reply {
         let job = self.job_pb(id).ok_or(ErrorCode::NotFound)?;
-        Ok(pb::FetchStartResponse { job: Some(job) }.encode_to_vec())
+        Ok(pb::FetchStartResponse { job: Some(job), ..Default::default() }.encode_to_vec())
     }
 
     pub(crate) fn job_pb(&self, id: &str) -> Option<pb::FetchJob> {
@@ -674,7 +674,7 @@ impl Fetch {
 
     /// Файл записан и учтён: ждём, пока музыкальный сервер его увидит, и отмечаем задачу готовой.
     pub(crate) async fn finish_in_library(&self, sub: &Subsonic, id: &str, user: &str, path: &str, query: &Query) {
-        match self.await_in_library(sub, user, query).await {
+        match self.await_in_library(sub, user, query, path).await {
             Some(track_id) => {
                 let _ = store::set_track_id(&self.pool, path, &track_id).await;
                 self.update(id, |j| {
@@ -687,16 +687,34 @@ impl Fetch {
         }
     }
 
-    /// Попросить музыкальный сервер пересканировать библиотеку и дождаться трека в поиске.
-    async fn await_in_library(&self, sub: &Subsonic, user: &str, q: &Query) -> Option<String> {
+    /// Попросить музыкальный сервер пересканировать библиотеку и дождаться трека этого файла.
+    async fn await_in_library(&self, sub: &Subsonic, user: &str, q: &Query, path: &str) -> Option<String> {
         let _ = sub.call(SERVICE_USER, "startScan", &[]).await;
         for _ in 0..SCAN_ATTEMPTS {
             tokio::time::sleep(SCAN_PAUSE).await;
-            if let Some(track) = self.in_library(sub, &nd_user(user), q).await {
-                return Some(track.id);
+            if let Some(track_id) = self.track_of_file(sub, &nd_user(user), q, path).await {
+                return Some(track_id);
             }
         }
         None
+    }
+
+    /// Трек музыкального сервера для файла `path` (относительно папки библиотеки). Сервер, сообщающий настоящий путь
+    /// (`ND_SUBSONIC_DEFAULTREPORTREALPATH`), находит именно этот файл — у двух одинаковых треков разные пути, и номер
+    /// одного не достаётся другому; не сообщающий — прежнее совпадение по исполнителю, названию и длительности.
+    pub(crate) async fn track_of_file(&self, sub: &Subsonic, user: &str, q: &Query, path: &str) -> Option<String> {
+        let v = sub.call(user, "search3", &[("query", format!("{} {}", q.artist, q.title)), ("songCount", "20".into()), ("albumCount", "0".into()), ("artistCount", "0".into())]).await.ok()?;
+        let songs = list(&v, &["searchResult3", "song"]);
+        let real_path = |s: &serde_json::Value| s.get("path").and_then(serde_json::Value::as_str).filter(|p| p.starts_with('/')).map(str::to_string);
+        if songs.iter().any(|s| real_path(s).is_some()) {
+            let wanted = format!("/{}", path.trim_start_matches('/'));
+            return songs
+                .iter()
+                .find(|s| real_path(s).is_some_and(|p| p.ends_with(&wanted)))
+                .and_then(|s| s.get("id").and_then(serde_json::Value::as_str))
+                .map(str::to_string);
+        }
+        self.in_library(sub, user, q).await.map(|t| t.id)
     }
 
     pub(crate) fn library_path(&self, relative: &str) -> Option<PathBuf> {
@@ -722,7 +740,16 @@ impl Fetch {
         })?;
         let user = nd_user(address);
         let mut tracks = Vec::with_capacity(rows.len());
-        for row in rows {
+        for mut row in rows {
+            // Номер трека не узнан при скачивании (сервер не успел пересканировать) — узнать сейчас и запомнить:
+            // без номера трек нельзя ни сыграть из списка, ни удалить
+            if row.track_id.is_empty() {
+                let q = Query { artist: row.artist.clone(), title: row.title.clone(), duration_secs: row.duration_secs.max(0) as u32, ..Default::default() };
+                if let Some(track_id) = self.track_of_file(sub, &nd_user(&row.adder), &q, &row.path).await {
+                    let _ = store::set_track_id(&self.pool, &row.path, &track_id).await;
+                    row.track_id = track_id;
+                }
+            }
             // Трек, которого музыкальный сервер ещё не увидел, показывается по записи: название и исполнитель
             let known = if row.track_id.is_empty() { None } else { sub.call(&user, "getSong", &[("id", row.track_id.clone())]).await.ok().and_then(|v| v.get("song").and_then(track_of)) };
             let track = known.unwrap_or_else(|| pb::Track { title: row.title.clone(), artist: row.artist.clone(), duration_secs: row.duration_secs.max(0) as u32, ..Default::default() });

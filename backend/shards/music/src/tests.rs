@@ -485,6 +485,23 @@ async fn fetch_takes_confident_match_and_tracks_who_added_it() {
 }
 
 #[tokio::test]
+async fn added_list_learns_track_ids_the_scan_missed() {
+    // Скачано, но музыкальный сервер не пересканировал вовремя: номера трека в записи нет — список узнаёт его сам и
+    // запоминает (иначе трек не сыграть из «Добавлено мной» и не удалить)
+    let (_, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let fetch = ctx.fetch.as_ref().unwrap();
+    let row = crate::fetch::store::Added {
+        path: "alice/Группа - Песня t2 [x].mp3".into(), adder: "alice@local".into(), bytes: 4000, added_ms: 1,
+        track_id: String::new(), artist: "Группа".into(), title: "Песня t2".into(), duration_secs: 215, sha256: String::new(),
+    };
+    crate::fetch::store::insert(&fetch.pool, &row).await.unwrap();
+    let mine: pb::AddedListResponse = call(&ctx, "alice@local", "music.added.list", pb::AddedListRequest { mine: true, ..Default::default() }).await.unwrap();
+    assert_eq!(mine.tracks[0].track.as_ref().unwrap().id, "t2");
+    assert_eq!(crate::fetch::store::by_track(&fetch.pool, "t2").await.unwrap().unwrap().path, row.path, "номер запомнен");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn fetch_skips_files_the_source_will_not_give() {
     // Уверенный файл под DRM — берётся следующий уверенный того же источника
     let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
