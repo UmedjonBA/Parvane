@@ -728,6 +728,8 @@ async fn library_counts_and_popular_by_plays_of_everyone() {
     let ar: pb::LibraryArtistResponse = call(&ctx, "alice@local", "music.library.artist", pb::LibraryArtistRequest { artist_id: "ar-1".into() }).await.unwrap();
     // t2 слушали двое, t1 — один (повтор того же человека в тот же день не считается), t3 только загружали
     assert_eq!(ar.popular.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2", "t1"]);
+    // «Чаще всех слушает»: у Алисы два трека исполнителя за день против одного у Боба
+    assert_eq!(ar.top_listener, "alice");
     // «Главная»: популярное за неделю с числом прослушиваний, частые исполнители — свои (у Боба тоже ar-1)
     let home: pb::LibraryHomeResponse = call(&ctx, "alice@local", "music.library.home", pb::LibraryHomeRequest {}).await.unwrap();
     let popular: Vec<(&str, u32)> = home.popular.iter().map(|p| (p.track.as_ref().unwrap().id.as_str(), p.plays_week)).collect();

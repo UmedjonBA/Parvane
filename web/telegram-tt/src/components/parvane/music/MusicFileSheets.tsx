@@ -9,7 +9,8 @@ import type { MusicFileSheet } from './musicFiles';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  closeMusicFileSheet, getMusicFileSheet, notifyMusicLibraryChanged, openMusicFileSheet, prepareCover,
+  closeMusicFileSheet, formatFileQuality, formatFileSource, getMusicFileSheet, notifyMusicLibraryChanged,
+  openMusicFileSheet, prepareCover,
 } from './musicFiles';
 import { formatMusicDate } from './musicFormat';
 import { callMusic } from './musicPlayer';
@@ -32,14 +33,6 @@ const RELEASE_TYPES = ['album', 'single', 'ep', 'compilation'] as const;
 const RELEASE_KEYS = {
   album: 'MusicKindAlbum', single: 'MusicKindSingleTitle', ep: 'MusicKindEp', compilation: 'MusicKindCompile',
 } as const;
-const SOURCE_KEYS: Record<string, string> = {
-  hitmoz: 'hitmoz',
-  hitmos_fm: 'hitmos.fm',
-  youtube: 'YouTube',
-  youtube_reupload: 'YouTube',
-  soundcloud: 'SoundCloud',
-  bandcamp: 'Bandcamp',
-};
 const ARTIST_SUGGESTIONS = 4;
 
 // Parvane (макет «Музыки» 23 ноя, доски `ZpMusicX`, `ZdMusicX`, `RpMusicA`): экраны правки файлов библиотеки —
@@ -102,16 +95,8 @@ const FileInfoSheet = memo(({ track }: { track: MusicTrack }) => {
 
   function renderBody() {
     if (!info) return isFailed ? <div role="alert">{lang('MusicLoadFailed')}</div> : <PvSkeleton />;
-    const source = info.source === 'upload' ? lang('MusicSourceOwnFile', { name: info.sourceRef })
-      : [SOURCE_KEYS[info.source] || lang('MusicSourceUnknown'), info.sourceRef.startsWith('https://')
-        ? info.sourceRef : undefined].filter(Boolean).join(' · ');
-    const fileLine = [
-      info.codec.toUpperCase(),
-      info.bits && info.sampleRate
-        ? lang('MusicFileQuality', { bits: info.bits, khz: lang.number(info.sampleRate / 1000) }) : undefined,
-      !info.bits && info.bitrateKbps ? `${info.bitrateKbps} kbps` : undefined,
-      formatMusicSize(lang, info.bytes),
-    ].filter(Boolean).join(' · ');
+    const source = formatFileSource(lang, info, true);
+    const fileLine = [formatFileQuality(lang, info), formatMusicSize(lang, info.bytes)].filter(Boolean).join(' · ');
     return (
       <div className={styles.info} data-music-file-info>
         <div className={styles.infoCard}>

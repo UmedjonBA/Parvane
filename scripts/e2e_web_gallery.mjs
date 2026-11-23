@@ -847,6 +847,15 @@ async function galleryMusic() {
     await page.locator('[data-music-mini]:visible').first().getByRole('button').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
   });
+  await step(page, 'MusicPlayer-03', async () => {
+    // «Об этом файле» — у файла, который читается с диска (у поддельной библиотеки его нет): ждём только исполнителя
+    await page.locator('[data-music-about-artist]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    // Прокрутка колесом над плеером, как пальцем
+    await page.mouse.move(180, 500);
+    await page.mouse.wheel(0, 700);
+    await page.waitForTimeout(1200);
+  });
+  await page.locator('[data-music-full] [data-music-controls]').scrollIntoViewIfNeeded().catch(() => undefined);
   await step(page, 'MusicPlayer-06', async () => {
     await page.locator('[data-music-open-queue]').click({ timeout: STEP_TIMEOUT_MS });
   });

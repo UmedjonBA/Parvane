@@ -235,7 +235,8 @@ async fn artist(sub: &Subsonic, user: &str, r: pb::LibraryArtistRequest) -> Repl
     });
     let mut popular = crate::library::popular(sub, user, &r.artist_id).await;
     crate::files::annotate_tracks(&mut popular).await;
-    Ok(pb::LibraryArtistResponse { artist, albums, popular }.encode_to_vec())
+    let top_listener = crate::library::top_listener(&r.artist_id).await;
+    Ok(pb::LibraryArtistResponse { artist, albums, popular, top_listener }.encode_to_vec())
 }
 
 async fn song(sub: &Subsonic, user: &str, id: &str) -> Result<pb::Track, ErrorCode> {

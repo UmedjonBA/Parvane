@@ -5,12 +5,14 @@ import type { MusicQueueSource } from './musicPlayer';
 
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
+import { catalogKey, getFetchJobs, startFetch } from './fetch/musicFetch';
 import { coverTone } from './musicFormat';
 import {
-  callMusic, getCurrentTrack, getMusicPlayer, getMusicPosition, playQueueItem, setTrackStarred,
+  callMusic, getCurrentTrack, getMusicInfo, getMusicPlayer, getMusicPosition, getPreviewCatalogTrack, playQueueItem,
+  setTrackStarred, togglePlay,
 } from './musicPlayer';
 import { closeMusicPlayer } from './musicPlayerView';
-import { goToMusicView } from './musicView';
+import { goToMusicView, openUploadsWith } from './musicView';
 import useMusicData from './useMusicData';
 
 import useAppLayout from '../../../hooks/useAppLayout';
@@ -22,6 +24,7 @@ import ParvaneIcon from '../../main/ParvaneIcon';
 import Modal from '../../ui/Modal';
 import MusicControls from './MusicControls';
 import MusicCover from './MusicCover';
+import MusicPlayerAbout from './MusicPlayerAbout';
 import MusicPlaylistPicker from './MusicPlaylistPicker';
 import MusicQueue from './MusicQueue';
 import MusicSendDialog from './MusicSendDialog';
@@ -30,6 +33,9 @@ import MusicTrackMenu from './MusicTrackMenu';
 import styles from './MusicPlayerScreen.module.scss';
 
 // «Играет из …» по виду источника (доски `MusicPlayer`, `XdMusic`)
+// Прокрутка тела плеера, после которой шапка становится компактной
+const COMPACT_SCROLL_PX = 120;
+
 const SOURCE_KEYS = {
   playlist: 'MusicFromPlaylist',
   album: 'MusicFromAlbum',
@@ -54,6 +60,8 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
   const lang = useLang();
   const { isMobile: isPhone } = useAppLayout();
   const player = useDerivedState(getMusicPlayer);
+  const info = useDerivedState(getMusicInfo);
+  const jobs = useDerivedState(getFetchJobs);
   const { positionSecs } = useDerivedState(getMusicPosition);
   const track = getCurrentTrack(player);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
@@ -72,6 +80,20 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
   // Внутри «Музыки» окна нет — Escape закрывает плеер сам
   useLayoutEffect(() => (isInline ? captureEscKeyListener(closeMusicPlayer) : undefined), [isInline]);
 
+  // Телефон, прокрутка к карточкам (доска `MusicPlayer-03`): вверху — обложка, название и пауза вместо «Играет из»
+  const [isCompact, setIsCompact] = useState(false);
+  const handleScroll = useLastCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const isPast = e.currentTarget.scrollTop > COMPACT_SCROLL_PX;
+    if (isPast !== isCompact) setIsCompact(isPast);
+  });
+  const handleToServer = useLastCallback(() => {
+    const catalog = track && getPreviewCatalogTrack(track.id);
+    if (catalog) void startFetch(catalog);
+  });
+  const handleHaveFile = useLastCallback(() => {
+    closeMusicPlayer();
+    openUploadsWith('file');
+  });
   const handleStar = useLastCallback(() => {
     if (track) void setTrackStarred(track, !track.isStarred);
   });
@@ -135,6 +157,34 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
     );
   }
 
+  // Отрывок каталога (доски `MusicPlayer-04/05`): «На сервер» — скачать трек; не нашёлся в источниках — «Есть файл?»
+  function renderPreviewAction() {
+    const catalog = getPreviewCatalogTrack(track!.id);
+    const job = catalog && jobs.find((item) => catalogKey(item.track) === catalogKey(catalog));
+    if (!catalog || job?.state === 'done') return undefined;
+    if (job?.state === 'failed' || !info?.isFetchEnabled) {
+      if (!info?.isUploadEnabled) return undefined;
+      return (
+        <button type="button" className={styles.previewAction} data-music-preview-file onClick={handleHaveFile}>
+          {lang('MusicHaveFile')}
+        </button>
+      );
+    }
+    const isBusy = Boolean(job && job.state !== 'choice');
+    return (
+      <button
+        type="button"
+        className={buildClassName(styles.previewAction, styles.previewActionAcc)}
+        disabled={isBusy}
+        data-music-preview-fetch
+        onClick={handleToServer}
+      >
+        <ParvaneIcon name="cloudAdd" isSmall />
+        {lang(isBusy ? 'MusicStateAdding' : 'MusicToServer')}
+      </button>
+    );
+  }
+
   function renderLyrics() {
     if (!lines.length) return undefined;
     return (
@@ -178,21 +228,48 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
           >
             <ParvaneIcon name={isPhone ? 'chevronDown' : 'close'} />
           </button>
-          <div className={styles.source} data-music-source={source?.kind}>
-            <span className={styles.sourceCaps}>{lang(SOURCE_KEYS[source?.kind || 'home'])}</span>
-            <span className={styles.sourceName}>{sourceName}</span>
-          </div>
-          <button
-            type="button"
-            className={styles.topButton}
-            aria-label={lang('MusicMoreActions')}
-            data-music-player-menu
-            onClick={handleOpenMenu}
-          >
-            <ParvaneIcon name="dotsH" />
-          </button>
+          {isCompact ? (
+            <div className={styles.topTrack} data-music-top-track>
+              <MusicCover
+                coverId={playing.coverId}
+                coverUrl={playing.coverUrl}
+                toneId={playing.albumId || playing.id}
+                size={36}
+                className={styles.topCover}
+              />
+              <span className={styles.topText}>
+                <span className={styles.topTitle}>{playing.title}</span>
+                <span className={styles.topArtist}>{playing.artist}</span>
+              </span>
+            </div>
+          ) : (
+            <div className={styles.source} data-music-source={source?.kind}>
+              <span className={styles.sourceCaps}>{lang(SOURCE_KEYS[source?.kind || 'home'])}</span>
+              <span className={styles.sourceName}>{sourceName}</span>
+            </div>
+          )}
+          {isCompact ? (
+            <button
+              type="button"
+              className={styles.topButton}
+              aria-label={lang(player.isPlaying ? 'MusicPause' : 'MusicPlay')}
+              onClick={togglePlay}
+            >
+              <ParvaneIcon name={player.isPlaying ? 'pause' : 'play'} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={styles.topButton}
+              aria-label={lang('MusicMoreActions')}
+              data-music-player-menu
+              onClick={handleOpenMenu}
+            >
+              <ParvaneIcon name="dotsH" />
+            </button>
+          )}
         </header>
-        <div className={styles.body}>
+        <div className={styles.body} onScroll={isPhone ? handleScroll : undefined}>
           <div className={styles.stage}>
             <MusicCover
               coverId={playing.coverId}
@@ -224,21 +301,16 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
               {player.hasError && <span className={styles.error} role="alert">{lang('MusicPlayError')}</span>}
               {/* Доска `MusicPlayer-05`: трек каталога — только отрывок */}
               {playing.previewUrl && (
-                <span className={styles.previewNote} data-music-preview>{lang('MusicPreviewOnly')}</span>
+                <div className={styles.previewRow}>
+                  <span className={styles.previewNote} data-music-preview>{lang('MusicPreviewOnly')}</span>
+                  {renderPreviewAction()}
+                </div>
               )}
               {renderNext()}
             </div>
           </div>
           {renderLyrics()}
-          {playing.artistId && (
-            <section className={styles.card}>
-              <h3 className={styles.cardTitle}>{lang('MusicAboutArtist')}</h3>
-              <div className={styles.cardName}>{playing.artist}</div>
-              <button type="button" className={styles.cardButton} onClick={handleOpenArtist}>
-                {lang('MusicGoToArtist')}
-              </button>
-            </section>
-          )}
+          <MusicPlayerAbout track={playing} />
         </div>
         {isQueueOpen && (
           <div className={styles.queueSheet} role="dialog" aria-label={lang('MusicQueue')} data-music-queue-sheet>

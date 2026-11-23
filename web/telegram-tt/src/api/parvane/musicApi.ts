@@ -518,6 +518,8 @@ export function createMusicApi(deps: Deps) {
         albums: list(reply, 'albums').map(toAlbum),
         // «Популярное на сервере»: по прослушиваниям всех пользователей
         popular: list(reply, 'popular').map(toTrack),
+        // «Чаще всех слушает …» за 30 дней (ник)
+        topListener: text(reply, 'top_listener') || undefined,
       };
     },
 

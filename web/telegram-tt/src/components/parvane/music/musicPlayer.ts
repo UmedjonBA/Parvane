@@ -293,10 +293,20 @@ function applyQueue(
   void loadCurrent(shouldPlay);
 }
 
+// Треки каталога, играющие отрывком: плеер по ним предлагает «На сервер»
+const previewCatalog = new Map<string, MusicCatalogTrack>();
+
+/** Трек каталога за отрывком в плеере. */
+export function getPreviewCatalogTrack(trackId: string) {
+  return previewCatalog.get(trackId);
+}
+
 /** Трек каталога как трек плеера: играет отрывок 30 с («послушать до скачивания», доска `MusicPlayer-05`). */
 export function catalogPreviewTrack(track: MusicCatalogTrack): MusicTrack {
+  const id = track.ref || `preview:${track.artist}:${track.title}`;
+  previewCatalog.set(id, track);
   return {
-    id: track.ref || `preview:${track.artist}:${track.title}`,
+    id,
     title: track.title,
     artist: track.artist,
     album: track.album,

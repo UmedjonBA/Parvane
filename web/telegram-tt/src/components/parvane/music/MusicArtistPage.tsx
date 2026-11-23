@@ -1,13 +1,13 @@
 import { memo } from '../../../lib/teact/teact';
 
-import type { MusicAlbum, MusicCatalogTrack, MusicTrack } from '../../../api/parvane/musicApi';
-import type { MusicCatalogAlbum } from '../../../api/parvane/musicCatalogApi';
+import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicArtistData } from './musicArtistData';
 
 import buildClassName from '../../../util/buildClassName';
+import { loadArtist } from './musicArtistData';
 import { openMusicFileSheet } from './musicFiles';
 import { coverTone } from './musicFormat';
-import {
-  callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
+import { getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
 import { goBackMusic, openMusicView } from './musicView';
 import useMusicData from './useMusicData';
@@ -32,29 +32,6 @@ type OwnProps = {
   onSendToChat: (track: MusicTrack) => void;
 };
 
-type Row = { track?: MusicTrack; catalog?: MusicCatalogTrack };
-
-type Release = {
-  key: string;
-  kind: 'album' | 'catalogAlbum';
-  id: string;
-  title: string;
-  sub: string;
-  coverId?: string;
-  coverUrl?: string;
-};
-
-type Artist = {
-  name: string;
-  serverTracks: number;
-  catalogTracks: number;
-  isInCatalog: boolean;
-  popular: Row[];
-  releases: Release[];
-};
-
-const POPULAR_ROWS = 5;
-
 // Parvane (макет «Музыки» 23 ноя, доска `XpMusic`): исполнитель — большое имя на цветном фоне, «каталог · на сервере
 // 9 из 75 треков», ▶; «Популярное» — треки сервера по прослушиваниям, дальше самые слушаемые в каталоге, которых на
 // сервере нет; релизы — сервера и каталога одной лентой. Исполнитель сервера ищется и в каталоге по имени
@@ -64,7 +41,7 @@ const MusicArtistPage = ({
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
   const current = getCurrentTrack(player);
-  const { data, isFailed, reload, patch } = useMusicData<Artist>(
+  const { data, isFailed, reload, patch } = useMusicData<MusicArtistData>(
     `artist:${id || catalogRef}`,
     () => loadArtist(id, catalogRef),
   );
@@ -220,51 +197,5 @@ const MusicArtistPage = ({
     </div>
   );
 };
-
-/** Исполнитель сервера и каталога: сервер — его альбомы и популярное, каталог — топ и релизы, которых нет. */
-async function loadArtist(id: string | undefined, catalogRef: string | undefined): Promise<Artist> {
-  const server = id ? await callMusic('parvaneMusicArtist', { artistId: id }) : undefined;
-  const name = server?.artist?.name || '';
-  let ref = catalogRef;
-  if (!ref && name) {
-    const found = await callMusic('parvaneMusicCatalogSearch', { query: name }).catch(() => undefined);
-    ref = found?.artists.find((artist) => artist.name.toLowerCase() === name.toLowerCase())?.ref;
-  }
-  const catalog = ref ? await callMusic('parvaneMusicCatalogArtist', { ref }).catch(() => undefined) : undefined;
-  const serverAlbums: MusicAlbum[] = server?.albums || [];
-  const serverPopular: MusicTrack[] = server?.popular || [];
-  const known = new Set(serverAlbums.map((album) => album.title.toLowerCase()));
-  const catalogTop = (catalog?.top || []).filter((track) => !track.libraryTrackId);
-  const catalogAlbums: MusicCatalogAlbum[] = (catalog?.albums || [])
-    .filter((album) => !known.has(album.title.toLowerCase()));
-  return {
-    name: name || catalog?.artist?.name || '',
-    serverTracks: server?.artist?.trackCount || 0,
-    catalogTracks: (catalog?.albums || []).reduce((sum, album) => sum + album.tracksCount, 0),
-    isInCatalog: Boolean(catalog),
-    popular: [
-      ...serverPopular.map((track) => ({ track })),
-      ...catalogTop.map((track) => ({ catalog: track })),
-    ].slice(0, POPULAR_ROWS),
-    releases: [
-      ...serverAlbums.map((album) => ({
-        key: `a:${album.id}`,
-        kind: 'album' as const,
-        id: album.id,
-        title: album.title,
-        sub: [album.year || undefined, album.isSingle ? 'single' : undefined].filter(Boolean).join(' · '),
-        coverId: album.coverId,
-      })),
-      ...catalogAlbums.map((album) => ({
-        key: `c:${album.ref}`,
-        kind: 'catalogAlbum' as const,
-        id: album.ref,
-        title: album.title,
-        sub: [album.year || undefined, album.recordType].filter(Boolean).join(' · '),
-        coverUrl: album.coverUrl || undefined,
-      })),
-    ],
-  };
-}
 
 export default memo(MusicArtistPage);

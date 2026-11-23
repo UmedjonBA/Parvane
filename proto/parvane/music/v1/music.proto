@@ -279,6 +279,8 @@ message LibraryArtistResponse {
   repeated Album albums = 2 [(parvane.core.v2.max_items) = 500];
   // «Популярное на сервере»: треки исполнителя по числу прослушиваний всеми пользователями сервера.
   repeated Track popular = 3 [(parvane.core.v2.max_items) = 10];
+  // «Чаще всех слушает …» (карточка «Об исполнителе» в плеере): ник за 30 дней; пусто — никто.
+  string top_listener = 4 [(parvane.core.v2.max_len) = 64];
 }
 
 message TrackGetRequest {

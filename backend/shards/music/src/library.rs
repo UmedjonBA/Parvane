@@ -151,6 +151,22 @@ pub(crate) async fn popular_week(limit: usize) -> Vec<(String, u32)> {
 }
 
 /// «Частое у вас»: исполнители, которых человек слушал больше всего дней за 30 суток.
+/// Кто чаще всех слушал исполнителя за 30 дней (ник); никто — пусто.
+pub(crate) async fn top_listener(artist_id: &str) -> String {
+    let Some(pool) = PLAYS.get() else { return String::new() };
+    let since = crate::now_ms() / DAY_MS - 29;
+    let r: Result<Option<(String,)>, _> =
+        sqlx::query_as("SELECT user FROM plays WHERE artist_id = ? AND day >= ? GROUP BY user ORDER BY COUNT(*) DESC, user LIMIT 1").bind(artist_id).bind(since).fetch_optional(pool).await;
+    match r {
+        // Прослушивания записаны пользователем музыкального сервера: «ник.метка» (`nd_user`) — показывается ник
+        Ok(row) => row.map(|(user,)| user.rsplit_once('.').map_or(user.as_str(), |(nick, _)| nick).to_string()).unwrap_or_default(),
+        Err(e) => {
+            warn!("музыка: слушатель исполнителя не прочитан: {e}");
+            String::new()
+        }
+    }
+}
+
 pub(crate) async fn frequent_artists(user: &str, limit: usize) -> Vec<String> {
     let Some(pool) = PLAYS.get() else { return vec![] };
     let since = crate::now_ms() / DAY_MS - 29;

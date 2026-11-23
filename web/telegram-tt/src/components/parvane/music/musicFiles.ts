@@ -1,4 +1,6 @@
 import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicFileInfo } from '../../../api/parvane/musicFilesApi';
+import type useLang from '../../../hooks/useLang';
 
 import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
 import { createSignal } from '../../../util/signals';
@@ -55,4 +57,33 @@ export async function prepareCover(file: Blob): Promise<Uint8Array | undefined> 
   });
   if (!blob || blob.size > COVER_MAX_BYTES) return undefined;
   return new Uint8Array(await blob.arrayBuffer());
+}
+
+type Lang = ReturnType<typeof useLang>;
+
+// Источники файлов сервера — их собственными именами
+const SOURCE_NAMES: Record<string, string> = {
+  hitmoz: 'hitmoz',
+  hitmos_fm: 'hitmos.fm',
+  youtube: 'YouTube',
+  youtube_reupload: 'YouTube',
+  soundcloud: 'SoundCloud',
+  bandcamp: 'Bandcamp',
+};
+
+/** «Источник» файла: название источника (и ссылка, `withLink`) либо «свой файл «имя»». */
+export function formatFileSource(lang: Lang, info: MusicFileInfo, withLink?: boolean) {
+  if (info.source === 'upload') return lang('MusicSourceOwnFile', { name: info.sourceRef });
+  const link = withLink && info.sourceRef.startsWith('https://') ? info.sourceRef : undefined;
+  return [SOURCE_NAMES[info.source] || lang('MusicSourceUnknown'), link].filter(Boolean).join(' · ');
+}
+
+/** «Качество» файла: «FLAC · 16/44,1» либо «MP3 · 320 kbps». */
+export function formatFileQuality(lang: Lang, info: MusicFileInfo) {
+  return [
+    info.codec.toUpperCase(),
+    info.bits && info.sampleRate
+      ? lang('MusicFileQuality', { bits: info.bits, khz: lang.number(info.sampleRate / 1000) }) : undefined,
+    !info.bits && info.bitrateKbps ? `${info.bitrateKbps} kbps` : undefined,
+  ].filter(Boolean).join(' · ');
 }
