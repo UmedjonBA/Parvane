@@ -41,3 +41,10 @@ export function estimateOfflineLeft(doneBytes: number, busyMs: number, doneCount
   const minutes = Math.max(1, Math.round((bytes / (doneBytes / busyMs)) / 60000));
   return { bytes, minutes };
 }
+
+/** «12 ноя 2026, 21:14» — когда добавлен и правлен файл («Откуда файл»). */
+export function formatMusicDate(lang: { code: string }, ms: number) {
+  return new Intl.DateTimeFormat(lang.code, {
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(ms)).replace(/\.(?=,| )/, '');
+}

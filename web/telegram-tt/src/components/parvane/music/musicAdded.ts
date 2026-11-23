@@ -26,11 +26,14 @@ export function canDeleteTrack(trackId: string) {
   return Boolean(info?.isFetchEnabled && (info.isAdmin || getOwnAdded().has(trackId)));
 }
 
+/** В корзину (на 30 дней); не вышло — `false`. */
 export async function deleteLibraryTrack(trackId: string) {
-  await callMusic('parvaneMusicAddedDelete', { trackId }).catch(() => undefined);
+  const isDone = await callMusic('parvaneMusicAddedDelete', { trackId }).then(() => true, () => false);
+  if (!isDone) return false;
   const next = new Set(getOwnAdded());
   next.delete(trackId);
   setOwnAdded(next);
   void loadMusicInfo();
   window.dispatchEvent(new Event(MUSIC_LIBRARY_CHANGED_EVENT));
+  return true;
 }

@@ -88,6 +88,9 @@ function reply(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// Теги файлов библиотеки по пути (правка человеком)
+const FILE_TAGS = new Map();
+
 // Ход медленных загрузок (`dest` → байты) и снятые загрузки
 const PROGRESS = new Map();
 const CANCELLED = new Set();
@@ -160,6 +163,29 @@ http.createServer((req, res) => {
   if (url.pathname === '/progress') {
     const done = PROGRESS.get(url.searchParams.get('dest'));
     return done === undefined ? reply(res, 404, {}) : reply(res, 200, { bytes_done: done, bytes_total: SLOW_BYTES });
+  }
+  // Файлы библиотеки (макет 23 ноя): теги по пути — что записали, то и читается; ссылка — трек «Утро» Lampa
+  if (url.pathname === '/tags' && req.method === 'GET') {
+    const tags = FILE_TAGS.get(url.searchParams.get('path')) || { artist: 'Kora Mesh', title: 'Glass Harbor' };
+    return reply(res, 200, {
+      tags,
+      file: {
+        codec: 'flac', bitrate: 900000, sample_rate: 44100, bits: 16, duration: 30, bytes: 4000,
+      },
+      has_cover: false,
+    });
+  }
+  if (url.pathname === '/tags' && req.method === 'POST') {
+    return readBody(req, (body) => {
+      const tags = { ...(FILE_TAGS.get(body.path) || {}), ...body.tags };
+      FILE_TAGS.set(body.path, tags);
+      reply(res, 200, { tags, file: { codec: 'flac', bytes: 4000 }, has_cover: false });
+    });
+  }
+  if (url.pathname === '/resolve' && req.method === 'POST') {
+    return readBody(req, (body) => reply(res, 200, {
+      source: 'soundcloud', id: body.url, artist: 'Lampa', title: 'Утро', album: '', duration: 30,
+    }));
   }
   if (url.pathname === '/cancel' && req.method === 'POST') {
     readBody(req, ({ dest }) => {

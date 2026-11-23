@@ -1433,6 +1433,59 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicFileRights': undefined;
+  'MusicEditTags': undefined;
+  'MusicFileOrigin': undefined;
+  'MusicOtherVersionsShort': undefined;
+  'MusicRefetch': undefined;
+  'MusicRefetchStarted': undefined;
+  'MusicDeleteText': undefined;
+  'MusicToTrash': undefined;
+  'MusicMovedToTrash': undefined;
+  'MusicCopyTag': undefined;
+  'MusicTagsRestored': undefined;
+  'MusicSourceUnknown': undefined;
+  'MusicFileSource': undefined;
+  'MusicFileAdded': undefined;
+  'MusicFileFile': undefined;
+  'MusicFileOnServer': undefined;
+  'MusicFileTags': undefined;
+  'MusicFileTagsOriginal': undefined;
+  'MusicRestoreTags': undefined;
+  'MusicFileNote': undefined;
+  'MusicCoverTooBig': undefined;
+  'MusicCoverNotInCatalog': undefined;
+  'MusicTagsForbidden': undefined;
+  'MusicTagsMixed': undefined;
+  'MusicEditAlbum': undefined;
+  'MusicEditTrack': undefined;
+  'MusicChangeCover': undefined;
+  'MusicCoverFromCatalog': undefined;
+  'MusicTagsManyHint': undefined;
+  'MusicTagAlbumName': undefined;
+  'MusicTagTitle': undefined;
+  'MusicTagAlbumArtist': undefined;
+  'MusicTagArtist': undefined;
+  'MusicTagInLibrary': undefined;
+  'MusicTagAlbum': undefined;
+  'MusicTagYear': undefined;
+  'MusicTagGenre': undefined;
+  'MusicTagType': undefined;
+  'MusicMergeArtistsAction': undefined;
+  'MusicMoveTracksAction': undefined;
+  'MusicTagsRightsNote': undefined;
+  'MusicMergeArtists': undefined;
+  'MusicMergeHint': undefined;
+  'MusicMoveTracks': undefined;
+  'MusicNewAlbum': undefined;
+  'MusicSelect': undefined;
+  'MusicKeepOne': undefined;
+  'MusicRestored': undefined;
+  'MusicTrashEmpty': undefined;
+  'MusicPurge': undefined;
+  'MusicTrashNote': undefined;
+  'MusicTrash': undefined;
+  'MusicTrashHint': undefined;
   'MusicNextShort': undefined;
   'MusicQueueEnd': undefined;
   'MusicNextFromStarred': undefined;
@@ -4969,6 +5022,44 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicSortBy': {
     'name': V;
   };
+  'MusicFileOf': {
+    'name': V;
+  };
+  'MusicAddedByName': {
+    'name': V;
+  };
+  'MusicSourceOwnFile': {
+    'name': V;
+  };
+  'MusicFileTagsEdited': {
+    'name': V;
+    'date': V;
+  };
+  'MusicFileQuality': {
+    'bits': V;
+    'khz': V;
+  };
+  'MusicOtherVersions': {
+    'count': V;
+  };
+  'MusicMerged': {
+    'name': V;
+  };
+  'MusicMergeInto': {
+    'name': V;
+  };
+  'MusicMoved': {
+    'name': V;
+  };
+  'MusicSelected': {
+    'count': V;
+  };
+  'MusicDownloadedTwice': {
+    'name': V;
+  };
+  'MusicTrashDeletedBy': {
+    'name': V;
+  };
   'MusicNextFromPlaylist': {
     'name': V;
   };
@@ -6641,6 +6732,28 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'limit': V;
   };
   'MusicTracksCount': {
+    'count': V;
+  };
+  'MusicDeleteTitle': {
+    'count': V;
+  };
+  'MusicMovedToTrashN': {
+    'count': V;
+  };
+  'MusicTagsSaved': {
+    'count': V;
+  };
+  'MusicEditTracks': {
+    'count': V;
+  };
+  'MusicMergeSummary': {
+    'count': V;
+    'name': V;
+  };
+  'MusicMoveN': {
+    'count': V;
+  };
+  'MusicTrashDaysLeft': {
     'count': V;
   };
   'MusicPickerShared': {

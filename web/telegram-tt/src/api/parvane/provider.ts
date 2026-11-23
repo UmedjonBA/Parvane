@@ -116,6 +116,7 @@ import { createMessageController } from './messages';
 import { createModReports } from './modReports';
 import { createMusicApi } from './musicApi';
 import { createMusicCatalogApi } from './musicCatalogApi';
+import { createMusicFilesApi } from './musicFilesApi';
 import { createMusicSharedApi } from './musicSharedApi';
 import { mergeNotifyDefault, withNotifyDefaults } from './notifyDefaults';
 import { hydratePersonal } from './personalStore';
@@ -2886,6 +2887,10 @@ const musicMethods = createMusicApi({
 const musicCatalogMethods = createMusicCatalogApi({
   call: (method, request) => getV2Bridge().control.call(method, request),
 });
+// Файлы библиотеки «Музыки»: «Откуда файл», правка тегов, корзина, ссылки — `musicFilesApi.ts`
+const musicFilesMethods = createMusicFilesApi({
+  call: (method, request) => getV2Bridge().control.call(method, request),
+});
 
 // Общие плейлисты «Музыки» (spec 041, MUSIC-3): методы `music.shared.*` — `musicSharedApi.ts`
 const musicSharedMethods = createMusicSharedApi({
@@ -2923,6 +2928,7 @@ const methods = {
   ...musicMethods,
   ...musicSharedMethods,
   ...musicCatalogMethods,
+  ...musicFilesMethods,
 
   fetchAppConfig({ hash }: { hash?: number }) {
     return Promise.resolve(hash === PARVANE_APP_CONFIG.hash ? undefined : PARVANE_APP_CONFIG);

@@ -26,7 +26,8 @@ type Reply = Result<Vec<u8>, ErrorCode>;
 pub(crate) const TRASH_DIR: &str = ".trash";
 const TRASH_KEEP_MS: i64 = 30 * 86_400_000;
 const DAY_MS: i64 = 86_400_000;
-const TAG_FIELDS: [&str; 7] = ["title", "artist", "album", "album_artist", "year", "genre", "track_no"];
+const TAG_FIELDS: [&str; 8] = ["title", "artist", "album", "album_artist", "year", "genre", "track_no", "release_type"];
+const RELEASE_TYPES: [&str; 4] = ["album", "single", "ep", "compilation"];
 const VERSIONS_MAX: usize = 20;
 
 #[derive(Clone, Debug, sqlx::FromRow)]
@@ -122,7 +123,7 @@ fn tags_pb(v: &Value) -> pb::TagSet {
     let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").chars().take(512).collect::<String>();
     // «2023-05-01», «3/12» — число в начале
     let n = |k: &str| s(k).chars().take_while(char::is_ascii_digit).collect::<String>().parse::<u32>().unwrap_or(0);
-    pb::TagSet { title: s("title"), artist: s("artist"), album: s("album"), album_artist: s("album_artist"), year: n("year"), genre: s("genre"), track_no: n("track") }
+    pb::TagSet { title: s("title"), artist: s("artist"), album: s("album"), album_artist: s("album_artist"), year: n("year"), genre: s("genre"), track_no: n("track"), release_type: s("release_type") }
 }
 
 impl Fetch {
@@ -223,6 +224,13 @@ impl Fetch {
                 "album_artist" => json!(t.album_artist.trim()),
                 "year" => json!(if t.year == 0 { String::new() } else { t.year.to_string() }),
                 "genre" => json!(t.genre.trim()),
+                "release_type" => {
+                    let kind = t.release_type.trim().to_lowercase();
+                    if !kind.is_empty() && !RELEASE_TYPES.contains(&kind.as_str()) {
+                        return Err(ErrorCode::Invalid);
+                    }
+                    json!(kind)
+                }
                 _ => json!(if t.track_no == 0 { String::new() } else { t.track_no.to_string() }),
             };
             tags.insert(if *f == "track_no" { "track".to_string() } else { (*f).to_string() }, value);
@@ -275,7 +283,7 @@ impl Fetch {
         let original: Value = serde_json::from_str(&row.original_tags).map_err(|_| ErrorCode::NotFound)?;
         // Поля, которых в исходных не было, — убрать
         let mut tags = serde_json::Map::new();
-        for f in ["title", "artist", "album", "album_artist", "year", "genre", "track"] {
+        for f in ["title", "artist", "album", "album_artist", "year", "genre", "track", "release_type"] {
             tags.insert(f.to_string(), original.get(f).cloned().unwrap_or(json!("")));
         }
         let after = self.service()?.write_tags(&row.path, &Value::Object(tags), "", "").await.map_err(|_| ErrorCode::Unavailable)?;

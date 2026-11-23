@@ -13,7 +13,7 @@ export type MusicTab = 'home' | 'search' | 'library';
 export type MusicView =
   | {
     kind: MusicTab | 'starred' | 'artists' | 'albums' | 'offline' | 'added' | 'playlists' | 'uploads'
-      | 'mix' | 'mixArtists' | 'queue' | 'dislikes';
+      | 'mix' | 'mixArtists' | 'queue' | 'dislikes' | 'trash';
   }
   | { kind: 'playlist' | 'album' | 'artist' | 'singles' | 'shared' | 'catalogArtist' | 'catalogAlbum'; id: string };
 

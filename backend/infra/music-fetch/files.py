@@ -16,7 +16,7 @@ LINK_HOSTS = {
 # Поля правки → ключи простого вида mutagen
 EASY_KEYS = {
     "title": "title", "artist": "artist", "album": "album", "album_artist": "albumartist", "year": "date",
-    "genre": "genre", "track": "tracknumber", "disc": "discnumber",
+    "genre": "genre", "track": "tracknumber", "disc": "discnumber", "release_type": "releasetype",
 }
 COVER_MAX_BYTES = 5 * 1024 * 1024
 COVER_TIMEOUT_SECS = 15
@@ -33,10 +33,20 @@ def link_source(url):
     return LINK_HOSTS.get(host)
 
 
+def register_release_type():
+    """Тип выпуска (album, single, ep, compilation): ID3 — TXXX:RELEASETYPE, Vorbis — RELEASETYPE (так его читает
+    музыкальный сервер); у M4A простого ключа нет — поле пропускается."""
+    from mutagen.easyid3 import EasyID3
+
+    if "releasetype" not in EasyID3.valid_keys:
+        EasyID3.RegisterTXXXKey("releasetype", "RELEASETYPE")
+
+
 def read_tags(path):
     """Теги файла и сведения о нём: формат, битрейт, частота, разрядность, длительность, размер, есть ли обложка."""
     import mutagen
 
+    register_release_type()
     audio = mutagen.File(path, easy=True)
     tags = {}
     if audio is not None and audio.tags is not None:
@@ -82,6 +92,7 @@ def write_tags(path, changes, cover=None):
     """Переписать переданные поля (пустая строка — убрать поле); `cover` — байты JPEG/PNG либо `None`."""
     import mutagen
 
+    register_release_type()
     audio = mutagen.File(path, easy=True)
     if audio is None:
         raise ValueError("файл не читается")
@@ -92,10 +103,14 @@ def write_tags(path, changes, cover=None):
         if key is None:
             continue
         value = str(value).strip()
-        if value:
-            audio.tags[key] = [value]
-        elif key in audio.tags:
-            del audio.tags[key]
+        try:
+            if value:
+                audio.tags[key] = [value]
+            elif key in audio.tags:
+                del audio.tags[key]
+        except (KeyError, ValueError):
+            # Поле, которого у формата нет (тип выпуска в M4A), — пропускается
+            continue
     audio.save()
     if cover:
         write_cover(path, cover)

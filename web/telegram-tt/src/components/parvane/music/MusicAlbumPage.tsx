@@ -6,6 +6,7 @@ import type { CloudMenuAnchor } from '../cloud/CloudMenu';
 
 import buildClassName from '../../../util/buildClassName';
 import { startFetchAlbum } from './fetch/musicFetch';
+import { openMusicFileSheet } from './musicFiles';
 import { coverTone } from './musicFormat';
 import { saveTracksOffline } from './musicOffline';
 import {
@@ -121,6 +122,7 @@ const MusicAlbumPage = ({
       playTracks(serverTracks, 0, { isShuffled: true, source: { kind: 'album', name: data!.title } });
     } else if (key === 'chat' && serverTracks[0]) onSendToChat(serverTracks[0]);
     else if (key === 'add') void handleAddAll();
+    else if (key === 'edit' && id) openMusicFileSheet({ kind: 'album', albumId: id, tracks: serverTracks });
   });
 
   if (!data) {
@@ -241,6 +243,7 @@ const MusicAlbumPage = ({
           facts={data.artist}
           actions={[
             ...(missing && data.albumRef ? [{ key: 'add', title: lang('MusicAddAllToServer') }] : []),
+            ...(id && serverTracks.length ? [{ key: 'edit', title: lang('MusicEditAlbum') }] : []),
             ...(serverTracks.length ? [
               { key: 'shuffle', title: lang('MusicShuffleOn') },
               { key: 'offline', title: lang(isPhone ? 'MusicOfflineSaveTrack' : 'MusicOfflineSaveDesk') },

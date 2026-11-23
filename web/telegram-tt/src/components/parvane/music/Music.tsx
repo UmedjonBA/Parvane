@@ -40,6 +40,7 @@ import MusicArtistPage from './MusicArtistPage';
 import MusicBrowseView from './MusicBrowseView';
 import MusicDeskPlayer from './MusicDeskPlayer';
 import MusicDislikesView from './MusicDislikesView';
+import MusicFileSheets from './MusicFileSheets';
 import MusicHomeView from './MusicHomeView';
 import MusicLibraryItems from './MusicLibraryItems';
 import MusicLibraryView from './MusicLibraryView';
@@ -57,6 +58,7 @@ import MusicSearchView from './MusicSearchView';
 import MusicSectionHead from './MusicSectionHead';
 import MusicSendDialog from './MusicSendDialog';
 import MusicStarredView from './MusicStarredView';
+import MusicTrashView from './MusicTrashView';
 import MusicUploadStatus from './MusicUploadStatus';
 import MusicSharedPage from './shared/MusicSharedPage';
 
@@ -169,6 +171,7 @@ const Music = () => {
     setLibraryMenu(undefined);
     if (key === 'newPlaylist') openNewPlaylist();
     else if (key === 'dislikes') openMusicView({ kind: 'dislikes' }, true);
+    else if (key === 'trash') openMusicView({ kind: 'trash' }, true);
   });
 
   function renderView(current: MusicView) {
@@ -214,6 +217,8 @@ const Music = () => {
         return <MusicQueue />;
       case 'dislikes':
         return <MusicDislikesView isPhone={isPhone} />;
+      case 'trash':
+        return <MusicTrashView isPhone={isPhone} />;
       case 'playlists':
         return (
           <div className={styles.view}>
@@ -357,6 +362,7 @@ const Music = () => {
             actions={[
               { key: 'newPlaylist', title: lang('MusicPlaylistNew') },
               { key: 'dislikes', title: lang('MusicDislikes') },
+              { key: 'trash', title: lang('MusicTrash') },
             ]}
             anchor={libraryMenu}
             onPick={handleLibraryPick}
@@ -378,6 +384,7 @@ const Music = () => {
       {renderBody()}
       <MusicSendDialog track={sentTrack} onClose={handleCloseSend} />
       <MusicNewPlaylist />
+      <MusicFileSheets />
     </div>
   );
 };

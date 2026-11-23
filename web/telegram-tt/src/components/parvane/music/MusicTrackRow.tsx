@@ -46,6 +46,9 @@ type OwnProps = {
   prefix?: string;
   // Плейлист: трека уже нет на сервере — играть нечего
   isMissing?: boolean;
+  // Выбор нескольких: флажок перед обложкой, нажатие строки отмечает её
+  isSelecting?: boolean;
+  isSelected?: boolean;
   // Очередь на компьютере: крестик по наведению
   canRemove?: boolean;
   // Без «⋯» в строке: меню — по правой кнопке и долгому нажатию (очередь, доски `MusicPlayer`, `XdMusic`)
@@ -78,7 +81,8 @@ const PHONE_MAX_WIDTH = 925;
 // Parvane (spec 039, 041): строка трека — обложка либо номер, название и исполнитель (на компьютере — колонками),
 // длительность; нажатие играет. Действия — в меню «⋯» (и по правой кнопке, долгому нажатию)
 const MusicTrackRow = ({
-  track, index, isCurrent, isPlaying, number, rank, isBare, isAlbumLine, columns, trailing, note, prefix, isMissing,
+  track, index, isCurrent, isPlaying, number, rank, isBare, isSelecting, isSelected, isAlbumLine, columns, trailing,
+  note, prefix, isMissing,
   canRemove, isMenuHidden, dragLabel, dragState, drag, canQueue, canSaveOffline, extra,
   onPlay, onStar, onRemove, onDelete, onSendToChat,
 }: OwnProps) => {
@@ -126,6 +130,7 @@ const MusicTrackRow = ({
       className={buildClassName(
         styles.track,
         isCurrent && styles.trackCurrent,
+        isSelected && styles.trackSelected,
         isTable && styles.trackTable,
         (canRemove || drag) && styles.trackHoverTools,
         dragState && DRAG_STATE_CLASSES[dragState],
@@ -137,6 +142,15 @@ const MusicTrackRow = ({
       onContextMenu={handleContextMenu}
     >
       <button type="button" className={styles.trackMain} disabled={isMissing} onClick={handlePlay}>
+        {isSelecting && (
+          <span
+            className={buildClassName(styles.trackCheck, isSelected && styles.trackCheckOn)}
+            role="checkbox"
+            aria-checked={isSelected}
+          >
+            {isSelected && <ParvaneIcon name="check" isSmall />}
+          </span>
+        )}
         {rank !== undefined && (
           <span className={buildClassName(styles.trackRank, kit.mono, kit.muted, kit.small)}>{rank}</span>
         )}
@@ -151,7 +165,16 @@ const MusicTrackRow = ({
           />
         )}
         <span className={styles.trackText}>
-          <span className={styles.trackTitle}>{track.title}</span>
+          <span className={styles.trackTitleRow}>
+            <span className={styles.trackTitle}>{track.title}</span>
+            {/* Доска `RpMusicA`: вторая версия — «v2», та же скачанная дважды — «копия» */}
+            {Boolean(track.version && track.version > 1) && (
+              <span className={styles.trackTag}>{`v${track.version}`}</span>
+            )}
+            {track.isCopy && (
+              <span className={buildClassName(styles.trackTag, styles.trackTagCopy)}>{lang('MusicCopyTag')}</span>
+            )}
+          </span>
           {!isBare && (
             <span
               className={buildClassName(styles.trackArtist, isTable && styles.trackSecondary)}

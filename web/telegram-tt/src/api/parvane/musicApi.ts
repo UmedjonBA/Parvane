@@ -52,6 +52,10 @@ export type MusicTrack = {
   trackNo: number;
   year: number;
   isStarred: boolean;
+  // Макет 23 ноя: вторая и следующие версии («v2»), копия той же версии, кто добавил (ник)
+  version?: number;
+  isCopy?: boolean;
+  adder?: string;
 };
 
 export type MusicAlbum = {
@@ -203,6 +207,12 @@ export type MusicFetchJob = {
   query?: string;
   uploadName?: string;
   updatedMs: number;
+  // Трек уже был на сервере (задача готова без скачивания): `trackId` — тот трек
+  isExisting?: boolean;
+  // Задача по ссылке
+  url?: string;
+  // Готовый трек — в «Любимое»
+  isStar?: boolean;
 };
 
 export type MusicAddedTrack = {
@@ -258,7 +268,7 @@ export const list = (source: Json, name: string) => {
   return Array.isArray(value) ? value as Json[] : [];
 };
 
-function toTrack(raw: Json): MusicTrack {
+export function toTrack(raw: Json): MusicTrack {
   return {
     id: text(raw, 'id'),
     title: text(raw, 'title'),
@@ -271,6 +281,9 @@ function toTrack(raw: Json): MusicTrack {
     trackNo: count(raw, 'track_no'),
     year: count(raw, 'year'),
     isStarred: Boolean(field(raw, 'starred')),
+    version: count(raw, 'version') || undefined,
+    isCopy: Boolean(field(raw, 'copy')) || undefined,
+    adder: text(raw, 'adder') || undefined,
   };
 }
 
@@ -349,7 +362,7 @@ function fromCatalogTrack(track: MusicCatalogTrack): Json {
   };
 }
 
-function toFetchJob(raw: Json): MusicFetchJob {
+export function toFetchJob(raw: Json): MusicFetchJob {
   const track = field(raw, 'track');
   return {
     jobId: text(raw, 'job_id'),
@@ -374,6 +387,9 @@ function toFetchJob(raw: Json): MusicFetchJob {
     query: text(raw, 'query') || undefined,
     uploadName: text(raw, 'upload_name') || undefined,
     updatedMs: count(raw, 'updated_ms'),
+    isExisting: Boolean(field(raw, 'existing')) || undefined,
+    url: text(raw, 'url') || undefined,
+    isStar: Boolean(field(raw, 'star')) || undefined,
   };
 }
 

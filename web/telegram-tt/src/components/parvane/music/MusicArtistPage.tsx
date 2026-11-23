@@ -4,6 +4,7 @@ import type { MusicAlbum, MusicCatalogTrack, MusicTrack } from '../../../api/par
 import type { MusicCatalogAlbum } from '../../../api/parvane/musicCatalogApi';
 
 import buildClassName from '../../../util/buildClassName';
+import { openMusicFileSheet } from './musicFiles';
 import { coverTone } from './musicFormat';
 import {
   callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
@@ -82,6 +83,10 @@ const MusicArtistPage = ({
     }));
     void setTrackStarred(track, isStarred);
   });
+  // «Объединить с другим написанием» (доски `ZpMusicX-04`, `ZdMusicX-03`)
+  const handleMerge = useLastCallback(() => {
+    if (id && data) openMusicFileSheet({ kind: 'merge', artistId: id, name: data.name });
+  });
   const handleOpenRelease = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const { kind, id: releaseId } = e.currentTarget.dataset;
     openMusicView({ kind: kind as 'album', id: releaseId! });
@@ -124,6 +129,17 @@ const MusicArtistPage = ({
         </div>
       </div>
       <div className={styles.actions}>
+        {id && (
+          <button
+            type="button"
+            className={styles.action}
+            aria-label={lang('MusicMergeArtistsAction')}
+            data-music-artist-merge
+            onClick={handleMerge}
+          >
+            <ParvaneIcon name="merge" />
+          </button>
+        )}
         <span className={styles.actionsGap} />
         <button
           type="button"

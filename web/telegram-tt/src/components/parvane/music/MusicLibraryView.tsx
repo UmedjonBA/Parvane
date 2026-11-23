@@ -64,6 +64,7 @@ const MusicLibraryView = ({ info }: OwnProps) => {
     if (key === 'sort') setAlbumSort(albumSort === 'recent' ? 'name' : 'recent');
     else if (key === 'newPlaylist') openNewPlaylist();
     else if (key === 'dislikes') openMusicView({ kind: 'dislikes' });
+    else if (key === 'trash') openMusicView({ kind: 'trash' });
     else if (key === 'settings') openMusicView({ kind: 'offline' });
   });
   const handleOpenAlbum = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -194,6 +195,7 @@ const MusicLibraryView = ({ info }: OwnProps) => {
             },
             { key: 'newPlaylist', title: lang('MusicPlaylistNew'), glyph: icon('plus') },
             { key: 'dislikes', title: lang('MusicDislikes'), glyph: icon('ban') },
+            { key: 'trash', title: lang('MusicTrash'), glyph: icon('trash') },
             { key: 'settings', title: lang('MusicSettings'), glyph: icon('gear') },
           ]}
           onPick={handlePick}

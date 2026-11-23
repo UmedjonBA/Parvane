@@ -904,6 +904,8 @@ message TagSet {
   uint32 year = 5;
   string genre = 6 [(parvane.core.v2.max_len) = 128];
   uint32 track_no = 7;
+  // Тип выпуска альбома: album, single, ep, compilation (музыкальный сервер делит по нему альбомы и синглы).
+  string release_type = 8 [(parvane.core.v2.max_len) = 16];
 }
 
 message FileInfoRequest {
@@ -939,7 +941,7 @@ message FileInfoResponse {
 message FileTagsRequest {
   repeated string track_ids = 1 [(parvane.core.v2.max_items) = 500, (parvane.core.v2.max_len) = 64];
   TagSet tags = 2;
-  repeated string fields = 3 [(parvane.core.v2.max_items) = 7, (parvane.core.v2.max_len) = 16];
+  repeated string fields = 3 [(parvane.core.v2.max_items) = 8, (parvane.core.v2.max_len) = 16];
   string cover_url = 4 [(parvane.core.v2.max_len) = 512];
   bytes cover = 5 [(parvane.core.v2.max_len) = 524288];
 }

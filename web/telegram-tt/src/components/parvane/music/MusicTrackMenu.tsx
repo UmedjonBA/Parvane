@@ -11,6 +11,7 @@ import {
   addTracksToShared, canEditTracks, getSharedPlaylists, refreshSharedPlaylists, toTrackInput,
 } from './shared/musicShared';
 import { canDeleteTrack, deleteLibraryTrack, getOwnAdded } from './musicAdded';
+import { openMusicFileSheet } from './musicFiles';
 import { formatTrackTime } from './musicFormat';
 import { goToMusic } from './musicGoTo';
 import {
@@ -25,6 +26,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
+import ConfirmDialog from '../../ui/ConfirmDialog';
 import MusicCover from './MusicCover';
 import MusicMenu from './MusicMenu';
 import MusicPlaylistPicker from './MusicPlaylistPicker';
@@ -81,6 +83,17 @@ const MusicTrackMenu = ({
   const isSaving = !isSaved && offline.pending > 0 && isTrackSaving(track.id);
   const isDesk = Boolean(anchor);
   const [isPicking, setIsPicking] = useState(false);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const handleConfirmDelete = useLastCallback(async () => {
+    setIsConfirmingDelete(false);
+    onClose();
+    const isDone = await deleteLibraryTrack(track.id);
+    showNotification({ message: lang(isDone ? 'MusicMovedToTrash' : 'MusicPlaylistFailed') });
+  });
+  const handleCancelDelete = useLastCallback(() => {
+    setIsConfirmingDelete(false);
+    onClose();
+  });
 
   useEffect(() => {
     if (!isDesk) return;
@@ -110,7 +123,8 @@ const MusicTrackMenu = ({
       setIsPicking(true);
       return;
     }
-    onClose();
+    // Удаление — после подтверждения (окно рисует это же меню)
+    if (key !== 'delete' || onDelete) onClose();
     if (key.startsWith(PLAYLIST_PREFIX)) {
       void addTo(key.slice(PLAYLIST_PREFIX.length));
       return;
@@ -134,7 +148,11 @@ const MusicTrackMenu = ({
       remove: () => extra?.onRemove?.(),
       up: () => extra?.onMoveUp?.(),
       down: () => extra?.onMoveDown?.(),
-      delete: () => (onDelete ? onDelete(track) : void deleteLibraryTrack(track.id)),
+      delete: () => (onDelete ? onDelete(track) : setIsConfirmingDelete(true)),
+      tags: () => openMusicFileSheet({ kind: 'tracks', tracks: [track] }),
+      info: () => openMusicFileSheet({ kind: 'info', track }),
+      versions: () => openMusicFileSheet({ kind: 'info', track }),
+      refetch: () => openMusicFileSheet({ kind: 'info', track }),
       dislike: () => void dislike({ trackId: track.id, artist: track.artist, title: track.title }),
       share: () => void shareTrack(),
     };
@@ -181,7 +199,13 @@ const MusicTrackMenu = ({
     canQueue && item('next', 'list', lang('MusicToQueue')),
     item('share', 'share', lang('MusicShare')),
   ].filter((action): action is MusicMenuAction => Boolean(action));
+  // «Файл…» (доска `RpMusicA-03`): теги правит добавивший либо администратор — сервер проверит сам
   const fileMenu = [
+    item('tags', 'pen', lang('MusicEditTags')),
+    item('info', 'info', lang('MusicFileOrigin')),
+    (track.version && track.version > 1) || track.isCopy
+      ? item('versions', 'copy', lang('MusicOtherVersionsShort')) : undefined,
+    item('refetch', 'refresh', lang('MusicRefetch')),
     canDelete && item('delete', 'trash', lang('MusicDeleteFromServer'), { isDanger: true }),
   ].filter((action): action is MusicMenuAction => Boolean(action));
   const actions = [
@@ -195,11 +219,29 @@ const MusicTrackMenu = ({
     extra?.onMoveDown && item('down', 'chevronDown', lang('MusicMoveDown')),
     extra?.onRemove && extra.removeLabel && item('remove', 'close', extra.removeLabel),
     item('dislike', 'ban', lang('MusicDislike')),
-    fileMenu.length && item('file', 'copy', lang('MusicFileMenu'), { submenu: fileMenu }),
+    fileMenu.length && item('file', 'copy', lang('MusicFileMenu'), {
+      submenu: fileMenu,
+      submenuTitle: lang('MusicFileOf', { name: track.title }),
+      submenuFacts: track.adder ? lang('MusicAddedByName', { name: track.adder }) : undefined,
+      submenuNote: lang('MusicFileRights'),
+    }),
   ].filter((action): action is MusicMenuAction => Boolean(action));
   const facts = [track.artist, track.album || formatTrackTime(track.durationSecs), note].filter(Boolean).join(' · ');
 
   if (isPicking) return <MusicPlaylistPicker tracks={[track]} onClose={onClose} />;
+  if (isConfirmingDelete) {
+    return (
+      <ConfirmDialog
+        isOpen
+        title={lang('MusicDeleteTitle', { count: 1 }, { pluralValue: 1 })}
+        text={lang('MusicDeleteText')}
+        confirmLabel={lang('MusicToTrash')}
+        confirmIsDestructive
+        confirmHandler={handleConfirmDelete}
+        onClose={handleCancelDelete}
+      />
+    );
+  }
 
   return (
     <MusicMenu

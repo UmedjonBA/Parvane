@@ -26,6 +26,10 @@ export type MusicMenuAction = {
   hasDivider?: boolean;
   // Подменю у курсора: «В плейлист ›»
   submenu?: MusicMenuAction[];
+  // Шторка подменю: свой заголовок, строка сведений и пояснение («Файл: …», доска `RpMusicA-03`)
+  submenuTitle?: string;
+  submenuFacts?: string;
+  submenuNote?: string;
 };
 
 type OwnProps = {
@@ -105,12 +109,13 @@ const MusicMenu = ({
 
   if (!anchor) {
     // Подменю шторки («Файл… ›») открывается вместо списка
-    const subList = openSub ? actions.find((action) => action.key === openSub)?.submenu : undefined;
+    const subAction = openSub ? actions.find((action) => action.key === openSub) : undefined;
+    const subList = subAction?.submenu;
     return (
       <PvSheet
         isOpen
-        title={title}
-        subtitle={cover ? facts : undefined}
+        title={subAction?.submenuTitle || title}
+        subtitle={cover ? (subAction?.submenuFacts || facts) : undefined}
         headBefore={cover}
         noClose={Boolean(cover)}
         isTight
@@ -134,6 +139,7 @@ const MusicMenu = ({
             ))}
           </div>
         )}
+        {subAction?.submenuNote && <p className={styles.menuNote}>{subAction.submenuNote}</p>}
         <div className={sheets.menuList} role="menu" aria-label={title}>{renderRows(subList || actions, true)}</div>
         {!subList && footer}
       </PvSheet>

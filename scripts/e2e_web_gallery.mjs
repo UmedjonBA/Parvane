@@ -803,6 +803,22 @@ async function galleryMusic() {
     await music.locator('[data-track]:visible [data-music-menu]').first().click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
+  await step(page, 'RpMusicA-03', async () => {
+    await music.locator('[data-track]:visible [data-music-menu]').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-action="file"]').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'ZpMusicX-02', async () => {
+    await page.locator('[data-action="tags"]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-music-tag-editor]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'ZpMusicX-06', async () => {
+    await music.locator('[data-track]:visible [data-music-menu]').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-action="file"]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-action="info"]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1200);
+  });
+  await page.keyboard.press('Escape');
   await musicBack();
   await step(page, 'MusicLibrary-01', async () => { await tab('library').click({ timeout: STEP_TIMEOUT_MS }); });
   await step(page, 'MusicLibrary-02', async () => {
@@ -835,6 +851,12 @@ async function galleryMusic() {
     await page.locator('[data-music-open-queue]').click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
+  await musicBack();
+  await step(page, 'MusicLibrary-10', async () => {
+    await music.locator('[data-music-library-more]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-action="trash"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-view-trash]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
   await musicBack();
   await step(page, 'MusicLibrary-04', async () => {
     await music.locator('[data-music-library] [data-tab="playlists"]').click({ timeout: STEP_TIMEOUT_MS });

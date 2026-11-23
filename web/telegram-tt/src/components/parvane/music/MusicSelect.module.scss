@@ -1,0 +1,101 @@
+// Выбор нескольких треков (доски `MusicLibrary-07`, `RdMusic-02`)
+.bar {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+
+  height: 3.5rem;
+  margin: 0 -1rem;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+}
+
+.count {
+  flex: 1;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.icon {
+  cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.75rem;
+
+  color: var(--pv-fg);
+
+  background: none;
+
+  &:disabled {
+    opacity: 0.4;
+  }
+}
+
+.danger {
+  color: var(--pv-red);
+}
+
+.textButton {
+  cursor: pointer;
+
+  height: 2.25rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 1.125rem;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
+
+.banner {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.625rem;
+
+  font-size: 0.8125rem;
+
+  background: var(--pv-raised);
+}
+
+.bannerText {
+  flex: 1;
+  min-width: 0;
+}
+
+.bannerButton {
+  cursor: pointer;
+
+  flex: none;
+
+  height: 2.125rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 1.0625rem;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
