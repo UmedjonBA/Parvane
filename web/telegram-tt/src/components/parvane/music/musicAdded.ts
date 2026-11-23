@@ -9,16 +9,26 @@ import { callMusic, getMusicInfo, loadMusicInfo } from './musicPlayer';
 export const MUSIC_LIBRARY_CHANGED_EVENT = 'parvane-music-library-changed';
 
 const [getOwnAdded, setOwnAdded] = createSignal<Set<string>>(new Set());
+// Сколько треков добавил сам — по записям, а не по id: у только что скачанного трека id музыкального сервера
+// появляется после пересканирования, и счёт по id показывал «0 треков»
+const [getOwnAddedCount, setOwnAddedCount] = createSignal(0);
 
-export { getOwnAdded };
+export { getOwnAdded, getOwnAddedCount };
 
-if (typeof window !== 'undefined') window.addEventListener(ACCOUNT_WIPED_EVENT, () => setOwnAdded(new Set()));
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCOUNT_WIPED_EVENT, () => {
+    setOwnAdded(new Set());
+    setOwnAddedCount(0);
+  });
+}
 
 /** Перечитать свои добавленные (при открытии «Музыки» и после скачивания). */
 export async function refreshOwnAdded() {
   if (!getMusicInfo()?.isFetchEnabled) return;
   const added = await callMusic('parvaneMusicAdded', { isMine: true }).catch(() => undefined);
-  if (added) setOwnAdded(new Set(added.map((item) => item.track.id).filter(Boolean)));
+  if (!added) return;
+  setOwnAdded(new Set(added.map((item) => item.track.id).filter(Boolean)));
+  setOwnAddedCount(added.length);
 }
 
 export function canDeleteTrack(trackId: string) {
@@ -33,6 +43,7 @@ export async function deleteLibraryTrack(trackId: string) {
   const next = new Set(getOwnAdded());
   next.delete(trackId);
   setOwnAdded(next);
+  setOwnAddedCount(Math.max(0, getOwnAddedCount() - 1));
   void loadMusicInfo();
   window.dispatchEvent(new Event(MUSIC_LIBRARY_CHANGED_EVENT));
   return true;

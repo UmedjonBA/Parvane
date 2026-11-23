@@ -76,6 +76,30 @@ pub(crate) async fn annotate_tracks(tracks: &mut [pb::Track]) {
     }
 }
 
+/// Треки из корзины среди `ids`: файл переехал в `.trash`, а музыкальный сервер может ещё отдавать его до пересканирования
+/// («Популярное на сервере» по таблице прослушиваний показывало удалённую копию).
+pub(crate) async fn trashed_ids(pool: &SqlitePool, ids: &[&str]) -> HashSet<String> {
+    if ids.is_empty() {
+        return HashSet::new();
+    }
+    let marks = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT track_id FROM added_tracks WHERE deleted_ms > 0 AND track_id IN ({marks}) \
+         AND track_id NOT IN (SELECT track_id FROM added_tracks WHERE deleted_ms = 0)"
+    );
+    let mut q = sqlx::query_as::<_, (String,)>(&sql);
+    for id in ids {
+        q = q.bind(*id);
+    }
+    match q.fetch_all(pool).await {
+        Ok(rows) => rows.into_iter().map(|(id,)| id).collect(),
+        Err(e) => {
+            warn!("музыка: корзина не прочитана: {e}");
+            HashSet::new()
+        }
+    }
+}
+
 /// Пометки у треков из списков: кто добавил, «[v2]», «копия» (тот же трек той же версии скачан раньше).
 pub(crate) async fn annotate(pool: &SqlitePool, tracks: &mut [pb::Track]) {
     let ids: Vec<&str> = tracks.iter().map(|t| t.id.as_str()).filter(|id| !id.is_empty()).collect();

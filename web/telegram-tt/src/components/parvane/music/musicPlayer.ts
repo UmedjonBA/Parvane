@@ -159,6 +159,9 @@ export function getCurrentTrack(state = getMusicPlayer()) {
 }
 
 /** Ссылка на обложку нужного размера; обложки у трека нет либо библиотека их не отдаёт — `undefined`. */
+// Прежний адрес обложек остаётся, пока ему жить дольше часа
+const COVER_KEEP_MS = 60 * 60 * 1000;
+
 export function coverUrl(coverId: string | undefined, size: number) {
   const base = getMusicInfo()?.coverBase;
   return base && coverId ? `${base}/${encodeURIComponent(coverId)}?size=${size}` : undefined;
@@ -173,7 +176,14 @@ export async function loadMusicInfo() {
     window.addEventListener('online', () => void loadMusicInfo(), { once: true });
     return saved;
   }
-  const info = await callMusic('parvaneMusicInfo');
+  const fresh = await callMusic('parvaneMusicInfo');
+  // Адрес обложек подписан на время: пока прежний действует, он остаётся — иначе каждое перечитывание сведений
+  // (числа медиатеки) меняло адреса и все обложки грузились заново
+  const prev = getMusicInfo();
+  const isPrevCoverValid = Boolean(prev?.coverBase && prev.coverExpiresMs - Date.now() > COVER_KEEP_MS);
+  const info = isPrevCoverValid
+    ? { ...fresh, coverBase: prev!.coverBase, coverExpiresMs: prev!.coverExpiresMs }
+    : fresh;
   if (info.isEnabled) writeJson(INFO_KEY, info);
   setMusicInfo(info);
   return info;

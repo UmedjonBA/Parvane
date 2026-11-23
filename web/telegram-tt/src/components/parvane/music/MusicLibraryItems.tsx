@@ -6,9 +6,10 @@ import type { MusicView } from './musicView';
 
 import buildClassName from '../../../util/buildClassName';
 import { getSharedPlaylists, watchSharedPlaylists } from './shared/musicShared';
-import { getOwnAdded } from './musicAdded';
+import { getOwnAddedCount, MUSIC_LIBRARY_CHANGED_EVENT, refreshOwnAdded } from './musicAdded';
 import { getMusicMix, loadMusicMix } from './musicMix';
 import { getOfflineState } from './musicOffline';
+import { loadMusicInfo } from './musicPlayer';
 import { getPlaylists } from './musicPlaylists';
 import { openMusicView } from './musicView';
 
@@ -45,16 +46,26 @@ const MusicLibraryItems = ({ info, view, isPhone }: OwnProps) => {
   const playlists = useDerivedState(getPlaylists);
   const shared = useDerivedState(getSharedPlaylists);
   const offline = useDerivedState(getOfflineState);
-  const added = useDerivedState(getOwnAdded);
+  const addedCount = useDerivedState(getOwnAddedCount);
   const mix = useDerivedState(getMusicMix);
 
   useEffect(() => watchSharedPlaylists(), []);
   useEffect(() => {
     if (!getMusicMix()) void loadMusicMix();
   }, []);
+  // Числа «Любимого» и «Добавлено мной» перечитываются при каждом показе медиатеки и после изменения библиотеки:
+  // иначе оставались от открытия «Музыки»
+  useEffect(() => {
+    const refresh = () => {
+      void loadMusicInfo().catch(() => undefined);
+      void refreshOwnAdded();
+    };
+    refresh();
+    window.addEventListener(MUSIC_LIBRARY_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(MUSIC_LIBRARY_CHANGED_EVENT, refresh);
+  }, []);
 
   const offlineCount = offline.entries.length;
-  const addedCount = added.size;
   const mixCount = mix?.mix?.tracks.length || 0;
   const items: Item[] = [
     {

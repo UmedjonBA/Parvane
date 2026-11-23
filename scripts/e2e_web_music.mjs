@@ -413,6 +413,20 @@ try {
   await tab('library').click();
   const library = phone.locator('[data-music-library]');
   for (const row of ['starred', 'offline', 'added', 'mix']) await visible(library.locator(`[data-view="${row}"]`));
+  // Числа «Любимого» и «Добавлено мной» совпадают со списками внутри (прежде оставались от открытия «Музыки»)
+  for (const [row, list] of [['starred', '[data-music-tracks] > li'], ['added', '[data-music-added="mine"] > li']]) {
+    const rowText = await library.locator(`[data-view="${row}"]`).innerText();
+    const shown = Number(/· (\d+) track/.exec(rowText)?.[1]);
+    await library.locator(`[data-view="${row}"]`).click();
+    const items = phone.locator(list);
+    await page.waitForFunction(([sel, n]) => document.querySelectorAll(`#ParvaneMusic ${sel}`).length === n,
+      [list, shown], { timeout: STEP_TIMEOUT_MS }).catch(async () => {
+      assert.fail(`«${row}»: в медиатеке ${shown}, внутри ${await items.count()} (${rowText})`);
+    });
+    await phone.locator('[data-music-back]').click();
+    await visible(library.locator(`[data-view="${row}"]`));
+  }
+  console.log('OK: числа «Любимого» и «Добавлено мной» в медиатеке совпадают со списками');
   await library.locator('[data-tab="artists"]').click();
   await library.locator('[data-music-library-artists] [data-artist="ar-1"]').click();
   // Страница поверх ленты: своя шапка с «назад», лента модулей скрыта, мини-плеер внизу

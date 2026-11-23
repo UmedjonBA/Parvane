@@ -192,7 +192,12 @@ const HOME_FRESH: u32 = 12;
 /// «Главная»: популярное за неделю с числом прослушиваний, частые исполнители человека, новые альбомы. Трека или
 /// исполнителя, которых уже нет в библиотеке, в ответе нет.
 async fn home(sub: &Subsonic, user: &str) -> Reply {
-    let popular_ids = crate::library::popular_week(HOME_POPULAR).await;
+    let mut popular_ids = crate::library::popular_week(HOME_POPULAR).await;
+    // Удалённое в корзину не показываем, даже если музыкальный сервер его ещё не забыл
+    if let Some(pool) = crate::library::plays_pool() {
+        let trashed = crate::files::trashed_ids(pool, &popular_ids.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>()).await;
+        popular_ids.retain(|(id, _)| !trashed.contains(id));
+    }
     let jobs = popular_ids.into_iter().map(|(id, plays)| {
         let (sub, user) = (sub.clone(), user.to_string());
         async move { song(&sub, &user, &id).await.ok().map(|track| pb::PopularTrack { track: Some(track), plays_week: plays }) }

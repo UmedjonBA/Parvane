@@ -19,6 +19,8 @@ async fn deleted_track_goes_to_trash_and_comes_back() {
     call::<pb::AddedDeleteResponse>(&ctx, "alice@local", "music.added.delete", pb::AddedDeleteRequest { track_id: job.track_id.clone() }).await.unwrap();
     let trash: pb::TrashListResponse = call(&ctx, "alice@local", "music.trash.list", pb::TrashListRequest {}).await.unwrap();
     assert_eq!((trash.items.len(), trash.admin), (1, false));
+    // Трек из корзины выпадает из «Популярного», даже пока музыкальный сервер его отдаёт
+    assert!(crate::files::trashed_ids(&ctx.fetch.as_ref().unwrap().pool, &[job.track_id.as_str()]).await.contains(&job.track_id));
     let item = &trash.items[0];
     assert_eq!((item.title.as_str(), item.deleted_by.as_str(), item.days_left), ("Песня t1", "alice", 30));
     assert!(dir.join("library/.trash").join(&item.id).read_dir().unwrap().count() > 0, "файл лежит в корзине");
@@ -29,6 +31,7 @@ async fn deleted_track_goes_to_trash_and_comes_back() {
     call::<pb::TrashRestoreResponse>(&ctx, "alice@local", "music.trash.restore", pb::TrashRestoreRequest { id: item.id.clone() }).await.unwrap();
     let trash: pb::TrashListResponse = call(&ctx, "alice@local", "music.trash.list", pb::TrashListRequest {}).await.unwrap();
     assert!(trash.items.is_empty());
+    assert!(crate::files::trashed_ids(&ctx.fetch.as_ref().unwrap().pool, &[job.track_id.as_str()]).await.is_empty(), "вернувшийся трек числится в корзине");
     // Снова в корзину и администратор чистит её целиком
     let added: pb::AddedListResponse = call(&ctx, "alice@local", "music.added.list", pb::AddedListRequest { mine: true, offset: 0, limit: 10 }).await.unwrap();
     assert_eq!(added.tracks.len(), 1, "вернувшийся трек снова в «Добавлено мной»");
