@@ -35,6 +35,7 @@ import ParvaneIcon from '../../main/ParvaneIcon';
 import PvEmpty from '../notes/PvEmpty';
 import PvLoading from '../notes/PvLoading';
 import PvOfflineBar from '../notes/PvOfflineBar';
+import SectionHistoryBack from '../SectionHistoryBack';
 import HealthDetail from './HealthDetail';
 import HealthEntrySheet from './HealthEntrySheet';
 import HealthFirst from './HealthFirst';
@@ -139,6 +140,16 @@ const Health = () => {
   const handleBack = useLastCallback(() => setDetailKind(undefined));
   // «Первое открытие» на телефоне (доска `ZpHealthX`): стрелка шапки возвращает к чатам
   const handleLeave = useLastCallback(() => setParvaneSection('messenger'));
+
+  // Системное «назад» (жест Android): подробный экран → сводка → чаты, а не выход из приложения
+  const handleHistoryBack = useLastCallback(() => {
+    if (detailKind) {
+      setDetailKind(undefined);
+      return true;
+    }
+    setParvaneSection('messenger');
+    return false;
+  });
 
   const handleOpenBlocks = useLastCallback(() => {
     setParvaneSection('messenger');
@@ -357,6 +368,7 @@ const Health = () => {
       className={buildClassName(styles.root, hasSide && styles.rootWithSide)}
       data-health-status={status}
     >
+      {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
       {hasSide && (
         <HealthSideNav
           view={view!}

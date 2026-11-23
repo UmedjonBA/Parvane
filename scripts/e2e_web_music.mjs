@@ -436,12 +436,19 @@ try {
   await waitRows(page, queueSheet, ['t1', 't2', 't3']);
   await queueSheet.getByRole('button', { name: 'Close' }).click();
   await gone(queueSheet);
-  await full.getByRole('button', { name: 'Collapse player' }).click();
+  // Системное «назад» (жест Android) закрывает плеер и идёт по страницам, а не выходит из приложения
+  await page.waitForTimeout(400);
+  await page.goBack();
   await gone(full);
   console.log('OK: телефон — медиатека, исполнитель, альбом, мини-плеер, плеер и очередь шторкой');
-  await phone.locator('[data-music-back]').click();
-  await phone.locator('[data-music-back]').click();
+  await page.waitForTimeout(400);
+  await page.goBack();
+  await visible(artistPage.getByRole('heading', { name: 'Тихий порт' }));
+  await page.waitForTimeout(400);
+  await page.goBack();
   await visible(ribbon);
+  await visible(phone.locator('[data-music-library]'));
+  console.log('OK: системное «назад» — плеер, альбом, исполнитель, медиатека');
   // «Поиск»: поле, сервер, чипы, каталог
   await tab('search').click();
   const phoneField = phone.locator('[data-music-search]').getByRole('searchbox');
@@ -466,6 +473,12 @@ try {
   await phoneField.fill('');
   await tab('home').click();
   console.log('OK: телефон — вкладки, поиск по серверу и каталогу, чипы');
+  // «Назад» с главной «Музыки» — в чаты, приложение остаётся открытым
+  await page.waitForTimeout(400);
+  await page.goBack();
+  await page.locator('#ParvaneMusic [data-music-quick]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await visible(page.locator('#LeftColumn .chat-list'));
+  console.log('OK: системное «назад» с главной «Музыки» — в чаты');
 
   await ribbon.getByRole('button', { name: 'Chats' }).click();
   await visible(mini);

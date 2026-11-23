@@ -8,7 +8,7 @@ import type { MusicTab, MusicView } from './musicView';
 
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
-import { getParvaneSection, setParvaneNavCovered } from '../../../util/parvaneSection';
+import { getParvaneSection, setParvaneNavCovered, setParvaneSection } from '../../../util/parvaneSection';
 import { refreshFetchJobs } from './fetch/musicFetch';
 import { refreshOwnAdded } from './musicAdded';
 import { startOfflinePlaylistSync } from './musicOfflineSync';
@@ -33,6 +33,7 @@ import ParvaneIcon from '../../main/ParvaneIcon';
 import PvEmpty from '../notes/PvEmpty';
 import PvLoading from '../notes/PvLoading';
 import PvOfflineBar from '../notes/PvOfflineBar';
+import SectionHistoryBack from '../SectionHistoryBack';
 import MusicUploadsView from './fetch/MusicUploadsView';
 import MusicAddedView from './MusicAddedView';
 import MusicAlbumPage from './MusicAlbumPage';
@@ -144,6 +145,16 @@ const Music = () => {
   // Escape на странице — «назад» (общая очередь клавиш; модуль скрыт — слушателя нет)
   const hasBack = isShown && (isPage || (!isPhone && getIsMusicPage(view) && view.kind !== 'search'));
   useLayoutEffect(() => (hasBack ? captureEscKeyListener(goBackMusic) : undefined), [hasBack]);
+
+  // Системное «назад» (жест Android): страница → прошлая страница → чаты, а не выход из приложения
+  const handleHistoryBack = useLastCallback(() => {
+    if (hasBack) {
+      goBackMusic();
+      return true;
+    }
+    setParvaneSection('messenger');
+    return false;
+  });
 
   const isPlaylistsShown = isShown && PLAYLIST_VIEWS.has(view.kind);
   useEffect(() => {
@@ -387,6 +398,7 @@ const Music = () => {
       data-music-enabled={info ? String(info.isEnabled) : 'loading'}
       data-music-layout={isPhone ? 'phone' : 'desk'}
     >
+      {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
       {!isOnline && <PvOfflineBar text={lang('PvOfflineMusic')} onRetry={handleRetry} />}
       {renderBody()}
       <MusicSendDialog track={sentTrack} catalog={catalogSend} onClose={handleCloseSend} />

@@ -17,6 +17,7 @@ import useMusicData from './useMusicData';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useDerivedState from '../../../hooks/useDerivedState';
+import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
@@ -79,6 +80,8 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
 
   // Внутри «Музыки» окна нет — Escape закрывает плеер сам
   useLayoutEffect(() => (isInline ? captureEscKeyListener(closeMusicPlayer) : undefined), [isInline]);
+  // Системное «назад» (жест Android) закрывает плеер, а не приложение
+  useHistoryBack({ isActive: true, onBack: closeMusicPlayer });
 
   // Телефон, прокрутка к карточкам (доска `MusicPlayer-03`): вверху — обложка, название и пауза вместо «Играет из»
   const [isCompact, setIsCompact] = useState(false);
