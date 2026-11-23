@@ -3,7 +3,7 @@ import {
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../global';
 
-import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicCatalogTrack, MusicTrack } from '../../../api/parvane/musicApi';
 import type { GlobalState } from '../../../global/types';
 import type { LangFn } from '../../../util/localization';
 import type { ParvaneModuleId } from '../../../util/parvaneModules';
@@ -26,9 +26,10 @@ import { formatFileSize } from '../../../util/textFormat';
 import { getActiveModule, MODULE_TITLE_KEYS } from '../../main/parvaneModuleNav';
 import { requestCloudOpen } from '../cloud/cloudOpenRequest';
 import { getCloudData, getCloudStatus, loadCloud } from '../cloud/cloudStore';
+import { startFetch } from '../music/fetch/musicFetch';
 import { formatTrackTime } from '../music/musicFormat';
 import { getMusicInfo, playTracks } from '../music/musicPlayer';
-import { requestMusicAdd, setMusicQuery } from '../music/musicView';
+import { goToMusicView, requestMusicAdd, setMusicQuery } from '../music/musicView';
 import { formatNoteEdited } from '../notes/notesList';
 import { folderColor } from '../notes/notesLook';
 import {
@@ -164,7 +165,7 @@ function readActiveModule(): ParvaneModuleId {
 // клавиш и Tab «только в этом модуле»; телефон — экран во весь рост: «Назад», поле, «Очистить», чипы модулей
 const ParvanePalette = () => {
   const {
-    openChat, openLeftColumnContent, setGlobalSearchQuery,
+    openChat, openLeftColumnContent, setGlobalSearchQuery, showNotification,
   } = getActions();
 
   const lang = useLang();
@@ -331,7 +332,7 @@ const ParvanePalette = () => {
     return () => window.clearTimeout(timeout);
   }, [query, searchQuery]);
 
-  const { tracks, isMusicReady } = usePaletteMusic(isOpen ? searchQuery : '', isMusicOn);
+  const { tracks, catalogTracks, isMusicReady } = usePaletteMusic(isOpen ? searchQuery : '', isMusicOn);
 
   const handleNewNote = useLastCallback((title: string) => openNote(title));
   const handleFetchTrack = useLastCallback((text: string) => {
@@ -342,18 +343,47 @@ const ParvanePalette = () => {
     playTracks([track], 0, { source: { kind: 'search' } });
   });
 
-  // Треки уже подобраны сервером: показываются как есть, без сверки названия с запросом
-  const musicEntries = useMemo((): PaletteEntry[] => tracks.map((track) => ({
-    key: `music:${track.id}`,
-    group: 'music',
-    module: 'music',
-    title: track.title,
-    isAlways: true,
-    icon: 'music',
-    tone: 'var(--pv-accent)',
-    sub: `${track.artist} · ${formatTrackTime(track.durationSecs)}`,
-    run: () => handlePlayTrack(track),
-  })), [tracks, handlePlayTrack]);
+  // Трек каталога (доска `MusicChat-03`): выбор — «Добавить на сервер»
+  const handleAddCatalog = useLastCallback(async (track: MusicCatalogTrack) => {
+    const result = await startFetch(track);
+    const key = result === 'ok' ? 'MusicFetchStarted'
+      : result === 'limit' ? 'MusicFetchLimit' : 'MusicFetchFailedShort';
+    showNotification({ message: lang(key) });
+  });
+
+  // Треки уже подобраны сервером: показываются как есть, без сверки названия с запросом. Сервер — «исполнитель ·
+  // на сервере», каталог — «исполнитель · каталог» (доска `MusicChat-03`)
+  const musicEntries = useMemo((): PaletteEntry[] => [
+    ...tracks.map((track): PaletteEntry => ({
+      key: `music:${track.id}`,
+      group: 'music',
+      module: 'music',
+      title: track.title,
+      isAlways: true,
+      icon: 'music',
+      tone: 'var(--pv-accent)',
+      sub: `${track.artist} · ${lang('MusicOnServerShort')}`,
+      meta: formatTrackTime(track.durationSecs),
+      run: () => handlePlayTrack(track),
+    })),
+    ...catalogTracks.map((track): PaletteEntry => ({
+      key: `catalog:${track.ref}`,
+      group: 'music',
+      module: 'music',
+      title: track.title,
+      isAlways: true,
+      icon: 'cloudAdd',
+      tone: 'var(--pv-muted)',
+      sub: `${track.artist} · ${lang('MusicInCatalogShort')}`,
+      run: () => void handleAddCatalog(track),
+    })),
+  ], [tracks, catalogTracks, handlePlayTrack, handleAddCatalog, lang]);
+  // «В поиске музыки»: тот же запрос — в поиске «Музыки»
+  const handleOpenMusicSearch = useLastCallback(() => {
+    closePalette();
+    setMusicQuery(searchQuery.trim());
+    goToMusicView({ kind: 'search' });
+  });
 
   // Строки с запросом (доска `DeskOverlays`): «Новая заметка «…»» (Ctrl+Enter), «Найти и скачать трек «…»»,
   // «Искать «…» в чатах и сообщениях» — при любом непустом запросе, в конце команд
@@ -609,7 +639,22 @@ const ParvanePalette = () => {
           )}
           {sections.map(({ group, results }) => (
             <div key={group} className={styles.group} role="group" data-palette-group={group}>
-              <h3 className={styles.caption}>{lang(GROUP_KEYS[group])}</h3>
+              {/* Телефон (доска `MusicChat-03`): «МУЗЫКА · 2» и у музыки — «В поиске музыки» */}
+              <div className={styles.captionRow}>
+                <h3 className={styles.caption}>
+                  {isMobile ? `${lang(GROUP_KEYS[group])} · ${results.length}` : lang(GROUP_KEYS[group])}
+                </h3>
+                {group === 'music' && (
+                  <button
+                    type="button"
+                    className={styles.captionLink}
+                    data-palette-music-search
+                    onClick={handleOpenMusicSearch}
+                  >
+                    {lang('MusicInMusicSearch')}
+                  </button>
+                )}
+              </div>
               {results.map(({ item, ranges, snippet }) => {
                 const index = rowIndex++;
                 const isSelected = index === selectedIndex;

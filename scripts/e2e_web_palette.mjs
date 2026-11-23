@@ -303,7 +303,14 @@ try {
   await openByKeys();
   await input.fill('harbor');
   await visible(found('music', 'Harbor Lights'), 'трек «Музыки» в выдаче');
-  assert.match(await found('music', 'Harbor Lights').innerText(), /Тихий порт · 0:30/, 'у трека нет исполнителя и длительности');
+  assert.match(await found('music', 'Harbor Lights').innerText(), /Тихий порт · on the server/, 'у трека нет исполнителя');
+  assert.match(await found('music', 'Harbor Lights').innerText(), /0:30/, 'у трека нет длительности');
+  // Раздел «Музыка» (доска `MusicChat-03`): трек каталога, которого нет на сервере
+  await input.fill('автобус');
+  await visible(group('music').locator('[data-palette-item^="catalog:"]').filter({ hasText: 'Ночной автобус' }),
+    'трек каталога в разделе «Музыка»');
+  await input.fill('harbor');
+  await visible(found('music', 'Harbor Lights'), 'трек «Музыки» в выдаче');
   const fetchRow = list.locator('[data-palette-item="fetch:query"]');
   await visible(fetchRow, 'команда «Найти и скачать трек «…»»');
   await fetchRow.click();

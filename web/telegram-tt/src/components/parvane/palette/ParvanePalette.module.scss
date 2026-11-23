@@ -138,6 +138,28 @@
 }
 
 // Подпись группы — прописными, как `.sec` макета (доска `DeskOverlays`)
+.captionRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+// «В поиске музыки» (доска `MusicChat-03`)
+.captionLink {
+  cursor: pointer;
+
+  margin-inline-end: 1rem;
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+}
+
 .caption {
   margin: 0;
   padding: 0.625rem 1rem 0.25rem;
