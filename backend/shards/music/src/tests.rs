@@ -362,6 +362,14 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
                 None => reply(503, json!({})),
             }
         }
+        // Дозаполнение тегов: «Песня t2» в каталоге есть, прочее — нет; webm переезжает в opus
+        "/retag" => {
+            let body = req.into_body().collect().await.unwrap().to_bytes();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let path = v["path"].as_str().unwrap().to_string();
+            let matched = v["tags"]["title"] == "Песня t2";
+            reply(200, json!({"path": if matched { path.replace(".webm", ".opus") } else { path }, "matched": matched}))
+        }
         "/download" => {
             let body = req.into_body().collect().await.unwrap().to_bytes();
             let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -498,6 +506,30 @@ async fn fetch_takes_confident_match_and_tracks_who_added_it() {
     del("alice@local").await.unwrap();
     assert_eq!(files("alice@local"), 0);
     assert_eq!(del("alice@local").await.unwrap_err(), ErrorCode::NotFound);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn backfill_retags_downloads_but_not_uploads() {
+    let (_, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let fetch = ctx.fetch.as_ref().unwrap();
+    let sub = ctx.sub.as_ref().unwrap();
+    let row = |path: &str, title: &str, sha: &str| crate::fetch::store::Added {
+        path: path.into(), adder: "alice@local".into(), bytes: 1, added_ms: 1, track_id: "t9".into(),
+        artist: "Группа".into(), title: title.into(), duration_secs: 215, sha256: sha.into(),
+    };
+    for r in [row("a/one.webm", "Песня t2", ""), row("a/two.mp3", "Неизвестная", ""), row("a/own.mp3", "Песня t2", "ab")] {
+        crate::fetch::store::insert(&fetch.pool, &r).await.unwrap();
+    }
+    fetch.backfill_tags(sub).await;
+    let rows: Vec<(String, i64, String)> = sqlx::query_as("SELECT path, tagged, track_id FROM added_tracks ORDER BY path").fetch_all(&fetch.pool).await.unwrap();
+    assert_eq!(rows, vec![
+        ("a/one.opus".to_string(), 1, String::new()),
+        ("a/own.mp3".to_string(), 0, "t9".to_string()),
+        ("a/two.mp3".to_string(), 2, "t9".to_string()),
+    ], "скачанное — переписано (переехало — номер заново), не нашлось — отмечено, своё — не тронуто");
+    // Второй проход ничего не трогает
+    fetch.backfill_tags(sub).await;
     let _ = std::fs::remove_dir_all(dir);
 }
 

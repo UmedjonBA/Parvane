@@ -30,6 +30,8 @@ use tracing::{error, info, warn};
 
 /// Сколько ждать музыкальный сервер при старте: 100 попыток раз в 3 с — 5 минут
 const NAVIDROME_WAIT_ATTEMPTS: u32 = 100;
+const BACKFILL_FIRST_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+const BACKFILL_EVERY: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
 const NAVIDROME_WAIT_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub(crate) struct Ctx {
@@ -159,6 +161,18 @@ async fn main() -> Result<()> {
         shared::open(&std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./music.db".to_string())).await;
     }
     let ctx = Arc::new(Ctx { sub, fetch, key, public_base });
+
+    // Дозаполнение тегов и обложек у скачанного раньше: через минуту после старта (музыкальный сервер и сервис
+    // скачивания поднимаются следом) и потом раз в шесть часов — на случай, если сервис был недоступен
+    if let (Some(sub), Some(fetch)) = (ctx.sub.clone(), ctx.fetch.clone()) {
+        tokio::spawn(async move {
+            tokio::time::sleep(BACKFILL_FIRST_DELAY).await;
+            loop {
+                fetch.backfill_tags(&sub).await;
+                tokio::time::sleep(BACKFILL_EVERY).await;
+            }
+        });
+    }
 
     // Свежий музыкальный сервер делает администратором первого пришедшего — пусть это будет служебный пользователь
     // (иначе `startScan` после «Найти и скачать» отклоняется). Шард обычно стартует раньше музыкального сервера:

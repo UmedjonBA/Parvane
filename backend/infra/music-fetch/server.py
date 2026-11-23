@@ -301,6 +301,26 @@ def retag_ogg(path, full, cover):
     return target
 
 
+def retag_existing(relative, tags):
+    """Дозаполнить теги и обложку уже скачанного файла: ссылки каталога нет — найти трек в каталоге по исполнителю и
+    названию (совпадение названия и исполнителя без учёта регистра). Ответ — новый путь (Opus из WebM переезжает) и
+    нашёлся ли трек в каталоге."""
+    path = safe_dest(relative)
+    if not os.path.isfile(path):
+        raise ValueError("нет файла")
+    full = {k: str(v) for k, v in tags.items() if isinstance(v, (str, int))}
+    if not str(full.get("ref") or "").startswith("dz:"):
+        artist, title = full.get("artist", "").strip(), full.get("title", "").strip()
+        found = catalog.references(f"{artist} {title}", 10) if artist and title else []
+        match = next((t for t in found if t["title"].casefold() == title.casefold()
+                      and artist.casefold() in t["artist"].casefold()), None)
+        if match is None:
+            return {"path": relative, "matched": False}
+        full["ref"] = match["ref"]
+    new_path = retag(path, full)
+    return {"path": os.path.relpath(new_path, LIBRARY_DIR), "matched": True}
+
+
 def fetch_cover(url, near):
     """Обложка из каталога во временный файл рядом с треком; не вышло — `None`."""
     if not url or not url.startswith("https://"):
@@ -372,10 +392,13 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
-        if self.path not in ("/download", "/cancel"):
+        if self.path not in ("/download", "/cancel", "/retag"):
             self.reply(404, {"error": "not found"})
             return
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0") or 0)) or b"{}")
+        if self.path == "/retag":
+            self.handle_request(lambda: retag_existing(str(body["path"]), body.get("tags") or {}))
+            return
         if self.path == "/cancel":
             with PROGRESS_LOCK:
                 CANCELLED.add(str(body.get("dest", "")))

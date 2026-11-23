@@ -134,6 +134,13 @@ impl FetchService {
         Ok(v.get("tracks").and_then(Value::as_array).cloned().unwrap_or_default())
     }
 
+    /// Дозаполнить теги и обложку уже скачанного файла: новый путь (Opus из WebM переезжает) и нашёлся ли трек.
+    pub async fn retag(&self, path: &str, artist: &str, title: &str) -> Result<(String, bool), ServiceError> {
+        let rq = self.http.post(format!("{}/retag", self.base)).json(&json!({"path": path, "tags": {"artist": artist, "title": title}}));
+        let v = self.json(rq, DOWNLOAD_TIMEOUT).await?;
+        Ok((clip(&v, "path"), v.get("matched").and_then(Value::as_bool).unwrap_or(false)))
+    }
+
     /// Маршрут каталога сервиса (`/catalog/search`, `/catalog/artist`, …) — ответ как есть.
     pub async fn catalog_call(&self, path: &str, params: &[(&str, String)]) -> Result<Value, ServiceError> {
         let rq = self.http.get(format!("{}/catalog/{path}", self.base)).query(params);

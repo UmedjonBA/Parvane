@@ -33,6 +33,8 @@ const CATALOG_MAX: u32 = 10;
 /// Сколько эталонов каталога смотрим, выбирая эталон по строке запроса.
 const REFERENCE_CATALOG: u32 = 5;
 const CANDIDATES_PER_SOURCE: u32 = 5;
+/// Дозаполнение тегов — пачками по столько записей.
+const BACKFILL_BATCH: u32 = 20;
 /// Сколько уверенных файлов одного источника пробовать, если скачать не вышло (у SoundCloud официальные загрузки
 /// лейблов под DRM — следующий в списке обычно перезалив, который скачивается)
 const DOWNLOAD_TRIES: usize = 3;
@@ -721,6 +723,8 @@ impl Fetch {
             self.fail(id, pb::FetchFailure::Library);
             return Ok(());
         }
+        // Теги и обложку сервис уже переписал при скачивании
+        let _ = store::mark_tagged(&self.pool, &file.path, &file.path, 1).await;
         info!("музыка: трек скачан ({} байт, источник {})", file.bytes, candidate.source);
         self.finish_in_library(sub, id, &user, &file.path, &query).await;
         Ok(())
@@ -783,6 +787,45 @@ impl Fetch {
             if let Err(e) = tokio::fs::remove_file(&path).await {
                 warn!("музыка: файл не удалён: {e}");
             }
+        }
+    }
+
+    /// Дозаполнение: скачанное до того, как сервис стал переписывать теги по каталогу, — теги и обложка из каталога
+    /// по исполнителю и названию. Пачками; изменилось хоть что-то — музыкальный сервер пересканирует библиотеку.
+    pub async fn backfill_tags(&self, sub: &Subsonic) {
+        let Ok(service) = self.service() else { return };
+        let mut changed = 0;
+        loop {
+            let rows = match store::untagged(&self.pool, BACKFILL_BATCH).await {
+                Ok(rows) if !rows.is_empty() => rows,
+                Ok(_) => break,
+                Err(e) => {
+                    error!("музыка: дозаполнение тегов: {e}");
+                    return;
+                }
+            };
+            for row in rows {
+                let outcome = match service.retag(&row.path, &row.artist, &row.title).await {
+                    Ok((new_path, true)) if !new_path.is_empty() => (new_path, 1),
+                    Ok(_) => (row.path.clone(), 2),
+                    Err(e) => {
+                        // Сервис недоступен — в другой раз
+                        warn!("музыка: дозаполнение тегов отложено: {e:?}");
+                        return;
+                    }
+                };
+                if outcome.1 == 1 {
+                    changed += 1;
+                }
+                if let Err(e) = store::mark_tagged(&self.pool, &row.path, &outcome.0, outcome.1).await {
+                    error!("музыка: дозаполнение тегов не записано: {e}");
+                    return;
+                }
+            }
+        }
+        if changed > 0 {
+            let _ = sub.call(SERVICE_USER, "startScan", &[]).await;
+            info!("музыка: теги и обложки дозаполнены у {changed} треков");
         }
     }
 

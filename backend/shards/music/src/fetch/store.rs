@@ -65,6 +65,27 @@ pub async fn by_track(pool: &SqlitePool, track_id: &str) -> sqlx::Result<Option<
     sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE track_id = ?").bind(track_id).fetch_optional(pool).await
 }
 
+/// Скачанное, чьи теги ещё не переписаны по каталогу (свои загруженные файлы не в счёт).
+pub async fn untagged(pool: &SqlitePool, limit: u32) -> sqlx::Result<Vec<Added>> {
+    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE tagged = 0 AND sha256 = '' ORDER BY added_ms LIMIT ?")
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+}
+
+/// Отметить, что теги переписаны (`tagged`: 1 — да, 2 — в каталоге не нашёлся). Файл переехал (Opus из WebM) —
+/// новый путь, номер трека узнается заново.
+pub async fn mark_tagged(pool: &SqlitePool, path: &str, new_path: &str, tagged: i64) -> sqlx::Result<()> {
+    sqlx::query("UPDATE added_tracks SET tagged = ?, track_id = CASE WHEN path = ? THEN track_id ELSE '' END, path = ? WHERE path = ?")
+        .bind(tagged)
+        .bind(new_path)
+        .bind(new_path)
+        .bind(path)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
 pub async fn delete(pool: &SqlitePool, path: &str) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM added_tracks WHERE path = ?").bind(path).execute(pool).await.map(|_| ())
 }
