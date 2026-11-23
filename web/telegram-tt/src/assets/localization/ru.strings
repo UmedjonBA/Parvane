@@ -1668,6 +1668,8 @@
 "MusicSourceYoutube" = "YouTube";
 "MusicSourceReupload" = "YouTube, перезалив";
 "MusicSourceSoundcloud" = "SoundCloud";
+"MusicSourceHitmoz" = "hitmoz";
+"MusicSourceHitmos" = "hitmos.fm";
 "MusicHome" = "Главная";
 "MusicStarred" = "Любимое";
 "MusicArtists" = "Исполнители";

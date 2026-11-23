@@ -461,7 +461,7 @@ async fn fetch_takes_confident_match_and_tracks_who_added_it() {
     let done = settled(&ctx, "alice@local", &job.job_id).await;
     assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
     assert_eq!(done.track_id, "t2");
-    assert_eq!(fake.asked_sources.lock().unwrap()[..], ["soundcloud"], "русский трек: сначала SoundCloud; уверенное совпадение заканчивает поиск");
+    assert_eq!(fake.asked_sources.lock().unwrap()[..], ["hitmoz", "hitmos_fm", "soundcloud"], "русский трек: сайты с MP3, затем SoundCloud; уверенное совпадение заканчивает поиск");
     // Теги файла — по эталону, а не те, что у перезаливщика
     let tags = fake.download_tags.lock().unwrap().clone();
     assert_eq!((tags[0]["artist"].as_str(), tags[0]["title"].as_str()), (Some("Группа"), Some("Песня t2")), "{tags:?}");
@@ -501,7 +501,7 @@ async fn fetch_skips_files_the_source_will_not_give() {
     let job = start(&ctx, "alice@local", "Песня t2").await.unwrap();
     let done = settled(&ctx, "alice@local", &job.job_id).await;
     assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
-    assert_eq!(fake.asked_sources.lock().unwrap()[..], ["soundcloud", "youtube_reupload", "youtube"]);
+    assert_eq!(fake.asked_sources.lock().unwrap()[..], ["hitmoz", "hitmos_fm", "soundcloud", "youtube_reupload", "youtube"]);
     let _ = std::fs::remove_dir_all(dir);
 
     // Поиск в SoundCloud сломался — задача не закрывается, ищет в следующем источнике

@@ -31,6 +31,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import yt_dlp
 
+import sites
+
 LIBRARY_DIR = os.path.realpath(os.environ.get("MUSIC_FETCH_LIBRARY_DIR", "/music"))
 COOLDOWN_SECS = int(os.environ.get("MUSIC_FETCH_COOLDOWN_SECS", "900"))
 PROXY = os.environ.get("MUSIC_FETCH_PROXY") or None
@@ -50,6 +52,8 @@ SOURCES = {
     "youtube_reupload": ("ytsearch", " без цензуры"),
     "soundcloud": ("scsearch", ""),
 }
+# Источники со своим сайтом (sites.py): MP3 прямой ссылкой, без yt-dlp
+SITE_SOURCES = ("hitmoz", "hitmos_fm")
 # Слова отказа источника («подтвердите, что вы не бот», лимит запросов): после них источник отдыхает
 REFUSALS = ("sign in to confirm", "not a bot", "429", "too many requests", "rate limit")
 
@@ -135,6 +139,8 @@ def to_tracks(items, limit):
 
 
 def candidates(source, artist, title, limit):
+    if source in SITE_SOURCES:
+        return {"candidates": guarded(source, lambda: sites.search(source, f"{artist} {title}", limit))}
     prefix, suffix = SOURCES[source]
     request = f"{prefix}{limit}:{artist} {title}{suffix}"
 
@@ -200,6 +206,10 @@ def download(source, item_id, dest, tags=None):
     })
 
     def fetch():
+        if source in SITE_SOURCES:
+            path = sites.fetch_file(source, item_id, target + ".mp3", lambda done, total: hook(
+                {"downloaded_bytes": done, "total_bytes": total}))
+            return {"duration": probe_duration(path)}, path
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(item_id, download=True)
             return info, ydl.prepare_filename(info)
@@ -217,6 +227,16 @@ def download(source, item_id, dest, tags=None):
         "bytes": os.path.getsize(path),
         "duration": int(info.get("duration") or 0),
     }
+
+
+def probe_duration(path):
+    """Длительность файла, с (0 — не узнать)."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                             check=True, timeout=30, capture_output=True, text=True).stdout
+        return int(float(out.strip() or 0))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
 
 
 def retag(path, tags):

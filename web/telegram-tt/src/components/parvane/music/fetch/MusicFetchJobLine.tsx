@@ -25,6 +25,8 @@ const SOURCE_KEYS = {
   youtube: 'MusicSourceYoutube',
   youtube_reupload: 'MusicSourceReupload',
   soundcloud: 'MusicSourceSoundcloud',
+  hitmoz: 'MusicSourceHitmoz',
+  hitmos_fm: 'MusicSourceHitmos',
 } as const;
 const DOT_CLASSES = {
   queued: styles.dotActive,

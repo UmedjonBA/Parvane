@@ -1924,6 +1924,8 @@
 "MusicSourceYoutube" = "YouTube";
 "MusicSourceReupload" = "YouTube, re-upload";
 "MusicSourceSoundcloud" = "SoundCloud";
+"MusicSourceHitmoz" = "hitmoz";
+"MusicSourceHitmos" = "hitmos.fm";
 "MusicHome" = "Home";
 "MusicStarred" = "Favorites";
 "MusicArtists" = "Artists";

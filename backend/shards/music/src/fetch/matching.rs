@@ -74,8 +74,10 @@ impl Default for Rules {
             original_before_day: DAY_2026_03_01,
             uploaded_before_day: HashMap::from([("soundcloud".to_string(), DAY_2026_05_01)]),
             reject_words: words.iter().map(|w| w.to_string()).collect(),
-            sources_ru: ["soundcloud", "youtube_reupload", "youtube"].iter().map(|s| s.to_string()).collect(),
-            sources_default: ["youtube", "soundcloud"].iter().map(|s| s.to_string()).collect(),
+            // Сайты с MP3 прямой ссылкой (hitmoz, hitmos.fm) — первыми: без DRM и рекламы, открываются там, где YouTube и
+            // SoundCloud закрыты; официальный YouTube русских треков — последним (копии правят по закону 2026 года)
+            sources_ru: ["hitmoz", "hitmos_fm", "soundcloud", "youtube_reupload", "youtube"].iter().map(|s| s.to_string()).collect(),
+            sources_default: ["hitmoz", "youtube", "soundcloud"].iter().map(|s| s.to_string()).collect(),
         }
     }
 }
@@ -518,8 +520,8 @@ mod tests {
     #[test]
     fn source_order_and_transliteration() {
         let rules = Rules::default();
-        assert_eq!(source_order(&query("Кино", "Пачка", 0, None), &rules)[0], "soundcloud", "у русской музыки официальный YouTube последний");
-        assert_eq!(source_order(&query("Lampa", "Night Bus", 0, None), &rules)[0], "youtube");
+        assert_eq!(source_order(&query("Кино", "Пачка", 0, None), &rules)[..], ["hitmoz", "hitmos_fm", "soundcloud", "youtube_reupload", "youtube"], "у русской музыки официальный YouTube последний");
+        assert_eq!(source_order(&query("Lampa", "Night Bus", 0, None), &rules)[..2], ["hitmoz", "youtube"]);
         let q = query("Кино", "Звезда", 0, None);
         let ranked = rank(&q, &[cand("lat", "youtube", "Kino - Zvezda", "Kino", 0, None)], &rules);
         assert_eq!(ids(&ranked), ["lat"], "латиница и кириллица сравниваются как одно");

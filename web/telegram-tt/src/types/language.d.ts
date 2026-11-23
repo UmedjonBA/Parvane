@@ -1390,6 +1390,8 @@ export interface LangPair {
   'MusicSourceYoutube': undefined;
   'MusicSourceReupload': undefined;
   'MusicSourceSoundcloud': undefined;
+  'MusicSourceHitmoz': undefined;
+  'MusicSourceHitmos': undefined;
   'MusicHome': undefined;
   'MusicStarred': undefined;
   'MusicArtists': undefined;
