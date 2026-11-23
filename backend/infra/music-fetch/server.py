@@ -71,7 +71,8 @@ REFUSALS = ("sign in to confirm", "not a bot", "429", "too many requests", "rate
 # Источник → момент, до которого его не трогаем
 cooldown_until = {}
 # Одновременно источнику — один запрос: быстрые серии запросов и вызывают отказы
-source_locks = {name: threading.Lock() for name in SOURCES}
+# Замок — у каждого источника, и у сайтов (hitmoz, hitmos.fm): без него запрос к ним падал «bad request»
+source_locks = {name: threading.Lock() for name in (*SOURCES, *SITE_SOURCES)}
 
 
 class SourceRefused(Exception):
