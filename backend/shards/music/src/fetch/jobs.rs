@@ -69,6 +69,8 @@ pub struct Fetch {
     /// Сколько задач скачивания идёт разом.
     pub parallel: usize,
     slots: Arc<Semaphore>,
+    /// Слот освободился либо очередь переставлена — ждущие перепроверяют, чья очередь.
+    slot_freed: Arc<tokio::sync::Notify>,
     /// Очередь сервера по порядку прихода: id задач, ждущих места.
     waiting: Mutex<Vec<String>>,
     jobs: Mutex<HashMap<String, Job>>,
@@ -106,6 +108,18 @@ pub(crate) struct Job {
     pub existing: bool,
     /// Файл уже записан в «добавленные» (суточный расход его учёл), задача ждёт сканирования библиотеки.
     pub recorded: bool,
+}
+
+/// Занятый слот скачивания: освобождаясь, будит ждущих.
+pub(crate) struct SlotGuard {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    freed: Arc<tokio::sync::Notify>,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        self.freed.notify_waiters();
+    }
 }
 
 fn day_text(day: Option<i64>) -> String {
@@ -279,6 +293,7 @@ impl Fetch {
             admins,
             parallel: parallel.max(1),
             slots: Arc::new(Semaphore::new(parallel.max(1))),
+            slot_freed: Arc::new(tokio::sync::Notify::new()),
             waiting: Mutex::new(Vec::new()),
             jobs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
@@ -502,15 +517,56 @@ impl Fetch {
     }
 
     /// Место в очереди сервера: ждём своей очереди; `None` — задачу сняли.
-    async fn take_slot(&self, id: &str) -> Option<tokio::sync::OwnedSemaphorePermit> {
-        if let Ok(permit) = self.slots.clone().try_acquire_owned() {
-            return Some(permit);
+    /// Слот скачивания по порядку очереди `waiting` («Добавить первым» переставляет её). Задачу сняли — `None`.
+    async fn take_slot(&self, id: &str) -> Option<SlotGuard> {
+        let guard = |permit| SlotGuard { _permit: permit, freed: self.slot_freed.clone() };
+        if self.waiting().is_empty() {
+            if let Ok(permit) = self.slots.clone().try_acquire_owned() {
+                return Some(guard(permit));
+            }
         }
         self.update(id, |j| j.state = pb::FetchState::Queued);
         self.waiting().push(id.to_string());
-        let permit = self.slots.clone().acquire_owned().await.ok();
-        self.waiting().retain(|w| w != id);
-        permit.filter(|_| self.jobs().contains_key(id))
+        loop {
+            // Подписка до проверки: освобождение между проверкой и ожиданием не теряется
+            let freed = self.slot_freed.notified();
+            tokio::pin!(freed);
+            freed.as_mut().enable();
+            if !self.jobs().contains_key(id) {
+                self.waiting().retain(|w| w != id);
+                self.slot_freed.notify_waiters();
+                return None;
+            }
+            let is_first = self.waiting().first().is_some_and(|w| w == id);
+            if is_first {
+                if let Ok(permit) = self.slots.clone().try_acquire_owned() {
+                    self.waiting().retain(|w| w != id);
+                    // Следующий в очереди проверит свободный слот сам
+                    self.slot_freed.notify_waiters();
+                    return Some(guard(permit));
+                }
+            }
+            freed.await;
+        }
+    }
+
+    /// «Добавить первым» (доска `RpMusicA-07`): своя ждущая задача встаёт перед своими же ждущими — чужая очередь не
+    /// сдвигается. Не ждёт (уже качается либо закончена) — ничего не меняется.
+    pub async fn first(&self, address: &str, r: pb::FetchFirstRequest) -> Reply {
+        let job = self.job(&r.job_id).filter(|j| j.user == address).ok_or(ErrorCode::NotFound)?;
+        {
+            let jobs = self.jobs();
+            let mut waiting = self.waiting();
+            if let Some(from) = waiting.iter().position(|w| w == &job.id) {
+                let to = waiting.iter().position(|w| jobs.get(w).is_some_and(|j| j.user == address)).unwrap_or(from);
+                if to < from {
+                    let id = waiting.remove(from);
+                    waiting.insert(to, id);
+                }
+            }
+        }
+        self.slot_freed.notify_waiters();
+        Ok(pb::FetchFirstResponse { job: self.job_pb(&job.id) }.encode_to_vec())
     }
 
     async fn run(self: &Arc<Self>, sub: &Subsonic, id: &str) {
@@ -653,6 +709,7 @@ impl Fetch {
                 task.abort();
             }
             self.waiting().retain(|w| w != &job.id);
+            self.slot_freed.notify_waiters();
             if !job.dest.is_empty() {
                 if let Some(service) = &self.service {
                     if job.upload_name.is_empty() {
@@ -984,5 +1041,54 @@ impl Fetch {
         self.trash(sub, address, &row).await?;
         info!("музыка: добавленный трек — в корзине");
         Ok(pb::AddedDeleteResponse {}.encode_to_vec())
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    async fn fetch_with_one_slot() -> Arc<Fetch> {
+        let dir = std::env::temp_dir().join(format!("parvane-music-queue-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = store::open(dir.join("music.db").to_str().unwrap()).await.unwrap();
+        Arc::new(Fetch::new(None, pool, Default::default(), dir, 10, u64::MAX, u64::MAX, vec![], 1))
+    }
+
+    fn add_job(fetch: &Fetch, id: &str, user: &str) {
+        fetch.jobs().insert(id.to_string(), Job::new(id.to_string(), user, pb::FetchState::Queued));
+    }
+
+    /// «Добавить первым»: своя ждущая задача получает слот раньше своих же, чужая очередь не сдвигается.
+    #[tokio::test]
+    async fn first_moves_own_waiting_job_ahead_of_own_jobs_only() {
+        let fetch = fetch_with_one_slot().await;
+        for (id, user) in [("a", "alice@local"), ("b", "alice@local"), ("x", "bob@local"), ("c", "alice@local")] {
+            add_job(&fetch, id, user);
+        }
+        let held = fetch.take_slot("a").await.expect("первый слот свободен");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        for id in ["b", "x", "c"] {
+            let (waiter, tx) = (fetch.clone(), tx.clone());
+            tokio::spawn(async move {
+                let slot = waiter.take_slot(id).await;
+                tx.send(id).unwrap();
+                drop(slot);
+            });
+            // Порядок очереди — порядок постановки
+            while !fetch.waiting().iter().any(|w| w == id) {
+                tokio::task::yield_now().await;
+            }
+        }
+        assert_eq!(*fetch.waiting(), vec!["b", "x", "c"]);
+        let _ = fetch.first("alice@local", pb::FetchFirstRequest { job_id: "c".into() }).await.unwrap();
+        assert_eq!(*fetch.waiting(), vec!["c", "b", "x"], "c — перед своей b; чужой x остаётся позади b");
+        assert!(fetch.first("bob@local", pb::FetchFirstRequest { job_id: "c".into() }).await.is_err(), "чужую задачу не двигают");
+        drop(held);
+        let mut order = Vec::new();
+        for _ in 0..3 {
+            order.push(tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await.unwrap().unwrap());
+        }
+        assert_eq!(order, vec!["c", "b", "x"]);
     }
 }

@@ -665,8 +665,9 @@ export function createMusicApi(deps: Deps) {
     },
 
     /** Скачать трек по эталону. Отказ — кодом протокола: `ERROR_CODE_LIMIT` (лимит), `ERROR_CODE_DUPLICATE`. */
-    async parvaneMusicFetchStart({ track }: { track: MusicCatalogTrack }) {
-      const reply = await deps.call('music.fetch.start', { track: fromCatalogTrack(track) });
+    async parvaneMusicFetchStart({ track, isStar }: { track: MusicCatalogTrack; isStar?: boolean }) {
+      // `star` — готовый трек сервер сам кладёт в «Любимое» добавившего
+      const reply = await deps.call('music.fetch.start', { track: fromCatalogTrack(track), star: isStar || undefined });
       return toFetchJob(field(reply, 'job') as Json);
     },
 
@@ -686,6 +687,13 @@ export function createMusicApi(deps: Deps) {
     async parvaneMusicFetchCancel({ jobId }: { jobId: string }) {
       await deps.call('music.fetch.cancel', { job_id: jobId });
       return true;
+    },
+
+    /** «Добавить первым»: своя ждущая задача — перед своими же ждущими. */
+    async parvaneMusicFetchFirst({ jobId }: { jobId: string }) {
+      const reply = await deps.call('music.fetch.first', { job_id: jobId });
+      const job = field(reply, 'job');
+      return job && typeof job === 'object' ? toFetchJob(job as Json) : undefined;
     },
 
     /** Свой файл: задача и ссылка для `PUT` байтов (без ссылки — такой файл уже в библиотеке). */

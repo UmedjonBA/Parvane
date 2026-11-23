@@ -57,6 +57,10 @@ service MusicService {
   rpc FetchCancel(FetchCancelRequest) returns (FetchCancelResponse) {
     option (parvane.core.v2.method) = {name: "music.fetch.cancel" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  // «Добавить первым»: своя ждущая задача — перед своими же ждущими.
+  rpc FetchFirst(FetchFirstRequest) returns (FetchFirstResponse) {
+    option (parvane.core.v2.method) = {name: "music.fetch.first" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
   rpc UploadStart(UploadStartRequest) returns (UploadStartResponse) {
     option (parvane.core.v2.method) = {name: "music.upload.start" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
@@ -507,6 +511,13 @@ message FetchCancelRequest {
   string job_id = 1 [(parvane.core.v2.max_len) = 32];
 }
 message FetchCancelResponse {}
+
+message FetchFirstRequest {
+  string job_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+message FetchFirstResponse {
+  FetchJob job = 1;
+}
 
 // ── spec 041: свои файлы ────────────────────────────────────────────────────
 

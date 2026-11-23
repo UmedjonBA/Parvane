@@ -4,16 +4,18 @@ import { getActions } from '../../../global';
 import type { MusicCatalogTrack, MusicFetchJob } from '../../../api/parvane/musicApi';
 import type { ParvaneIconName } from '../../main/ParvaneIcon';
 import type { CloudMenuAnchor } from '../cloud/CloudMenu';
+import type { FetchFollowUp } from './fetch/musicFetch';
 import type { MusicMenuAction } from './MusicMenu';
 
 import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import {
-  cancelFetchJob, catalogKey, getFetchJobs, getJobPercent, retryFetchJob, startFetch,
+  addFetchFollowUp, cancelFetchJob, catalogKey, getFetchJobs, getJobPercent, isJobActive, moveFetchFirst,
+  retryFetchJob, startFetch,
 } from './fetch/musicFetch';
 import { callMusic, catalogPreviewTrack, playTracks } from './musicPlayer';
 import { rememberMusicQuery } from './musicSearchHistory';
-import { openMusicView } from './musicView';
+import { openMusicView, setMusicQuery } from './musicView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
@@ -22,6 +24,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicCover from './MusicCover';
 import MusicMenu from './MusicMenu';
+import MusicPlaylistPicker from './MusicPlaylistPicker';
 
 import sheets from '../cloud/CloudSheets.module.scss';
 import kit from '../notes/PvKit.module.scss';
@@ -73,16 +76,40 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     setMenu({ anchor: window.innerWidth <= PHONE_MAX_WIDTH ? undefined : { x: e.clientX, y: e.clientY } });
   });
   const handleCloseMenu = useLastCallback(() => setMenu(undefined));
+  const [isPicking, setIsPicking] = useState(false);
   // Нажатие строки — отрывок 30 с (доски `RpMusicA-05`, `MusicPlayer-05`)
   const handlePreview = useLastCallback(() => {
     playTracks([catalogPreviewTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
   });
+  // После скачивания: «В Любимое», «В очередь», «В плейлист» (доски `RpMusicA-04/07`)
+  const handleFollowUp = useLastCallback(async (followUp: FetchFollowUp) => {
+    if (job && isJobActive(job)) {
+      addFetchFollowUp(job.jobId, followUp);
+      if (followUp.isStar) showNotification({ message: lang('MusicStarWhenAdded') });
+      return;
+    }
+    rememberMusicQuery();
+    const result = await startFetch(track, followUp);
+    if (result === 'limit') showNotification({ message: lang('MusicFetchLimit') });
+    else if (result === 'failed') showNotification({ message: lang('MusicFetchFailedShort') });
+  });
+  const handlePickPlaylists = useLastCallback((playlists: { id: string; isShared: boolean }[]) => {
+    void handleFollowUp({ playlists });
+  });
+  const handleClosePicker = useLastCallback(() => setIsPicking(false));
   const handlePick = useLastCallback((action: string) => {
     setMenu(undefined);
     if (action === 'add') void handleAdd();
     else if (action === 'preview') handlePreview();
+    else if (action === 'star') void handleFollowUp({ isStar: true });
+    else if (action === 'queue') void handleFollowUp({ isQueue: true });
+    else if (action === 'playlist') setIsPicking(true);
+    else if (action === 'first' && job) void moveFetchFirst(job.jobId);
     else if (action === 'cancel' && job) void cancelFetchJob(job.jobId);
-    else if (action === 'album' && track.albumRef) openMusicView({ kind: 'catalogAlbum', id: track.albumRef });
+    else if (action === 'artist') {
+      setMusicQuery(track.artist);
+      openMusicView({ kind: 'search' }, true);
+    } else if (action === 'album' && track.albumRef) openMusicView({ kind: 'catalogAlbum', id: track.albumRef });
     else if (action === 'dislike') {
       void callMusic('parvaneMusicDislike', { ref: track.ref, artist: track.artist, title: track.title })
         .then(() => showNotification({ message: lang('MusicDisliked') }));
@@ -93,15 +120,31 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
   });
 
   const icon = (name: ParvaneIconName) => <ParvaneIcon name={name} className={sheets.menuIcon} />;
-  const actions: MusicMenuAction[] = [
-    state === 'catalog' || state === 'failed'
-      ? { key: 'add', title: lang('MusicAddToServer'), glyph: icon('cloudAdd') }
-      : { key: 'cancel', title: lang('MusicFetchCancel'), glyph: icon('close'), isDanger: true },
-    ...(track.previewUrl ? [{ key: 'preview', title: lang('MusicListenPreview'), glyph: icon('play') }] : []),
-    ...(track.albumRef ? [{ key: 'album', title: lang('MusicGoToAlbum'), glyph: icon('disc') }] : []),
+  const isBusy = state === 'waiting' || state === 'adding' || state === 'processing';
+  // Добавляется (доска `RpMusicA-07`): «Слушать · В Любимое · В очередь», «Добавить первым», «Отменить»
+  const quick: MusicMenuAction[] = isBusy ? [
+    ...(track.previewUrl ? [{ key: 'preview', title: lang('MusicListen'), glyph: icon('play') }] : []),
+    { key: 'star', title: lang('MusicStarShort'), glyph: icon('heart') },
+    { key: 'queue', title: lang('MusicToQueue'), glyph: icon('list') },
+  ] : [
+    // Каталог (доска `RpMusicA-04`): «В Любимое · В плейлист · В очередь · Поделиться»
+    { key: 'star', title: lang('MusicStarShort'), glyph: icon('heart') },
+    { key: 'playlist', title: lang('MusicToPlaylist'), glyph: icon('plus') },
+    { key: 'queue', title: lang('MusicToQueue'), glyph: icon('list') },
     { key: 'share', title: lang('MusicShare'), glyph: icon('share') },
+  ];
+  const actions: MusicMenuAction[] = isBusy ? [
+    ...(state === 'waiting' ? [{ key: 'first', title: lang('MusicFetchFirst'), glyph: icon('chevronUp') }] : []),
+    { key: 'cancel', title: lang('MusicFetchCancelShort'), glyph: icon('close'), isDanger: true },
+  ] : [
+    { key: 'add', title: lang('MusicAddToServer'), glyph: icon('cloudAdd') },
+    ...(track.previewUrl ? [{ key: 'preview', title: lang('MusicListenPreview'), glyph: icon('play') }] : []),
+    { key: 'artist', title: lang('MusicGoToArtist'), glyph: icon('mic') },
+    ...(track.albumRef ? [{ key: 'album', title: lang('MusicGoToAlbum'), glyph: icon('disc') }] : []),
     { key: 'dislike', title: lang('MusicDislike'), glyph: icon('ban') },
   ];
+  const menuState = state === 'adding' && percent !== undefined
+    ? lang('MusicStateAddingPercent', { percent }) : lang(STATE_KEYS[state]);
   const subText = sub ?? track.artist;
 
   return (
@@ -185,7 +228,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
       {menu && (
         <MusicMenu
           title={track.title}
-          facts={[track.artist, lang(STATE_KEYS[state])].join(' · ')}
+          facts={[track.artist, menuState].join(' · ')}
           cover={(
             <MusicCover
               coverUrl={track.coverUrl}
@@ -194,10 +237,19 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
               className={styles.trackCover}
             />
           )}
+          quick={quick}
           actions={actions}
           anchor={menu.anchor}
           onPick={handlePick}
           onClose={handleCloseMenu}
+        />
+      )}
+      {isPicking && (
+        <MusicPlaylistPicker
+          tracks={[catalogPreviewTrack(track)]}
+          subtitle={lang('MusicFromCatalogNamed', { name: track.title })}
+          onPick={handlePickPlaylists}
+          onClose={handleClosePicker}
         />
       )}
     </li>

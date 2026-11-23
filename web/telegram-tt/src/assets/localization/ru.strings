@@ -1715,6 +1715,11 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicStarWhenAdded" = "Будет в «Любимом», когда добавится";
+"MusicFetchFirst" = "Добавить первым";
+"MusicFetchCancelShort" = "Отменить";
+"MusicStateAddingPercent" = "добавляется {percent}%";
+"MusicFromCatalogNamed" = "{name} · из каталога";
 "MusicToServer" = "На сервер";
 "MusicToArtist" = "К исполнителю";
 "MusicAboutFile" = "Об этом файле";

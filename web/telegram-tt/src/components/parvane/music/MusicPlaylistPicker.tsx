@@ -23,6 +23,10 @@ import styles from './MusicPlaylistPicker.module.scss';
 
 type OwnProps = {
   tracks: MusicTrack[];
+  // Подпись под заголовком вместо «название · исполнитель» (трек каталога: «… · из каталога»)
+  subtitle?: string;
+  // Трек ещё не на сервере: выбор отдаётся наружу, добавит его тот, кто скачивает (`fetch/musicFetch.ts`)
+  onPick?: (playlists: { id: string; isShared: boolean }[]) => void;
   onClose: NoneToVoidFunction;
 };
 
@@ -38,7 +42,9 @@ type Option = {
 
 // Parvane (макет «Музыки» 23 ноя, доска `MusicPlaylist-04`): «В плейлист…» — поиск по плейлистам, «Новый плейлист»,
 // свои и общие (где можно добавлять) с флажками, «Готово» добавляет в отмеченные. Где трек уже есть — «уже есть»
-const MusicPlaylistPicker = ({ tracks, onClose }: OwnProps) => {
+const MusicPlaylistPicker = ({
+  tracks, subtitle: subtitleText, onPick, onClose,
+}: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
   const playlists = useDerivedState(getPlaylists);
@@ -94,6 +100,11 @@ const MusicPlaylistPicker = ({ tracks, onClose }: OwnProps) => {
       onClose();
       return;
     }
+    if (onPick) {
+      onPick(chosen.map((option) => ({ id: option.id, isShared: option.isShared })));
+      onClose();
+      return;
+    }
     setIsSaving(true);
     const results = await Promise.all(chosen.map((option) => (option.isShared
       ? addTracksToShared(option.id, tracks.map(toTrackInput)).then((skipped) => skipped !== undefined)
@@ -107,9 +118,9 @@ const MusicPlaylistPicker = ({ tracks, onClose }: OwnProps) => {
     onClose();
   });
 
-  const subtitle = single
+  const subtitle = subtitleText || (single
     ? [single.artist ? `${single.title} · ${single.artist}` : single.title].join('')
-    : lang('MusicTracksCount', { count: tracks.length }, { pluralValue: tracks.length });
+    : lang('MusicTracksCount', { count: tracks.length }, { pluralValue: tracks.length }));
 
   return (
     <PvSheet isOpen title={lang('MusicPickerTitle')} subtitle={subtitle} onClose={onClose}>

@@ -548,11 +548,19 @@ try {
   console.log('OK: спорное совпадение скачано после выбора файла в «Загрузках на сервер»');
 
   // ── Лимит: три трека в сутки ──────────────────────────────────────────────
+  // Меню трека каталога (доска `RpMusicA-04`): «В Любимое» — скачать и сразу в «Любимое»
   const morning = await searchCatalog('утро', CATALOG_MORNING);
-  await morning.locator('[data-catalog-add]').click();
+  await morning.locator('[data-music-menu]').click();
+  const catalogMenu = page.getByRole('menu').first();
+  const catalogItems = await catalogMenu.getByRole('menuitem').evaluateAll((items) => items.map((item) => item.getAttribute('aria-label')));
+  assert.deepEqual(catalogItems.slice(0, 5), ['To favorites', 'Add to a playlist', 'Add to queue', 'Share', 'Add to the server'],
+    `меню трека каталога: ${catalogItems}`);
+  await catalogMenu.getByRole('menuitem', { name: 'To favorites', exact: true }).click();
   await visible(wide.locator('[data-music-tracks] [data-track]').filter({ hasText: 'Утро' }), STEP_TIMEOUT_MS * 2);
   await wide.locator('[data-music-desk-search]').fill('');
-  console.log('OK: три трека за сутки скачаны');
+  await wideNav('starred');
+  await visible(wide.locator('[data-music-view="starred"] [data-track]').filter({ hasText: 'Утро' }));
+  console.log('OK: три трека за сутки скачаны; «В Любимое» у трека каталога скачивает его в «Любимое»');
 
   // ── «Добавлено мной»: свои треки, расход, удаление в корзину ─────────────
   await wideNav('added');

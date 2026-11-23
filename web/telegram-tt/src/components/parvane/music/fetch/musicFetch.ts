@@ -9,7 +9,11 @@ import { ACCOUNT_WIPED_EVENT } from '../../../../util/parvaneEvents';
 import { createSignal } from '../../../../util/signals';
 import { buildNotifyTitle } from '../../../../util/systemNotify';
 import { MUSIC_LIBRARY_CHANGED_EVENT, refreshOwnAdded } from '../musicAdded';
-import { callMusic, loadMusicInfo } from '../musicPlayer';
+import {
+  addToQueue, callMusic, loadMusicInfo, setTrackStarred,
+} from '../musicPlayer';
+import { addTracksToPlaylist } from '../musicPlaylists';
+import { addTracksToShared, toTrackInput } from '../shared/musicShared';
 
 // Parvane (spec 039 этап B, spec 041): «Найти и скачать» и свои файлы — задачи пользователя на сервере («Загрузки на
 // сервер»). Что считать тем самым треком, решает сервер; здесь — опрос, пока есть идущие задачи (на любом экране),
@@ -110,6 +114,7 @@ function notifyFinished(jobs: MusicFetchJob[]) {
     if (job.state === 'done') {
       // Трек на сервере: «Добавлено мной» и экраны «Музыки» (поиск, альбом) перечитывают библиотеку
       void refreshOwnAdded();
+      void runFollowUp(job);
       window.dispatchEvent(new Event(MUSIC_LIBRARY_CHANGED_EVENT));
       // Доска `ZpSystem`: «Parvane · Музыка — Трек скачан на сервер» с «Слушать»
       showMusicTrackNotification({
@@ -145,10 +150,46 @@ function failureOf(err: unknown): StartResult {
   return 'failed';
 }
 
+/** Что сделать с треком, когда он скачается (меню трека каталога, доски `RpMusicA-04/07`). */
+export type FetchFollowUp = {
+  isStar?: boolean;
+  isQueue?: boolean;
+  playlists?: { id: string; isShared: boolean }[];
+};
+
+const followUps = new Map<string, FetchFollowUp>();
+
+/** Добавить действие к идущей задаче: «В Любимое», «В очередь», «В плейлист» — когда трек будет на сервере. */
+export function addFetchFollowUp(jobId: string, followUp: FetchFollowUp) {
+  followUps.set(jobId, { ...followUps.get(jobId), ...followUp });
+}
+
+async function runFollowUp(job: MusicFetchJob) {
+  const followUp = followUps.get(job.jobId);
+  followUps.delete(job.jobId);
+  if (!followUp || !job.trackId) return;
+  const [track] = await callMusic('parvaneMusicTracks', { trackIds: [job.trackId] }).catch(() => []);
+  if (!track) return;
+  if (followUp.isStar && !track.isStarred) void setTrackStarred(track, true);
+  if (followUp.isQueue) addToQueue([track], false);
+  followUp.playlists?.forEach(({ id, isShared }) => {
+    if (isShared) void addTracksToShared(id, [toTrackInput(track)]);
+    else void addTracksToPlaylist(id, [track]);
+  });
+}
+
+/** «Добавить первым»: своя ждущая задача — перед своими же ждущими. */
+export async function moveFetchFirst(jobId: string) {
+  const job = await callMusic('parvaneMusicFetchFirst', { jobId }).catch(() => undefined);
+  if (job) putJob(job);
+}
+
 /** Скачать трек по эталону каталога. */
-export async function startFetch(track: MusicCatalogTrack): Promise<StartResult> {
+export async function startFetch(track: MusicCatalogTrack, followUp?: FetchFollowUp): Promise<StartResult> {
   try {
-    putJob(await callMusic('parvaneMusicFetchStart', { track }));
+    const job = await callMusic('parvaneMusicFetchStart', { track, isStar: followUp?.isStar });
+    putJob(job);
+    if (followUp?.isQueue || followUp?.playlists) addFetchFollowUp(job.jobId, { ...followUp, isStar: undefined });
     return 'ok';
   } catch (err) {
     return failureOf(err);

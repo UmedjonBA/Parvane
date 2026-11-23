@@ -1433,6 +1433,9 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicStarWhenAdded': undefined;
+  'MusicFetchFirst': undefined;
+  'MusicFetchCancelShort': undefined;
   'MusicToServer': undefined;
   'MusicToArtist': undefined;
   'MusicAboutFile': undefined;
@@ -5120,6 +5123,12 @@ export interface LangPairWithVariables<V = LangVariable> {
     'count': V;
   };
   'MusicSortBy': {
+    'name': V;
+  };
+  'MusicStateAddingPercent': {
+    'percent': V;
+  };
+  'MusicFromCatalogNamed': {
     'name': V;
   };
   'MusicAboutOnServer': {
