@@ -2256,10 +2256,27 @@ describe('PLAYLIST-1: плейлист «Музыки» — видимое со�
     const views = readRepo('backend/protocol/src/model/views.rs');
     expect(views).toContain('"music_playlist" => {');
     // Клиентам без раздела — текстом
-    expect(views).toContain('| "music_track" | "music_playlist" => {');
+    expect(views).toContain('| "music_track" | "music_playlist" |');
     expect(readRepo('backend/protocol/src/msg.rs')).toContain('| Some(content::Kind::MusicPlaylist(_))');
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'music_playlist\':');
     expect(readRepo('web/telegram-tt/src/api/parvane/musicPlaylistContent.ts')).toContain('kind: \'music_playlist\',');
+  });
+});
+
+describe('MUSIC-NOTICE-1: «… добавил «трек» в плейлист группы» — строка чата, без «Музыки» — текст', () => {
+  const r = rule('MUSIC-NOTICE-1') as unknown as { fieldNumbers: Record<string, number>; fallbackField: string };
+
+  it('схема, движок и web согласованы', () => {
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain(`MusicPlaylistNotice music_playlist_notice = ${r.fieldNumbers.music_playlist_notice};`);
+    expect(proto).toContain(`string ${r.fallbackField} = 4 [(parvane.core.v2.max_len) = 600];`);
+    const views = readRepo('backend/protocol/src/model/views.rs');
+    expect(views).toContain('"music_playlist_notice" => {');
+    // Клиентам без раздела — текстом
+    expect(views).toContain('| "music_playlist_notice" => {');
+    expect(readRepo('backend/protocol/src/msg.rs')).toContain('| Some(content::Kind::MusicPlaylistNotice(_))');
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('\'music_playlist_notice\'');
+    expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts')).toContain('kind: \'music_playlist_notice\',');
   });
 });
 

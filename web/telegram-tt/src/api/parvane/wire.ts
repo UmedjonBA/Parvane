@@ -152,6 +152,7 @@ export type WireMessageContent = {
   track_id?: string;
   track_server?: string;
   artist?: string;
+  // kind=music_playlist_notice (MUSIC-NOTICE-1): `shared_id`, `name` плейлиста и `title` трека, `text`
   // Трек каталога (доска `MusicChat-01`): ссылка каталога, альбом, обложка, отрывок 30 с
   catalog_ref?: string;
   album?: string;

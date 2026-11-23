@@ -1712,6 +1712,8 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicNoticeAdded" = "{user} добавил(а) «{track}» в плейлист группы";
+"MusicNoticeAddedYou" = "Вы добавили «{track}» в плейлист группы";
 "SendPickerWhom" = "Кому";
 "MusicSendNote" = "Получатели на вашем сервере сразу смогут слушать. С других серверов — превью и ссылка на каталог.";
 "MusicNetworkOnly" = "Трека нет на сервере · поток из сети";

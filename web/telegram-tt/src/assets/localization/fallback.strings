@@ -1968,6 +1968,8 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicNoticeAdded" = "{user} added “{track}” to the group playlist";
+"MusicNoticeAddedYou" = "You added “{track}” to the group playlist";
 "SendPickerWhom" = "To whom";
 "MusicSendNote" = "Recipients on your server can listen right away. From other servers — a preview and a catalog link.";
 "MusicNetworkOnly" = "Not on the server · streaming from the web";

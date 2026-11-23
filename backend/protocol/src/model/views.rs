@@ -509,6 +509,16 @@ pub fn content_to_wire(c: &Content) -> Option<Value> {
             o.insert("reported".into(), Value::Array(reported));
             o
         }
+        // MUSIC-NOTICE-1: «… добавил «трек» в плейлист группы»
+        K::MusicPlaylistNotice(n) => {
+            let mut o = Map::new();
+            o.insert("kind".into(), json!("music_playlist_notice"));
+            put(&mut o, "shared_id", json!(n.playlist_id));
+            put(&mut o, "name", json!(char_prefix(&n.name, 600)));
+            put(&mut o, "title", json!(char_prefix(&n.track_title, 600)));
+            put(&mut o, "text", json!(char_prefix(&n.text, 600)));
+            o
+        }
         K::ModReportClose(r) => {
             let mut o = Map::new();
             o.insert("kind".into(), json!("mod_report_close"));
@@ -811,6 +821,14 @@ pub fn wire_to_content_json(c: &Map<String, Value>, reply_to: Option<&str>) -> R
                 r.insert("op_ids".into(), Value::Array(ops));
             }
             ("mod_report_close", Value::Object(r))
+        }
+        "music_playlist_notice" => {
+            let mut n = Map::new();
+            set(&mut n, "playlist_id", c.get("shared_id"));
+            set(&mut n, "name", c.get("name"));
+            set(&mut n, "track_title", c.get("title"));
+            set(&mut n, "text", c.get("text"));
+            ("music_playlist_notice", Value::Object(n))
         }
         "music_track" => {
             let mut t = Map::new();
@@ -1178,7 +1196,7 @@ pub fn wire_to_body(c: &Map<String, Value>, has: &dyn Fn(&str) -> bool) -> Optio
         // Без возможности — текст для клиентов без раздела (TASK-1, CLOUD-1, ARTICLE-1); жалоба — текстом
         // Трек «Музыки» (TRACK-1): клиентам без раздела — текстом; свой вид показа появится вместе с «Музыкой» там
         // Плейлист (PLAYLIST-1) — так же
-        "task_offer" | "cloud_invite" | "article" | "mod_report" | "music_track" | "music_playlist" => {
+        "task_offer" | "cloud_invite" | "article" | "mod_report" | "music_track" | "music_playlist" | "music_playlist_notice" => {
             return Some(text_body(str_of(c, "text")))
         }
         "task_response" => V::Service(ViewService {
@@ -1386,6 +1404,22 @@ mod tests {
         let body = wire_to_body(wire.as_object().unwrap(), &|_| true).unwrap();
         let Some(view_body::Kind::Text(text)) = body.kind else { panic!("не текст") };
         assert_eq!(text.text, "Lampa — Ночной автобус");
+    }
+
+    /// MUSIC-NOTICE-1: строка «добавил в плейлист группы» проходит туда и обратно; клиент без раздела получает текст.
+    #[test]
+    fn music_playlist_notice_roundtrip_and_text_fallback() {
+        let wire = json!({
+            "kind": "music_playlist_notice", "shared_id": "pl-7", "name": "Linux-чат: общее", "title": "Первый снег",
+            "text": "🎵 «Первый снег» — в плейлисте «Linux-чат: общее»",
+        });
+        let content = wire_to_content(wire.as_object().unwrap(), None).unwrap();
+        let Some(content::Kind::MusicPlaylistNotice(n)) = &content.kind else { panic!("не строка плейлиста: {content:?}") };
+        assert_eq!((n.playlist_id.as_str(), n.track_title.as_str()), ("pl-7", "Первый снег"));
+        assert_eq!(content_to_wire(&content).unwrap(), wire);
+        let body = wire_to_body(wire.as_object().unwrap(), &|_| true).unwrap();
+        let Some(view_body::Kind::Text(text)) = body.kind else { panic!("не текст") };
+        assert!(text.text.contains("Первый снег"));
     }
 
     /// Трек каталога (доска `MusicChat-01`): без id трека, со ссылкой каталога, альбомом, обложкой и отрывком.

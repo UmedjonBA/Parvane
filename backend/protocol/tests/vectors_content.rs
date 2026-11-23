@@ -220,6 +220,14 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
             msg(json!({"kind": "music_playlist", "name": "Для работы",
                 "text": "🎵 Для работы: Lampa — Ночной автобус, Тихий порт — Берег"})),
         ),
+        // «… добавил «трек» в плейлист группы» (MUSIC-NOTICE-1): клиент без «Музыки» показывает `text`.
+        (
+            "music-playlist-notice",
+            json!({"music_playlist_notice": {"playlist_id": "pl-7", "name": "Linux-чат: общее", "track_title": "Первый снег",
+                "text": "🎵 «Первый снег» — «Linux-чат: общее»"}}),
+            msg(json!({"kind": "music_playlist_notice", "title": "Первый снег",
+                "text": "🎵 «Первый снег» — «Linux-чат: общее»"})),
+        ),
         // Жалоба админам группы (spec 024, REPORT-1): клиент без модерации показывает `text`.
         (
             "mod-report",

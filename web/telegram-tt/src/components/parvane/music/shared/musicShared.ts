@@ -1,3 +1,5 @@
+import { getGlobal } from '../../../../global';
+
 import type { MusicPlaylist, MusicTrack } from '../../../../api/parvane/musicApi';
 import type {
   createMusicSharedApi,
@@ -25,6 +27,10 @@ const callShared = callApi as unknown as <N extends keyof SharedMethods>(
 // «Кто видит» на экране: «Только я» — личный плейлист контейнера `music.v1`
 export type MusicPlaylistAccess = 'me' | MusicSharedAccess;
 
+// Метод Parvane: типы `callApi` описывают только методы Telegram
+const callNotice = callApi as unknown as (name: 'parvaneSendMusicNotice', args: {
+  chatId: string; playlistId: string; name: string; trackTitle: string;
+}) => Promise<boolean | undefined>;
 const POLL_MS = 10000;
 // Контейнер личных плейлистов подключается при первом обращении: ждём готовности перед переносом треков
 const READY_WAIT_MS = 500;
@@ -187,7 +193,20 @@ export async function addTracksToShared(id: string, tracks: MusicSharedTrackInpu
   const reply = await callShared('parvaneMusicSharedItems', { id, add: tracks }).catch(() => undefined);
   if (!reply) return undefined;
   await afterChange(id, reply.playlist);
+  if (tracks.length > (reply.skipped || 0)) noticeGroups(id, reply.playlist?.name || '', tracks[0].title);
   return reply.skipped;
+}
+
+// MUSIC-NOTICE-1 (доска `MusicChat-01`): плейлист привязан к группе — в её чат строка «… добавил «трек» в плейлист
+// группы». Привязка известна по сведениям групп, которые устройство уже читало
+function noticeGroups(playlistId: string, name: string, trackTitle: string) {
+  const global = getGlobal();
+  Object.entries(global.chats.fullInfoById).forEach(([chatId, info]) => {
+    if (info?.parvaneShared?.playlistId !== playlistId) return;
+    void callNotice('parvaneSendMusicNotice', {
+      chatId, playlistId, name, trackTitle,
+    }).catch(() => undefined);
+  });
 }
 
 export async function removeSharedItem(id: string, itemId: string) {

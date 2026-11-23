@@ -2033,6 +2033,23 @@
       }
     },
     {
+      "id": "MUSIC-NOTICE-1",
+      "title": "«… добавил «трек» в плейлист группы» — строка в чате группы; клиент без «Музыки» показывает текст",
+      "kind": "content",
+      "record": "msg.v2 Content.music_playlist_notice = 30 (MusicPlaylistNotice: playlist_id, name, track_title, text); формат строки: kind music_playlist_notice, shared_id, name, title, text",
+      "behaviour": "Участник добавил трек в общий плейлист, привязанный к группе (поле журнала группы), — его клиент шлёт в чат группы строку: какой трек, в какой плейлист. Клиент с «Музыкой» показывает служебную строку «Имя добавил(а) «трек» в плейлист группы»; клиент без «Музыки» — поле text",
+      "fieldNumbers": {
+        "music_playlist_notice": 30
+      },
+      "fallbackField": "text",
+      "status": "23 ноя 2026: движок и web — сделано; desktop и android показывают text общим путём движка",
+      "clients": {
+        "web": "api/parvane/store.ts (music_playlist_notice — служебная строка), messages.ts (parvaneSendMusicNotice), components/parvane/music/shared/musicShared.ts (после добавления в плейлист группы)",
+        "desktop": "ОТКРЫТО: строки нет; текст — общим путём движка (views.rs wire_to_body), тест движка music_playlist_notice_roundtrip_and_text_fallback",
+        "android": "ОТКРЫТО: строки нет; текст — общим путём движка (views.rs wire_to_body), тест движка music_playlist_notice_roundtrip_and_text_fallback"
+      }
+    },
+    {
       "id": "NOTES-1",
       "title": "«Заметки»: раскладку графа и холста из графа считает движок, клиент рисует по координатам",
       "kind": "ui",

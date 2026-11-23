@@ -305,6 +305,23 @@ try {
   assert.equal(await bJoined.locator('[data-group-shared-count]').innerText(), '1');
   console.log('OK: общий плейлист группы — привязка владельцем, участник входит из сведений группы');
 
+  // ── MUSIC-NOTICE-1 (доска `MusicChat-01`): участник добавил трек в плейлист группы — строка в её чате ──
+  const bMusic2 = await openMusic(b.page);
+  await bMusic2.locator('[data-music-nav] [data-view="search"]').click();
+  await bMusic2.locator('[data-music-desk-search]').fill('glass');
+  const bGlass = bMusic2.locator('[data-music-tracks] [data-track="t4"]');
+  await bGlass.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await bGlass.click({ button: 'right' });
+  await b.page.getByRole('menuitem', { name: 'Add to a playlist', exact: true }).hover();
+  await b.page.locator('[data-music-submenu]').getByRole('menuitem', { name: GROUP_PLAYLIST, exact: true }).click();
+  await b.page.getByText(`Added to “${GROUP_PLAYLIST}”`).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await a.page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+  await a.page.locator('#LeftColumn .ListItem').filter({ has: a.page.locator('.fullName', { hasText: groupTitle }) }).first()
+    .locator('.ListItem-button').click();
+  await a.page.locator('.MessageList').getByText(`${bobNick} added “Glass Harbor” to the group playlist`).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  console.log('OK: трек в плейлисте группы — строка «… добавил «трек» в плейлист группы» в её чате');
+
   sessions.forEach((session) => assertNoPageErrors({ session }));
   console.log('OK: общие плейлисты, трек каталога на сервер и свои файлы');
 } catch (error) {

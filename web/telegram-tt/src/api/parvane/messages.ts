@@ -1972,6 +1972,28 @@ export function createMessageController(deps: MessageDependencies) {
       }
     },
 
+    // MUSIC-NOTICE-1: «… добавил «трек» в плейлист группы» — строка в чат группы, к которой привязан плейлист
+    async parvaneSendMusicNotice({ chatId, playlistId, name, trackTitle }: {
+      chatId: string; playlistId: string; name: string; trackTitle: string;
+    }) {
+      const currentStore = store();
+      const toAddress = currentStore.getAddressForId(chatId);
+      if (!toAddress) return false;
+      const uuid = newMessageId();
+      const content: WireMessageContent = {
+        kind: 'music_playlist_notice',
+        shared_id: playlistId,
+        name: name.slice(0, MUSIC_LABEL_MAX),
+        title: trackTitle.slice(0, MUSIC_LABEL_MAX),
+        text: `🎵 «${trackTitle}» — «${name}»`.slice(0, MUSIC_LABEL_MAX),
+      };
+      await publishInner(toAddress, content, uuid);
+      await deps.sync.applyExternal({
+        id: uuid, from: currentStore.self, to: toAddress, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
+      });
+      return true;
+    },
+
     // Трек «Музыки» в чат (TRACK-1): карточка трека библиотеки своего сервера, байтов трека сообщение не несёт
     async parvaneSendMusicTrack({ chatId, track }: {
       chatId: string;

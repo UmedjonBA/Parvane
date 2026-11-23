@@ -66,6 +66,9 @@ message Content {
     // личным сообщением. Служебное, в ленте не показывается; получатель принимает его только от админа группы с
     // правом удалять сообщения или банить (как адресатов жалоб) и закрывает жалобы у себя (`REPORT_CLOSED`).
     ModReportClose mod_report_close = 29;
+    // MUSIC-NOTICE-1 (макет «Музыки» 23 ноя, доска `MusicChat-01`): «… добавил «трек» в плейлист группы» — служебная
+    // строка в чате группы, к которой привязан общий плейлист. Клиент без «Музыки» показывает `text`.
+    MusicPlaylistNotice music_playlist_notice = 30;
   }
   // D-09: v1 не бывает содержимым v2-конверта (запись LegacyV1Record удалена, T096).
   reserved 99;
@@ -488,6 +491,16 @@ message MusicTrack {
   string album = 8 [(parvane.core.v2.max_len) = 600];
   string cover_url = 9 [(parvane.core.v2.max_len) = 512];
   string preview_url = 10 [(parvane.core.v2.max_len) = 512];
+}
+
+// Строка чата группы: участник добавил трек в её общий плейлист (MUSIC-NOTICE-1).
+message MusicPlaylistNotice {
+  // Общий плейлист (id на сервере библиотеки).
+  string playlist_id = 1 [(parvane.core.v2.max_len) = 64];
+  string name = 2 [(parvane.core.v2.max_len) = 600];
+  string track_title = 3 [(parvane.core.v2.max_len) = 600];
+  // «🎵 «трек» — в плейлисте «…»» для клиентов без «Музыки».
+  string text = 4 [(parvane.core.v2.max_len) = 600];
 }
 
 // Плейлист в чат (spec 041 C4, PLAYLIST-1): снимок плейлиста отправителя — название и треки по порядку. Байтов треков

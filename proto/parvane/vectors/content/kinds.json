@@ -1294,6 +1294,32 @@
       "client": {
         "class": "message",
         "v1": {
+          "kind": "music_playlist_notice",
+          "text": "🎵 «Первый снег» — «Linux-чат: общее»",
+          "title": "Первый снег"
+        }
+      },
+      "expect": {
+        "content": {
+          "music_playlist_notice": {
+            "name": "Linux-чат: общее",
+            "playlist_id": "pl-7",
+            "text": "🎵 «Первый снег» — «Linux-чат: общее»",
+            "track_title": "Первый снег"
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "f201780a04706c2d3712184c696e75782dd187d0b0d1823a20d0bed0b1d189d0b5d0b51a15d09fd0b5d180d0b2d18bd0b920d181d0bdd0b5d0b3223ff09f8eb520c2abd09fd0b5d180d0b2d18bd0b920d181d0bdd0b5d0b3c2bb20e2809420c2ab4c696e75782dd187d0b0d1823a20d0bed0b1d189d0b5d0b5c2bb"
+      },
+      "name": "music-playlist-notice"
+    },
+    {
+      "client": {
+        "class": "message",
+        "v1": {
           "kind": "mod_report",
           "reason": "spam",
           "text": "Жалоба на сообщение в группе: спам"

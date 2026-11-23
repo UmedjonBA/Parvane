@@ -417,6 +417,7 @@ pub fn is_trackable(c: &Content) -> bool {
             | Some(content::Kind::Article(_))
             | Some(content::Kind::MusicTrack(_))
             | Some(content::Kind::MusicPlaylist(_))
+            | Some(content::Kind::MusicPlaylistNotice(_))
             | Some(content::Kind::ModReport(_))
     )
 }

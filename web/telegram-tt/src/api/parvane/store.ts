@@ -55,6 +55,11 @@ const CHAT_MODE_KEYS = {
   peer: { on: 'ParvaneL2Enabled', off: 'ParvaneL2Disabled' },
 } as const;
 
+const MUSIC_NOTICE_FALLBACK: Record<string, string> = {
+  MusicNoticeAddedYou: 'You added “{track}” to the group playlist',
+  MusicNoticeAdded: '{user} added “{track}” to the group playlist',
+};
+
 const CHAT_MODE_FALLBACK: Record<string, string> = {
   ParvaneL2EnabledYou: 'You enabled enhanced privacy',
   ParvaneL2DisabledYou: 'You disabled enhanced privacy',
@@ -684,8 +689,9 @@ export class ParvaneStore {
     const replyKey = stored.reply_to ? this.msgKeyByUuid.get(stored.reply_to) : undefined;
     const isChatMode = stored.content.kind === 'chat_mode';
     const content = isChatMode ? this.buildChatModeContent(stored, isOutgoing)
-      : stored.content.kind === 'mod_report' ? this.buildModReportContent(stored)
-        : withMediaSpoiler(buildMessageContent(stored, (key) => this.getLangString?.(key)), stored.content.spoiler);
+      : stored.content.kind === 'music_playlist_notice' ? this.buildMusicNoticeContent(stored, isOutgoing)
+        : stored.content.kind === 'mod_report' ? this.buildModReportContent(stored)
+          : withMediaSpoiler(buildMessageContent(stored, (key) => this.getLangString?.(key)), stored.content.spoiler);
     // MEDIA-2: альбом — подряд идущие сообщения одного автора с одним `album_id`, не больше 10
     const groupedId = stored.content.album_id && stored.from && !stored.deleted
       ? this.albums.groupedId(chatId, stored.from, stored.content.album_id, id) : undefined;
@@ -717,6 +723,20 @@ export class ParvaneStore {
         fromChatId: this.getIdForAddress(stored.content.forwarded_from),
         hiddenUserName: stored.content.forwarded_name,
       } : undefined,
+    };
+  }
+
+  // MUSIC-NOTICE-1 (доска `MusicChat-01`): «Дамир добавил «Первый снег» в плейлист группы» — служебная строка
+  private buildMusicNoticeContent(stored: WireStoredMessage, isOutgoing: boolean): ApiMessage['content'] {
+    const key = isOutgoing ? 'MusicNoticeAddedYou' : 'MusicNoticeAdded';
+    const template = this.getLangString?.(key) || MUSIC_NOTICE_FALLBACK[key];
+    return {
+      action: {
+        mediaType: 'action',
+        type: 'customAction',
+        message: template.replace('{user}', this.getDisplayName(stored.from))
+          .replace('{track}', stored.content.title || ''),
+      },
     };
   }
 
