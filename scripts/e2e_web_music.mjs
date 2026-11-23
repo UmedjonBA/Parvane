@@ -1,13 +1,15 @@
-// Модуль «Музыка» (spec 039, 041; правила MUSIC-1, MUSIC-4). Библиотека — поддельный Subsonic-сервер за шардом
-// music (`scripts/fake_subsonic.mjs`): два альбома, пять треков, первый трек длится 4 секунды. Проверяется путь
-// слушателя по доскам макета: навигация компьютера (группы, счётчики, плейлисты, «+» модуля), главная (очередь
-// справа), альбом, воспроизведение и переход на следующий трек, полный плеер (пауза, повтор, чипы, источник очереди),
-// любимое, поиск одним списком и «играть следующим», очередь после перезагрузки; телефон — вкладки «Главная / Поиск /
-// Библиотека», страницы со своей шапкой, мини-плеер и «+» в «Музыке», шторка меню трека, «Далее в очереди»;
-// «Найти и скачать» (поддельный сервис `scripts/fake_music_fetch.mjs`, лимит раннера — три трека в сутки);
-// «Добавлено мной»; плейлисты (окно «Новый плейлист», подменю «В плейлист ›», порядок перетаскиванием, меню «Ещё»);
-// трек и плейлист в чат; «Загруженное» группами (трек, альбом, плейлист следует за составом, без сети); подгрузка
-// длинных списков страницами, исполнители, «Популярное на сервере», синглы; пустая библиотека.
+// Модуль «Музыка» по макету 23 ноя (`local-workdirs/design-music-2026-11-23/`). Библиотека — поддельный
+// Subsonic-сервер за шардом music (`scripts/fake_subsonic.mjs`): два альбома, пять треков, первый трек длится 4
+// секунды; каталог и скачивание — поддельный сервис `scripts/fake_music_fetch.mjs` (лимит раннера — три трека в
+// сутки). Проверяется путь слушателя: компьютер — медиатека слева, главная («Для вас», «Новое на сервере»), «Микс
+// дня», страница альбома, меню трека у курсора, плеер внизу (пауза, следующий, повтор, ♥), плеер во весь экран,
+// «Любимое», поиск (сервер и каталог, чипы, «В очередь», «Добавлено вами» в очереди), виджет в чатах, очередь после
+// перезагрузки; телефон — вкладки «Главная / Поиск / Медиатека», страницы исполнителя и альбома со своей шапкой,
+// мини-плеер, плеер и очередь шторкой, поиск, звонок, шторка меню трека; «Найти и скачать» из каталога (уверенное
+// совпадение, выбор файла в «Загрузках на сервер», лимит); «Добавлено мной» и удаление в корзину; плейлисты (окно
+// «Новый плейлист», подменю «В плейлист ›», выбор плейлиста на телефоне, порядок, меню «Ещё»); трек и плейлист в
+// чат; «Загруженное» группами (трек, альбом, плейлист следует за составом, без сети); длинные списки страницами,
+// исполнитель и его выпуски; пустая библиотека.
 // Запуск: scripts/run_web_music_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -29,10 +31,24 @@ const WIDE = { width: 1600, height: 900 };
 const PHONE = { width: 390, height: 800 };
 const STEP_TIMEOUT_MS = 20000;
 const LIBRARY_URL = `http://127.0.0.1:${process.env.PARVANE_E2E_MUSIC_LIBRARY_PORT || 19431}/__e2e/library`;
+// Треки поддельного каталога (`fake_music_fetch.mjs`): ссылка — `dz:<100 + номер>`
+const CATALOG_BUS = 'dz:101';
+const CATALOG_LOUD = 'dz:102';
+const CATALOG_MORNING = 'dz:104';
+const CATALOG_SLOW = 'dz:105';
 
 // Звук без жеста пользователя: сценарий нажимает кнопки сам, но автозапуск в безголовом режиме надёжнее разрешить
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
 let session;
+
+const visible = (locator, timeout = STEP_TIMEOUT_MS) => locator.waitFor({ state: 'visible', timeout });
+const gone = (locator, timeout = STEP_TIMEOUT_MS) => locator.waitFor({ state: 'detached', timeout });
+
+// Меню закрылось: на экране нет ни одного меню (закрытые меню чатов остаются в разметке скрытыми)
+async function menuGone(page) {
+  await page.waitForFunction(() => ![...document.querySelectorAll('[role="menu"]')]
+    .some((menu) => menu.getClientRects().length), undefined, { timeout: STEP_TIMEOUT_MS });
+}
 
 // Перетащить строку за ручку на место строки `toId`: мышь — те же события указателя, что и палец. На компьютере
 // ручка видна по наведению — указатель сперва на строку
@@ -47,7 +63,7 @@ async function dragRow(page, list, fromId, toId) {
   await page.mouse.up();
 }
 
-// Меню трека (доски `XpMusic`, `ZdMusicX`): «⋯» строки (либо правая кнопка, если «⋯» в строке нет) и пункт
+// Меню трека (доска `RpMusicA`): «⋯» строки (либо правая кнопка, если «⋯» в строке нет) и пункт
 async function openTrackMenu(row) {
   const dots = row.locator('[data-music-menu]');
   if (await dots.isVisible().catch(() => false)) await dots.click();
@@ -58,16 +74,16 @@ async function pickTrackAction(page, row, action) {
   await openTrackMenu(row);
   const menu = page.getByRole('menu').first();
   await menu.getByRole('menuitem', { name: action, exact: true }).click();
-  await page.getByRole('menu').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await menuGone(page);
 }
 
 // Компьютер: «В плейлист ›» — подменю у курсора
 async function addToPlaylist(page, row, playlistName) {
   await openTrackMenu(row);
-  await page.getByRole('menuitem', { name: 'Add to a playlist', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Add to a playlist', exact: true }).hover();
   const sub = page.locator('[data-music-submenu]');
   await sub.getByRole('menuitem', { name: playlistName, exact: true }).click();
-  await sub.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await gone(sub);
 }
 
 async function waitRows(page, list, expected) {
@@ -76,6 +92,7 @@ async function waitRows(page, list, expected) {
   { timeout: STEP_TIMEOUT_MS });
 }
 
+// Вход в «Музыку» с панели модулей (компьютер) либо с ленты (телефон) — открывается главная
 async function openMusic(page) {
   const rail = page.locator('#FoldersSidebar');
   await rail.or(page.getByRole('navigation', { name: 'Modules' })).first()
@@ -83,36 +100,72 @@ async function openMusic(page) {
   if (await rail.isVisible().catch(() => false)) await rail.getByRole('tab', { name: 'Music', exact: true }).click();
   else await page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: 'Music' }).click();
   const music = page.locator('#ParvaneMusic');
-  await page.locator('#ParvaneMusic[data-music-enabled="true"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await visible(page.locator('#ParvaneMusic[data-music-enabled="true"]'), LOGIN_TIMEOUT_MS);
   return music;
 }
 
-// Компьютер: что играет — виджет плеера в боковой панели (доска `DeskMusic`)
+// Что играет: плеер внизу «Музыки» (компьютер), виджет панели модулей (компьютер, другой модуль) либо мини-плеер
+// (телефон) — смотрится тот, что на экране
 async function waitPlaying(page, title, state) {
   await page.waitForFunction(([want, wantState]) => {
-    const widget = document.querySelector('#FoldersSidebar [data-music-widget]');
-    return widget?.getAttribute('aria-label')?.includes(want)
-      && (!wantState || widget.getAttribute('data-music-widget') === wantState);
+    const shown = ['[data-music-desk-player]', '#FoldersSidebar [data-music-widget]', '[data-music-mini]']
+      .map((selector) => document.querySelector(selector))
+      .find((element) => element && element.getClientRects().length);
+    if (!shown) return false;
+    const text = `${shown.textContent} ${shown.getAttribute('aria-label') || ''}`;
+    const current = shown.dataset.musicDeskPlayer || shown.dataset.musicWidget || shown.dataset.musicMini;
+    return text.includes(want) && (!wantState || current === wantState);
   }, [title, state], { timeout: STEP_TIMEOUT_MS });
 }
 
-// Компьютер: управление — в полном плеере из виджета (виджет → окошко плеера → «Очередь», доска `DeskNotes`)
-async function withFullPlayer(page, action) {
-  await page.locator('#FoldersSidebar [data-music-widget]').click();
-  await page.locator('[data-music-popup-queue]').click();
-  const full = page.locator('[data-music-full]');
-  await full.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await action(full);
-  await page.keyboard.press('Escape');
-  await full.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+// Пауза тем плеером, что на экране. Трек, только что выбранный на паузе, может заиграть чуть позже — тогда ещё раз
+async function pause(page) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await pauseOnce(page);
+    await page.waitForTimeout(700);
+    if (await isPaused(page)) return;
+  }
+  await waitPlaying(page, '', 'paused');
 }
 
-async function pause(page) {
-  await withFullPlayer(page, async (full) => {
-    const button = full.getByRole('button', { name: 'Pause', exact: true });
-    if (await button.isVisible().catch(() => false)) await button.click();
-    await full.locator('[data-music-play="paused"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+async function isPaused(page) {
+  return page.evaluate(() => {
+    const shown = ['[data-music-desk-player]', '#FoldersSidebar [data-music-widget]', '[data-music-mini]']
+      .map((selector) => document.querySelector(selector))
+      .find((element) => element && element.getClientRects().length);
+    const current = shown && (shown.dataset.musicDeskPlayer || shown.dataset.musicWidget || shown.dataset.musicMini);
+    return current === 'paused';
   });
+}
+
+async function pauseOnce(page) {
+  const desk = page.locator('[data-music-desk-player]');
+  if (await desk.isVisible().catch(() => false)) {
+    if (await desk.getAttribute('data-music-desk-player') === 'playing') await desk.locator('[data-music-desk-play]').click();
+  } else if (await page.locator('[data-music-mini]').isVisible().catch(() => false)) {
+    const button = page.locator('[data-music-mini]').getByRole('button', { name: 'Pause', exact: true });
+    if (await button.isVisible().catch(() => false)) await button.click();
+  } else {
+    const widget = page.locator('#FoldersSidebar [data-music-widget]');
+    if (await widget.getAttribute('data-music-widget') === 'playing') {
+      await widget.click();
+      await page.locator('[data-music-popup-play]').click();
+      await page.keyboard.press('Escape');
+    }
+  }
+}
+
+// Компьютер: альбом через поиск медиатеки (строка поиска главной)
+async function openAlbumBySearch(music, text, albumId) {
+  const field = music.locator('[data-music-desk-search]');
+  if (!await field.isVisible().catch(() => false)) {
+    await music.locator('[data-music-nav] [data-view="search"]').click();
+  }
+  await field.fill(text);
+  await music.locator(`[data-music-albums] [data-id="${albumId}"]`).click();
+  const album = music.locator('[data-music-album-page]');
+  await visible(album.locator('[data-track]').first());
+  return album;
 }
 
 try {
@@ -122,450 +175,437 @@ try {
   const { page } = session;
   await dismissRecoveryKeyDialog(page).catch(() => undefined);
 
-  // ── Главная: навигация с группами и счётчиками, микс, очередь справа ─────
-  const music = await openMusic(page);
+  // ── Главная компьютера: медиатека слева, «Для вас», «Новое на сервере», плеера ещё нет ─────
+  let music = await openMusic(page);
   const navBar = music.locator('[data-music-nav]');
-  const nav = (view) => navBar.locator(`[data-view="${view}"]`).click();
-  const main = music.locator('[data-music-view]');
-  const side = music.locator('aside');
-  await music.locator('[data-music-mix="pick"]').getByText('Pick favorite artists').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await music.locator('[data-music-total]').getByText('5 tracks').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await navBar.getByText('Library', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await navBar.locator('[data-view="artists"]').getByText('2', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await navBar.locator('[data-view="albums"]').getByText('2', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await side.locator('[data-music-queue="empty"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const nav = (view) => navBar.locator(`[data-view="${view}"]`).first().click();
+  await visible(music.locator('[data-music-mix="pick"]').getByText('Pick favorite artists'));
+  await visible(music.locator('[data-music-fresh] [data-album="al-1"]'));
+  await visible(music.locator('[data-music-fresh] [data-album="al-2"]'));
+  for (const view of ['starred', 'offline', 'added']) await visible(navBar.locator(`[data-view="${view}"]`));
+  await visible(music.locator('[data-music-desk-search]'));
+  assert.equal(await page.locator('[data-music-desk-player]').count(), 0, 'пока ничего не играло, плеера внизу нет');
   assert.equal(await music.locator('h1').count(), 0, 'на компьютере у модуля нет своей шапки');
-  console.log('OK: главная — навигация с группами и счётчиками, число треков сервера, очередь справа пуста');
+  assert.equal(await page.locator('#FoldersSidebar [data-music-widget]').count(), 0, 'виджета плеера в «Музыке» нет');
+  console.log('OK: главная — медиатека слева, «Для вас», «Новое на сервере», поиск сверху');
 
   // ── «Микс дня»: выбрать исполнителей → микс из библиотеки и похожих из каталога ─────
-  await music.locator('[data-music-mix] button').first().click();
+  await music.locator('[data-music-mix]').click();
   const picker = music.locator('[data-music-mix-artists]');
   await picker.locator('[data-music-mix-artist="Kora Mesh"]').click();
-  await picker.getByText('Chosen 1 of 20').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(picker.getByText('Chosen 1 of 20'));
   await picker.locator('[data-music-mix-artists-done]').click();
-  await nav('home');
-  await music.locator('[data-music-mix="ready"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await music.locator('[data-music-mix] button').first().click();
+  music = await openMusic(page);
+  await visible(music.locator('[data-music-mix="ready"]'), STEP_TIMEOUT_MS * 2);
+  await music.locator('[data-music-mix]').click();
   const mixView = music.locator('[data-music-mix-view="ready"]');
-  await mixView.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await mixView.locator('[data-music-mix-catalog]').filter({ hasText: 'like Kora Mesh' }).first()
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(mixView);
+  await visible(mixView.locator('[data-music-mix-catalog]').filter({ hasText: 'like Kora Mesh' }).first());
   assert(await mixView.locator('[data-music-mix-play]').isEnabled(), '«Слушать» — есть треки библиотеки');
-  await nav('home');
   console.log('OK: «Микс дня» — выбор исполнителей, микс из библиотеки и похожих из каталога');
 
-  // ── Альбомы: шапка с числом, альбом, воспроизведение ──────────────────────
-  await nav('albums');
-  await main.locator('[data-music-title]').getByText('Albums · 2').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const albums = main.locator('[data-music-albums]');
-  await albums.getByRole('button', { name: /Берег/ }).click();
-  const tracks = main.locator('[data-music-tracks]');
-  await tracks.locator('[data-track]').nth(2).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // ── Альбом: страница, меню трека у курсора, воспроизведение ──────────────
+  music = await openMusic(page);
+  await music.locator('[data-music-fresh] [data-album="al-1"]').click();
+  const album = music.locator('[data-music-album-page]');
+  await visible(album.getByRole('heading', { name: 'Берег' }));
+  const tracks = album.locator('[data-music-tracks]');
+  await visible(tracks.locator('[data-track]').nth(2));
   assert.equal(await tracks.locator('[data-track]').count(), 3, 'в альбоме три трека');
-  assert.equal(await navBar.locator('[data-view="albums"][aria-current="page"]').count(), 1, 'альбом подсвечивает «Альбомы»');
-  await main.locator('[data-music-artist-link]').getByText('Тихий порт').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Правая кнопка — то же меню у курсора; черта перед опасным пунктом — только у добавленных (ниже)
+  await visible(album.getByRole('button', { name: /Тихий порт/ }).first());
+  // Правая кнопка — меню у курсора: сначала быстрые действия (доска `RpMusicA`), потом остальное
   await tracks.locator('[data-track="t2"]').click({ button: 'right' });
   const deskMenu = page.getByRole('menu').first();
-  await deskMenu.getByRole('menuitem', { name: 'Download to this computer' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const deskItems = await deskMenu.getByRole('menuitem').allInnerTexts();
-  assert.deepEqual(deskItems.map((text) => text.replace('›', '').trim()), ['Play next', 'Add to queue', 'Add to a playlist',
-    'Add to favorites', 'Go to artist', 'Go to album', 'Send to chat…', 'Download to this computer',
-    "Don't like", "Don't like the artist"],
-  `меню у курсора по доске ZdMusicX: ${deskItems}`);
+  await visible(deskMenu.getByRole('menuitem', { name: 'Download to this computer' }));
+  const deskItems = await deskMenu.getByRole('menuitem').evaluateAll((items) => items.map((item) => item.getAttribute('aria-label')));
+  assert.deepEqual(deskItems, ['To favorites', 'Add to a playlist', 'Add to queue', 'Share', 'Send to chat…',
+    'Go to artist', 'Go to album', 'Download to this computer', "Don't like", 'File…'],
+  `меню у курсора по доске RpMusicA: ${deskItems}`);
   await page.keyboard.press('Escape');
-  await page.getByRole('menu').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await menuGone(page);
   await tracks.locator('[data-track="t1"]').getByRole('button').first().click();
   await waitPlaying(page, 'Северный ветер', 'playing');
-  console.log('OK: альбом — шапка, исполнитель ссылкой, трек играет (виджет панели)');
+  console.log('OK: альбом — страница, исполнитель ссылкой, меню у курсора, трек играет в плеере внизу');
 
   // ── Трек доигран сам — играет следующий по очереди ────────────────────────
   await waitPlaying(page, 'Harbor Lights', 'playing');
-  // Играющий отмечен и в таблице альбома (на компьютере подпись «играет» — у очереди, в таблице — цветом)
-  await tracks.locator('[data-track="t2"][data-music-current]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(tracks.locator('[data-track="t2"][data-music-current]'));
   console.log('OK: после конца трека играет следующий');
 
-  // ── Полный плеер: пауза, следующий, повтор, источник, «В любимое» ────────
-  await withFullPlayer(page, async (full) => {
-    await full.locator('[data-music-position]').filter({ hasText: /0:0\d/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await full.getByRole('button', { name: 'Pause', exact: true }).click();
-    await full.locator('[data-music-play="paused"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await full.getByRole('button', { name: 'Next track' }).click();
-    await full.getByRole('heading', { name: 'Соль' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await full.getByRole('button', { name: 'Pause', exact: true }).click();
-    await full.getByRole('button', { name: 'Repeat: off' }).click();
-    await full.locator('[data-music-repeat="all"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await full.locator('[data-music-queue-note]').getByText('Source: album “Берег”.').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await full.getByRole('button', { name: 'Add to favorites' }).click();
-    await full.getByRole('button', { name: 'Remove from favorites' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  });
-  console.log('OK: полный плеер — пауза, следующий, повтор, источник очереди, «В любимое»');
+  // ── Плеер внизу: пауза, следующий, повтор, ♥; плеер во весь экран ────────
+  const deskPlayer = page.locator('[data-music-desk-player]');
+  await deskPlayer.getByRole('button', { name: 'Pause', exact: true }).click();
+  await visible(page.locator('[data-music-desk-player="paused"]'));
+  await deskPlayer.getByRole('button', { name: 'Next track' }).click();
+  await waitPlaying(page, 'Соль');
+  await pause(page);
+  await deskPlayer.getByRole('button', { name: 'Repeat: off' }).click();
+  await visible(deskPlayer.locator('[data-music-repeat="all"]'));
+  await deskPlayer.getByRole('button', { name: 'Add to favorites' }).click();
+  await visible(deskPlayer.getByRole('button', { name: 'Remove from favorites' }));
+  await deskPlayer.getByRole('button', { name: 'Open player' }).click();
+  const full = page.locator('[data-music-full]');
+  await visible(full.getByRole('heading', { name: 'Соль' }));
+  await visible(full.locator('[data-music-source="album"]').getByText('Playing from an album'));
+  await full.getByRole('button', { name: 'Collapse player' }).click();
+  await gone(full);
+  console.log('OK: плеер внизу — пауза, следующий, повтор, «В любимое»; плеер во весь экран с источником');
 
-  // ── Любимое: шапка с числом, «Слушать», строка ────────────────────────────
+  // ── Любимое ───────────────────────────────────────────────────────────────
   await page.waitForTimeout(1000);
   await nav('starred');
-  await music.locator('[data-music-view="starred"] [data-track="t3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(music.locator('[data-music-view="starred"] [data-track="t3"]'));
   assert.equal(await music.locator('[data-music-view="starred"] [data-track]').count(), 1, 'в любимом один трек');
-  await main.getByRole('button', { name: 'Listen' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await main.getByPlaceholder('Find in favorites').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await main.locator('[data-music-starred-note]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await navBar.locator('[data-view="starred"]').getByText('1', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: любимое — шапка, «Слушать», поиск по любимому, счётчик в навигации');
+  await visible(music.getByPlaceholder('Find in favorites'));
+  await visible(music.locator('[data-music-starred-note]'));
+  console.log('OK: любимое — трек, поиск по любимому, подсказка');
 
-  // ── Поиск одним списком и «играть следующим» ──────────────────────────────
+  // ── Поиск: сервер и каталог, чипы, «В очередь», к альбому, пустой результат ─
   await nav('search');
-  await music.locator('[data-music-search]').getByRole('searchbox').fill('glass');
-  const found = music.locator('[data-music-view="search"] [data-track="t4"]');
-  await found.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await found.getByText('Track · Kora Mesh').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await music.locator('[data-music-found]').getByText('On the server · 1').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await pickTrackAction(page, found, 'Play next');
-  await music.getByRole('button', { name: 'Albums', exact: true }).click();
-  await music.locator('[data-music-found="0"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await music.getByRole('button', { name: 'All', exact: true }).click();
+  const deskSearch = music.locator('[data-music-desk-search]');
+  await deskSearch.fill('glass');
+  const searchView = music.locator('[data-music-view="search"]');
+  const found = searchView.locator('[data-music-tracks] [data-track="t4"]');
+  await visible(found);
+  await pickTrackAction(page, found, 'Add to queue');
+  await visible(page.getByText('“Glass Harbor” plays next').first());
+  await searchView.locator('[data-filter="albums"]').click();
+  await gone(searchView.locator('[data-music-tracks]'));
+  await searchView.locator('[data-filter="all"]').click();
   await pickTrackAction(page, found, 'Go to album');
-  await music.locator('[data-music-view="album"] [data-track="t4"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(music.locator('[data-music-album-page] [data-track="t4"]'));
   await nav('search');
-  await music.locator('[data-music-search]').getByRole('searchbox').fill('нет такого');
-  await music.locator('[data-music-empty="search"]').getByText('Nothing found on the server.').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await music.locator('[data-music-search]').getByRole('searchbox').fill('');
-  // Очередь в порядке проигрывания: найденный трек — сразу после играющего (колонка главной)
-  await nav('home');
-  await side.locator('[data-music-queue="4"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const queueOrder = await side.locator('[data-track]').evaluateAll((rows) => rows.map((row) => row.dataset.track));
-  assert.deepEqual(queueOrder, ['t1', 't2', 't3', 't4'], 'порядок очереди после «играть следующим»');
-  await side.locator('[data-track="t3"][data-music-current]').getByText('playing').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: поиск — «На сервере · N», чипы, «играть следующим», к альбому, пустой результат');
+  await deskSearch.fill('нет такого');
+  await visible(music.locator('[data-music-empty="search"]').getByText('Nothing found for “нет такого”'));
+  await deskSearch.fill('');
+  // Очередь (кнопка плеера внизу): «Сейчас играет», «Добавлено вами» и остаток альбома
+  await deskPlayer.locator('[data-music-desk-queue]').click();
+  const queue = music.locator('[data-music-view="queue"]');
+  await visible(queue.locator('[data-music-queue-added="1"] [data-track="t4"]'));
+  await visible(queue.locator('[data-track="t3"][data-music-current]'));
+  assert.deepEqual(await queue.locator('[data-track]').evaluateAll((rows) => rows.map((row) => row.dataset.track)),
+    ['t3', 't4'], 'очередь: играющий, затем добавленный');
+  console.log('OK: поиск — сервер и каталог, чипы, «В очередь», к альбому, пустой результат; очередь');
 
-  // ── Очередь: порядок перетаскиванием за ручку, играющий трек не меняется ─
-  await dragRow(page, side.locator('[data-music-queue]'), 't1', 't2');
-  await waitRows(page, side.locator('[data-music-queue]'), ['t2', 't1', 't3', 't4']);
-  await waitPlaying(page, 'Соль');
-  console.log('OK: очередь переставлена перетаскиванием');
+  // ── «Очистить» добавленное: очередь возвращается к альбому ───────────────
+  await queue.locator('[data-music-queue-clear]').click();
+  await gone(queue.locator('[data-music-queue-added]'));
+  await deskPlayer.locator('[data-music-desk-queue]').click();
+  await gone(queue);
+  console.log('OK: очередь — «Очистить» убирает добавленное вами');
 
-  // ── «+» модуля: «Найти и скачать» и «Новый плейлист» ──────────────────────
+  // ── «+» модуля: «Найти в каталоге», «Новый плейлист» ──────────────────────
   const plus = page.locator('#FoldersSidebar [data-add-for="music"]');
   await plus.click();
-  await page.getByRole('menuitem', { name: 'Find and download' }).click();
-  await music.locator('[data-music-view="search"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await music.locator('[data-music-search]').getByRole('searchbox').evaluate((input) => input === document.activeElement), true,
-    '«Найти и скачать» ставит курсор в поле');
+  await page.getByRole('menuitem', { name: /Find in the catalog/ }).click();
+  await visible(music.locator('[data-music-view="search"]'));
+  // «Найти в каталоге» ставит курсор в поле
+  await page.waitForFunction(() => document.activeElement?.matches('[data-music-desk-search]'), undefined,
+    { timeout: STEP_TIMEOUT_MS });
   await plus.click();
-  await page.getByRole('menuitem', { name: 'New playlist' }).click();
+  await page.getByRole('menuitem', { name: /New playlist/ }).click();
   const newPlaylist = page.locator('[data-music-new-playlist-form]');
-  await newPlaylist.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(newPlaylist);
   await newPlaylist.getByRole('button', { name: 'Cancel' }).click();
-  await newPlaylist.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: «+» в «Музыке» — «Найти и скачать» и «Новый плейлист»');
+  await gone(newPlaylist);
+  console.log('OK: «+» в «Музыке» — «Найти в каталоге» и «Новый плейлист»');
 
   // ── Плеер вне модуля: виджет в боковой панели ─────────────────────────────
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
   const widget = page.locator('#FoldersSidebar [data-music-widget]');
-  // Нажатие на виджет — окошко плеера рядом (доска `DeskNotes`): трек, управление, «Очередь», «Открыть «Музыку»»;
-  // Escape его закрывает
+  // Нажатие на виджет — окошко плеера рядом: трек, управление, «Очередь», «Открыть «Музыку»»; Escape его закрывает
   await widget.click();
   const popup = page.locator('[data-music-popup]');
-  await popup.getByText('Соль').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await popup.getByRole('button', { name: 'Open Music' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(popup.getByText('Соль').first());
+  await visible(popup.locator('[data-music-popup-open]'));
   await page.keyboard.press('Escape');
-  await popup.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await gone(popup);
+  // «Очередь» окошка открывает «Музыку» с плеером во весь экран
   await widget.click();
-  await popup.getByRole('button', { name: 'Queue', exact: true }).click();
-  await popup.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  const full = page.locator('[data-music-full]');
-  await full.getByRole('heading', { name: 'Соль' }).waitFor();
-  await full.getByRole('button', { name: 'Play', exact: true }).click();
-  await full.getByRole('button', { name: 'Pause', exact: true }).click();
-  await full.getByRole('button', { name: 'Add to a playlist', exact: true }).click();
-  const fullPicker = page.locator('.Modal [data-playlist-picker]');
-  await fullPicker.getByRole('button', { name: 'Close' }).click();
-  await full.getByRole('button', { name: 'Send to chat' }).click();
+  await popup.locator('[data-music-popup-queue]').click();
+  await gone(popup);
+  await visible(full.getByRole('heading', { name: 'Соль' }));
+  // Кнопка «Играть / Пауза» плеера во весь экран: два нажатия возвращают прежнее состояние
+  const playState = await full.locator('[data-music-play]').getAttribute('data-music-play');
+  const otherState = playState === 'playing' ? 'paused' : 'playing';
+  await full.locator('[data-music-play]').click();
+  await visible(full.locator(`[data-music-play="${otherState}"]`));
+  await full.locator('[data-music-play]').click();
+  await visible(full.locator(`[data-music-play="${playState}"]`));
+  await pause(page);
+  await full.locator('[data-music-player-menu]').click();
+  await page.getByRole('menuitem', { name: 'Send to chat…', exact: true }).click();
   // «Кому отправить» (доска `RpPick`): карточка «название · исполнитель · трек», чаты с галочками
   const sendScreen = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
-  await sendScreen.locator('[data-send-preview]').getByText('Соль').waitFor();
-  await sendScreen.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first().waitFor();
+  await visible(sendScreen.locator('[data-send-preview]').getByText('Соль'));
+  await visible(sendScreen.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first());
   await page.keyboard.press('Escape');
   await sendScreen.waitFor({ state: 'hidden' });
   const slider = full.getByRole('slider');
   await slider.press('Home');
   await slider.press('ArrowRight');
-  await full.locator('[data-music-position]').filter({ hasText: /^0:01$/ }).waitFor();
-  await page.keyboard.press('Escape');
-  await full.waitFor({ state: 'detached' });
-  await widget.waitFor();
-  assert.equal(await music.isVisible(), false);
-  console.log('OK: виджет — полный плеер, пауза, продолжение, перемотка, Escape возвращает в чаты');
+  await visible(full.locator('[data-music-position]').filter({ hasText: /^0:01$/ }));
+  await full.getByRole('button', { name: 'Collapse player' }).click();
+  await gone(full);
+  await visible(music.locator('[data-music-nav]'));
+  console.log('OK: виджет — окошко плеера, «Очередь» открывает плеер, пауза, перемотка, «в чат»');
 
   // ── Перезагрузка: очередь возвращается на паузе с того же трека ───────────
   await reloadPage(page);
-  const reloaded = await openMusic(page);
-  const reloadedSide = reloaded.locator('aside');
-  await reloadedSide.locator('[data-music-queue="4"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  music = await openMusic(page);
   await waitPlaying(page, 'Соль', 'paused');
-  await withFullPlayer(page, async (opened) => {
-    await opened.locator('[data-music-repeat="all"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    // Источник на компьютере — в сноске под очередью (подпись сверху — только на телефоне)
-    await opened.locator('[data-music-queue-note]').getByText('Source: album “Берег”.').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  });
-  console.log('OK: очередь, играющий трек, повтор и источник пережили перезагрузку');
+  await visible(page.locator('[data-music-desk-player] [data-music-repeat="all"]'));
+  await page.locator('[data-music-desk-player] [data-music-desk-queue]').click();
+  await visible(music.locator('[data-music-view="queue"] [data-track="t3"][data-music-current]'));
+  await page.locator('[data-music-desk-player] [data-music-desk-queue]').click();
+  console.log('OK: очередь, играющий трек и повтор пережили перезагрузку');
 
-  // ── Телефон: вкладки, страницы, мини-плеер и «+» в «Музыке» ───────────────
+  // ── Телефон: вкладки, медиатека, страницы исполнителя и альбома, мини-плеер ─
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(800);
   const ribbon = page.getByRole('navigation', { name: 'Modules' });
   const phone = await openMusic(page);
   const mini = page.locator('[data-music-mini]');
-  await mini.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(mini);
   await page.locator('[data-add-for="music"]').click();
-  await page.getByRole('menuitem', { name: 'Find and download' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await page.getByRole('menuitem', { name: 'New playlist' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(page.getByRole('menuitem', { name: /Find in the catalog/ }));
+  await visible(page.getByRole('menuitem', { name: /New playlist/ }));
   await page.keyboard.press('Escape');
-  const tabs = phone.getByRole('tablist', { name: 'Music' });
-  for (const tab of ['Home', 'Search', 'Library']) {
-    await tabs.getByRole('tab', { name: tab }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  }
-  await tabs.getByRole('tab', { name: 'Library' }).click();
+  const tab = (value) => phone.locator(`[role="tab"][data-view="${value}"]`);
+  for (const value of ['home', 'search', 'library']) await visible(tab(value));
+  await visible(phone.locator('[data-music-quick]'));
+  await tab('library').click();
   const library = phone.locator('[data-music-library]');
-  for (const row of ['starred', 'playlists', 'artists', 'albums', 'offline']) {
-    await library.locator(`[data-view="${row}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  }
-  await library.locator('[data-view="artists"]').getByText('The whole server library').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await library.locator('[data-view="artists"]').click();
+  for (const row of ['starred', 'offline', 'added', 'mix']) await visible(library.locator(`[data-view="${row}"]`));
+  await library.locator('[data-tab="artists"]').click();
+  await library.locator('[data-music-library-artists] [data-artist="ar-1"]').click();
   // Страница поверх ленты: своя шапка с «назад», лента модулей скрыта, мини-плеер внизу
-  await phone.locator('[data-music-back]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await ribbon.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await mini.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await phone.locator('section[data-letter="K"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await phone.locator('section[data-letter="Т"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await phone.getByRole('navigation', { name: 'Alphabet' }).getByRole('button', { name: 'Т', exact: true }).click();
-  await phone.getByRole('tab', { name: /Albums · 2/ }).click();
-  await phone.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  const phoneAlbum = phone.locator('[data-music-tracks]');
+  const artistPage = phone.locator('[data-music-artist-page]');
+  await visible(artistPage.getByRole('heading', { name: 'Тихий порт' }));
+  await visible(phone.locator('[data-music-back]'));
+  await gone(ribbon);
+  await visible(mini);
+  await artistPage.locator('[data-music-albums] [data-id="al-1"]').click();
+  const phoneAlbum = phone.locator('[data-music-album-page] [data-music-tracks]');
   await phoneAlbum.locator('[data-track="t1"]').getByRole('button').first().click();
   // Первый трек короткий (4 с): пауза сразу, чтобы очередь стояла на нём
   await mini.getByRole('button', { name: 'Pause', exact: true }).click();
-  await page.locator('[data-music-mini="paused"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Полный плеер телефона: «Играет из альбома», «Далее в очереди» — только после играющего
+  await visible(page.locator('[data-music-mini="paused"]'));
+  // Плеер телефона: «Играет из альбома», «Далее» и очередь шторкой
   await mini.getByRole('button', { name: 'Open player' }).click();
-  await full.getByRole('heading', { name: 'Северный ветер' }).waitFor();
-  await full.locator('[data-music-source="album"]').getByText('Playing from an album').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await full.locator('[data-music-queue] [aria-expanded]').click();
-  await full.locator('[aria-expanded="true"]').waitFor();
-  await waitRows(page, full, ['t2', 't3']);
-  await dragRow(page, full, 't3', 't2');
-  await waitRows(page, full, ['t3', 't2']);
+  await visible(full.getByRole('heading', { name: 'Северный ветер' }));
+  await visible(full.locator('[data-music-source="album"]').getByText('Playing from an album'));
+  await full.locator('[data-music-open-queue]').click();
+  const queueSheet = full.locator('[data-music-queue-sheet]');
+  await waitRows(page, queueSheet, ['t1', 't2', 't3']);
+  await queueSheet.getByRole('button', { name: 'Close' }).click();
+  await gone(queueSheet);
   await full.getByRole('button', { name: 'Collapse player' }).click();
-  await full.waitFor({ state: 'detached' });
-  console.log('OK: телефон — полный плеер, источник, «Далее в очереди» перетаскиванием');
+  await gone(full);
+  console.log('OK: телефон — медиатека, исполнитель, альбом, мини-плеер, плеер и очередь шторкой');
   await phone.locator('[data-music-back]').click();
   await phone.locator('[data-music-back]').click();
-  await ribbon.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // «Поиск» — страница «‹ Музыка / поиск» (две строки шапки, доска `ZpMusicX`) с полем и чипами
-  await tabs.getByRole('tab', { name: 'Search' }).click();
-  await phone.locator('[data-music-search] [data-music-bar-subtitle]').filter({ hasText: 'search' })
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await phone.locator('[data-music-search]').getByRole('searchbox').fill('harbor');
-  await phone.locator('[data-music-found="2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await phone.getByRole('button', { name: 'Albums', exact: true }).click();
-  await phone.locator('[data-music-found="0"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await phone.getByRole('button', { name: 'All', exact: true }).click();
-  // «Нет на сервере» на телефоне: ход загрузки в процентах и отмена (блок «Найти и скачать»)
-  await phone.locator('[data-music-search]').getByRole('searchbox').fill('медленный берег');
-  const phoneFetch = phone.locator('[data-music-fetch]');
-  // Чипы поиска действуют и на каталог: «Исполнители» ищет по исполнителю — трека с таким названием там нет
-  await phoneFetch.locator('[data-fetch-track="Медленный берег"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await phone.getByRole('button', { name: 'Artists', exact: true }).click();
-  await phoneFetch.locator('[data-fetch-track="Медленный берег"]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await phone.getByRole('button', { name: 'All', exact: true }).click();
-  await phoneFetch.locator('[data-fetch-track="Медленный берег"] [data-fetch-download]').click();
-  const slowJob = phoneFetch.locator('[data-fetch-job][data-fetch-state="downloading"]').first();
-  await slowJob.locator('[data-fetch-percent]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await slowJob.locator('[data-fetch-cancel]').click();
-  await slowJob.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await visible(ribbon);
+  // «Поиск»: поле, сервер, чипы, каталог
+  await tab('search').click();
+  const phoneField = phone.locator('[data-music-search]').getByRole('searchbox');
+  await phoneField.fill('harbor');
+  await visible(phone.locator('[data-music-tracks] [data-track="t2"]'));
+  await visible(phone.locator('[data-music-tracks] [data-track="t4"]'));
+  await phone.locator('[data-filter="albums"]').click();
+  await gone(phone.locator('[data-music-tracks]'));
+  await phone.locator('[data-filter="all"]').click();
+  // Трек каталога, которого нет на сервере; чип «Исполнители» ищет по исполнителю — трека там нет
+  await phoneField.fill('медленный берег');
+  const slowRow = phone.locator(`[data-catalog-track="${CATALOG_SLOW}"]`);
+  await visible(slowRow);
+  await phone.locator('[data-filter="artists"]').click();
+  await gone(slowRow);
+  await phone.locator('[data-filter="all"]').click();
   const phoneOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(phoneOverflow <= 0, `горизонтальное переполнение поиска на телефоне: ${phoneOverflow}`);
-  await phone.locator('[data-music-search]').getByRole('searchbox').fill('');
-  await phone.locator('[data-music-back]').click();
-  await ribbon.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: телефон — вкладки, «Библиотека» строками, страницы с «назад», мини-плеер и «+» в «Музыке»');
+  await phoneField.fill('');
+  await tab('home').click();
+  console.log('OK: телефон — вкладки, поиск по серверу и каталогу, чипы');
 
   await ribbon.getByRole('button', { name: 'Chats' }).click();
-  await mini.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const [miniBox, ribbonBox, addBox] = [await mini.boundingBox(), await ribbon.boundingBox(), await page.locator('[data-add-for="chats"]').boundingBox()];
-  assert.ok(Math.abs(miniBox.y + miniBox.height - ribbonBox.y) <= 1, `полоса плеера не над лентой: ${JSON.stringify({ miniBox, ribbonBox })}`);
+  await visible(mini);
+  const [miniBox, ribbonBox, addBox] = [await mini.boundingBox(), await ribbon.boundingBox(),
+    await page.locator('[data-add-for="chats"]').boundingBox()];
+  // Мини-плеер — карточка над лентой с небольшим зазором (доска `MusicHome`)
+  const isAbove = (box, below) => box.y + box.height <= below.y && below.y - box.y - box.height <= 12;
+  assert.ok(isAbove(miniBox, ribbonBox), `мини-плеер не над лентой: ${JSON.stringify({ miniBox, ribbonBox })}`);
   assert.ok(addBox.y + addBox.height <= miniBox.y, `«+» перекрывает полосу плеера: ${JSON.stringify({ addBox, miniBox })}`);
   // «Open player» тоже содержит «Play» — имя кнопки точное
   const playOrPause = mini.getByRole('button', { name: 'Play', exact: true });
   if (await playOrPause.isVisible().catch(() => false)) await playOrPause.click();
-  await page.locator('[data-music-mini="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(page.locator('[data-music-mini="playing"]'));
   // Состояние звонка подаём через тот же вход, что у контроллера. Сам плеер воспроизводит тестовый трек
   await page.evaluate(() => {
     window.parvaneCall = { state: 'active', peerName: 'Лена' };
     window.dispatchEvent(new Event('parvane-call'));
   });
   const minimize = page.getByRole('button', { name: 'Minimize call', exact: true });
-  await minimize.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(minimize);
   // Музыка встаёт на паузу с началом разговора, а не при сворачивании
   await page.waitForFunction(() => document.querySelector('[data-music-mini]')?.getAttribute('data-music-mini')
     === 'paused', undefined, { timeout: STEP_TIMEOUT_MS });
   await minimize.click();
   const strip = await checkMinimizedCallStrip(page);
-  await page.locator('[data-music-mini="paused"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(page.locator('[data-music-mini="paused"]'));
   const [stripBox, pausedBox, currentRibbonBox] = await Promise.all([
     strip.boundingBox(), mini.boundingBox(), ribbon.boundingBox(),
   ]);
   assert.ok(stripBox.y + stripBox.height < pausedBox.y, 'Плашка звонка должна оставаться вверху');
-  assert.ok(Math.abs(pausedBox.y + pausedBox.height - currentRibbonBox.y) <= 1, 'Мини-плеер должен быть над лентой');
+  assert.ok(isAbove(pausedBox, currentRibbonBox), 'Мини-плеер должен быть над лентой');
   await saveCallState(page, 'minimized-music');
   await strip.click();
-  await minimize.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(minimize);
   assert.equal(await mini.getAttribute('data-music-mini'), 'paused', 'Возврат к звонку не возобновляет музыку сам');
   await page.evaluate(() => {
     window.parvaneCall = { state: 'ended' };
     window.dispatchEvent(new Event('parvane-call'));
   });
-  await minimize.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await gone(minimize);
   console.log('OK: звонок ставит музыку на паузу, плашка звонка вверху, мини-плеер над лентой');
 
   await mini.getByRole('button', { name: 'Open player' }).click();
-  await full.locator('h2').first().waitFor();
-  await ribbon.waitFor({ state: 'detached' });
+  await visible(full.locator('h2').first());
+  await gone(ribbon);
   await full.getByRole('button', { name: 'Collapse player' }).click();
-  await full.waitFor({ state: 'detached' });
-  await ribbon.waitFor();
-  await mini.waitFor();
+  await gone(full);
+  await visible(ribbon);
+  await visible(mini);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
-  console.log('OK: телефон — полный плеер поверх ленты и возврат ленты');
+  console.log('OK: телефон — плеер поверх ленты и возврат ленты');
 
-  // Телефон: меню трека — шторка снизу с обложкой и чипами плейлистов
+  // Телефон: меню трека — шторка снизу с обложкой, быстрые действия кругами (доска `RpMusicA`)
   const phoneMusic = await openMusic(page);
-  await phoneMusic.getByRole('tablist', { name: 'Music' }).getByRole('tab', { name: 'Library' }).click();
-  await phoneMusic.locator('[data-music-library] [data-view="albums"]').click();
-  await phoneMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  const phoneRow = phoneMusic.locator('[data-music-tracks] [data-track="t2"]');
+  await phoneMusic.locator('[data-music-fresh] [data-album="al-1"]').click();
+  const phoneRow = phoneMusic.locator('[data-music-album-page] [data-track="t2"]');
   await phoneRow.locator('[data-music-menu]').click();
   const sheetMenu = page.locator('.Modal [role="menu"]');
-  await sheetMenu.getByRole('menuitem', { name: 'Go to artist', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const sheetItems = await sheetMenu.getByRole('menuitem').allInnerTexts();
-  assert.deepEqual(sheetItems.map((text) => text.trim()),
-    ['Play next', 'Add to queue', 'Add to favorites', 'Download for offline', 'Send to chat', 'Go to artist', 'Go to album',
-      "Don't like", "Don't like the artist"],
-    `порядок пунктов шторки по доске XpMusic: ${sheetItems}`);
-  await page.locator('.Modal [data-playlist-chips] [data-playlist-chip-new]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(sheetMenu.getByRole('menuitem', { name: 'Go to artist', exact: true }));
+  const sheetItems = await sheetMenu.getByRole('menuitem').evaluateAll((items) => items.map((item) => item.getAttribute('aria-label')));
+  assert.deepEqual(sheetItems, ['Send to chat', 'Go to artist', 'Go to album', 'Download to phone', "Don't like", 'File…'],
+    `пункты шторки по доске RpMusicA: ${sheetItems}`);
+  const quickActions = await page.locator('.Modal [role="group"] [data-action]').evaluateAll((items) => items.map((item) => item.dataset.action));
+  assert.deepEqual(quickActions, ['star', 'playlist', 'next', 'share'], `быстрые действия шторки: ${quickActions}`);
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-track-menu-phone.png` });
   }
   const sheetOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(sheetOverflow <= 0, `горизонтальное переполнение со шторкой меню: ${sheetOverflow}`);
-  // Шторка трека — без крестика (доска `XpMusic`): в шапке обложка, название и «исполнитель · время»
   assert.equal(await page.locator('.Modal').getByRole('button', { name: 'Close' }).count(), 0, 'у шторки трека крестика нет');
   await page.keyboard.press('Escape');
-  await sheetMenu.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await gone(sheetMenu);
   console.log('OK: телефон — меню трека шторкой по доске');
 
-  // ── «Найти и скачать»: уверенное совпадение качается само ─────────────────
+  // ── «Найти и скачать» из каталога: уверенное совпадение качается само ─────
   await page.setViewportSize(WIDE);
   await page.waitForTimeout(800);
   const wide = await openMusic(page);
-  const wideNav = (view) => wide.locator(`[data-music-nav] [data-view="${view}"]`).click();
+  const wideNav = (view) => wide.locator(`[data-music-nav] [data-view="${view}"]`).first().click();
   await pause(page).catch(() => undefined);
-  const fetchRow = (title) => wide.locator(`[data-music-fetch] [data-fetch-track="${title}"]`);
-  const searchFor = async (text, title) => {
+  const searchCatalog = async (text, ref) => {
     await wideNav('search');
-    await wide.locator('[data-music-search]').getByRole('searchbox').fill(text);
-    await fetchRow(title).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    return fetchRow(title);
+    await wide.locator('[data-music-desk-search]').fill(text);
+    const row = wide.locator(`[data-catalog-track="${ref}"]`);
+    await visible(row);
+    return row;
   };
-  const bus = await searchFor('автобус', 'Ночной автобус');
-  await wide.locator('[data-music-empty="search"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await bus.locator('[data-fetch-download]').click();
-  await bus.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  assert.equal(await bus.locator('[data-fetch-candidates]').count(), 0, 'уверенное совпадение не спрашивает выбора');
-  await bus.locator('[data-fetch-play]').click();
+  const bus = await searchCatalog('автобус', CATALOG_BUS);
+  await bus.locator('[data-catalog-add]').click();
+  // Скачанное перечитывает поиск: трек — уже строкой сервера
+  const busTrack = wide.locator('[data-music-tracks] [data-track]').filter({ hasText: 'Ночной автобус' });
+  await visible(busTrack, STEP_TIMEOUT_MS * 2);
+  await gone(bus);
+  await busTrack.getByRole('button').first().click();
   await waitPlaying(page, 'Ночной автобус', 'playing');
   await pause(page);
-  console.log('OK: трек найден в сети, скачан без вопросов и играет');
+  console.log('OK: трек каталога добавлен на сервер без вопросов и играет');
 
-  // ── Трек, который уже есть в библиотеке, скачивать не предлагается ────────
-  const glass = await searchFor('glass', 'Glass Harbor');
-  await glass.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await glass.locator('[data-fetch-download]').count(), 0, 'трек из библиотеки не скачивается заново');
-  console.log('OK: трек из библиотеки отмечен в каталоге');
+  // ── Трек, который уже есть в библиотеке, в каталоге не повторяется ────────
+  await wide.locator('[data-music-desk-search]').fill('glass');
+  await visible(wide.locator('[data-music-tracks] [data-track="t4"]'));
+  await page.waitForTimeout(1000);
+  assert.equal(await wide.locator('[data-catalog-track]').filter({ hasText: 'Glass Harbor' }).count(), 0,
+    'трек библиотеки не предлагается из каталога');
+  console.log('OK: трек библиотеки не повторяется строкой каталога');
 
-  // ── Спорное совпадение: нужна версия без цензуры, известной нет — выбор файла ─
-  const loud = await searchFor('громкая', 'Громкая песня');
-  await loud.locator('[data-fetch-download]').click();
-  const candidates = loud.locator('[data-fetch-candidates]');
-  await candidates.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  // ── Спорное совпадение: нужна версия без цензуры, известной нет — выбор файла в «Загрузках» ─
+  const loud = await searchCatalog('громкая', CATALOG_LOUD);
+  await loud.locator('[data-catalog-add]').click();
+  await visible(wide.locator(`[data-catalog-track="${CATALOG_LOUD}"][data-catalog-state="choice"]`), STEP_TIMEOUT_MS * 2);
+  await loud.locator('[data-catalog-choose]').click();
+  const candidates = wide.locator('[data-music-uploads] [data-fetch-candidates]');
+  await visible(candidates);
   assert.equal(await candidates.getByRole('button', { name: 'This one' }).count(), 2, 'в списке два файла');
   await candidates.getByRole('button', { name: 'This one' }).first().click();
-  await loud.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  console.log('OK: спорное совпадение скачано после выбора файла');
+  await gone(candidates, STEP_TIMEOUT_MS * 2);
+  console.log('OK: спорное совпадение скачано после выбора файла в «Загрузках на сервер»');
 
   // ── Лимит: три трека в сутки ──────────────────────────────────────────────
-  const morning = await searchFor('утро', 'Утро');
-  await morning.locator('[data-fetch-download]').click();
-  await morning.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await wide.locator('[data-music-search]').getByRole('searchbox').fill('');
+  const morning = await searchCatalog('утро', CATALOG_MORNING);
+  await morning.locator('[data-catalog-add]').click();
+  await visible(wide.locator('[data-music-tracks] [data-track]').filter({ hasText: 'Утро' }), STEP_TIMEOUT_MS * 2);
+  await wide.locator('[data-music-desk-search]').fill('');
   console.log('OK: три трека за сутки скачаны');
 
-  // ── «Добавлено мной»: свои треки, расход, удаление; «добавил я» на главной ─
+  // ── «Добавлено мной»: свои треки, расход, удаление в корзину ─────────────
   await wideNav('added');
   const mine = wide.locator('[data-music-added="mine"]');
-  await mine.locator('[data-track]').nth(2).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await wide.locator('[data-music-usage]').getByText('Today 3 of 3').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await pickTrackAction(page, mine.locator('[data-track]').filter({ hasText: 'Утро' }), 'Remove from the server library');
-  await wide.locator('[data-music-usage]').getByText('Today 2 of 3').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await mine.locator('[data-track]').nth(2).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await wideNav('home');
-  const everyone = wide.locator('[data-music-added="all"]');
-  await everyone.getByText('added by me').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await everyone.locator('[data-track]').count(), 2, 'на главной два добавленных трека');
-  await everyone.locator('[data-track]').first().locator('[data-music-offline-track="none"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: «Добавлено мной» — расход, удаление; «Новое на сервере» — «добавил я», ↓ в строке');
+  await visible(mine.locator('[data-track]').nth(2));
+  await visible(wide.locator('[data-music-usage]').getByText(/Today 3 of 3/));
+  await openTrackMenu(mine.locator('[data-track]').filter({ hasText: 'Утро' }));
+  await page.getByRole('menuitem', { name: 'File…', exact: true }).hover();
+  await page.locator('[data-music-submenu]').getByRole('menuitem', { name: 'Delete from server', exact: true }).click();
+  await page.getByRole('button', { name: 'Move to trash', exact: true }).click();
+  await visible(page.getByText('In the trash — you can restore it for 30 days').first());
+  await gone(mine.locator('[data-track]').nth(2));
+  console.log('OK: «Добавлено мной» — расход за сутки, удаление в корзину');
 
   // ── Плейлисты: окно «Новый плейлист», подменю «В плейлист ›» ──────────────
-  const playlistsNav = wide.locator('[data-music-nav] [data-playlist]');
-  await wide.locator('[data-music-nav] [data-music-new-playlist]').click();
+  const playlistsNav = wide.locator('[data-music-nav] [data-view="playlist"]');
+  await plus.click();
+  await page.getByRole('menuitem', { name: /New playlist/ }).click();
   const createForm = page.locator('[data-music-new-playlist-form]');
   await createForm.getByPlaceholder('for example: For the road').fill('Дорога');
-  // Играющий трек предлагается добавить сразу (доска `ZdMusicX`) — здесь плейлист создаётся пустым
+  // Играющий трек предлагается добавить сразу — здесь плейлист создаётся пустым
   await createForm.locator('[data-music-add-current][aria-checked="true"]').click();
-  await createForm.locator('[data-music-add-current][aria-checked="false"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(createForm.locator('[data-music-add-current][aria-checked="false"]'));
   await createForm.getByRole('button', { name: 'Create', exact: true }).click();
   const opened = wide.locator('[data-music-playlist]');
-  await opened.locator('[data-music-empty]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await opened.getByText('My playlist').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await wideNav('albums');
-  await wide.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  const albumRow = (id) => wide.locator(`[data-music-tracks] [data-track="${id}"]`);
-  await albumRow('t1').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(opened.locator('[data-music-empty]'));
+  const roadAlbum = await openAlbumBySearch(wide, 'Берег', 'al-1');
+  const albumRow = (id) => roadAlbum.locator(`[data-track="${id}"]`);
   await addToPlaylist(page, albumRow('t1'), 'Дорога');
-  await page.getByText('Added to “Дорога”').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(page.getByText('Added to “Дорога”').first());
   await addToPlaylist(page, albumRow('t3'), 'Дорога');
   await addToPlaylist(page, albumRow('t1'), 'Дорога');
-  await page.getByText('This track is already in the playlist').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(page.getByText('This track is already in the playlist').first());
   // Новый плейлист из подменю — окно с «Сразу добавить «трек»»
   await addToPlaylist(page, albumRow('t2'), 'New…');
-  await createForm.locator('[data-music-add-current][aria-checked="true"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(createForm.locator('[data-music-add-current][aria-checked="true"]'));
   await createForm.getByPlaceholder('for example: For the road').fill('Вечер');
   await createForm.getByRole('button', { name: 'Create', exact: true }).click();
-  await page.getByText('Playlist “Вечер” created').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Телефон (доска `XpMusic`): в шторке трека плейлисты — чипами внизу; где трек уже есть — чип выделен
+  await visible(page.getByText('Playlist “Вечер” created').first());
+  // Телефон: «В плейлист» быстрым действием шторки — выбор плейлиста; где трек уже есть — помечено
   await page.setViewportSize(PHONE);
   await albumRow('t1').locator('[data-music-menu]').click();
-  const chips = page.locator('[data-playlist-chips]');
-  await chips.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await chips.getByRole('button', { name: 'Дорога', exact: true }).getAttribute('aria-pressed'), 'true');
-  await chips.getByRole('button', { name: 'Вечер', exact: true }).click();
-  await chips.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await page.locator('.Modal [role="group"] [data-action="playlist"]').click();
+  const pickSheet = page.locator('[data-playlist-picker]');
+  await visible(pickSheet);
+  await pickSheet.locator('[data-playlist]').filter({ hasText: 'Вечер' }).click();
+  await pickSheet.locator('[data-picker-done]').click();
+  await gone(pickSheet);
   await page.setViewportSize(WIDE);
-  await playlistsNav.filter({ hasText: 'Дорога' }).getByText('2', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await playlistsNav.filter({ hasText: 'Вечер' }).getByText('2', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: плейлисты — окно «Новый плейлист», подменю, чипы на телефоне, плейлисты в навигации');
+  await visible(playlistsNav.filter({ hasText: 'Дорога' }).filter({ hasText: /\b2\b/ }));
+  await visible(playlistsNav.filter({ hasText: 'Вечер' }).filter({ hasText: /\b2\b/ }));
+  console.log('OK: плейлисты — окно «Новый плейлист», подменю, выбор на телефоне, плейлисты в медиатеке');
 
-  // ── Страница плейлиста: таблица, порядок, «Играть», убрать, переименовать ─
+  // ── Страница плейлиста: порядок, «Играть», убрать, переименовать ─────────
   await playlistsNav.filter({ hasText: 'Дорога' }).click();
   const waitOrder = async (expected) => {
     await page.waitForFunction((want) => {
@@ -574,10 +614,9 @@ try {
     }, expected.join(), { timeout: STEP_TIMEOUT_MS });
   };
   await waitOrder(['t1', 't3']);
-  await opened.getByText('2 tracks', { exact: false }).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await dragRow(page, opened, 't1', 't3');
   await waitOrder(['t3', 't1']);
-  await opened.getByRole('button', { name: 'Play', exact: true }).click();
+  await opened.locator('[data-music-play-all]').click();
   await waitPlaying(page, 'Соль', 'playing');
   await pause(page);
   await pickTrackAction(page, opened.locator('[data-track="t3"]'), 'Remove from the playlist');
@@ -586,52 +625,48 @@ try {
   await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
   await page.locator('[data-music-playlist-name]').fill('В дорогу');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await playlistsNav.filter({ hasText: 'В дорогу' }).getByText('1', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(playlistsNav.filter({ hasText: 'В дорогу' }));
   console.log('OK: страница плейлиста — порядок, «Играть», «Убрать из плейлиста», «Переименовать»');
 
   // ── Перезагрузка: плейлисты на месте; удаление плейлиста с вопросом ───────
   await page.waitForTimeout(3000);
   await reloadPage(page);
-  const again2 = await openMusic(page);
-  const lists2 = again2.locator('[data-music-nav] [data-playlist]');
-  await lists2.filter({ hasText: 'В дорогу' }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await lists2.filter({ hasText: 'Вечер' }).click();
-  await again2.locator('[data-music-playlist] [data-track="t2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await again2.locator('[data-music-playlist-menu]').click();
+  const again = await openMusic(page);
+  const lists = again.locator('[data-music-nav] [data-view="playlist"]');
+  await visible(lists.filter({ hasText: 'В дорогу' }), LOGIN_TIMEOUT_MS);
+  await lists.filter({ hasText: 'Вечер' }).click();
+  await visible(again.locator('[data-music-playlist] [data-track="t2"]'));
+  await again.locator('[data-music-playlist-menu]').click();
   await page.getByRole('menuitem', { name: 'Delete playlist', exact: true }).click();
   await page.locator('[data-playlist-delete="confirm"]').click();
-  await lists2.filter({ hasText: 'Вечер' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await lists2.count(), 1, 'после удаления остался один плейлист');
+  await gone(lists.filter({ hasText: 'Вечер' }));
+  assert.equal(await lists.count(), 1, 'после удаления остался один плейлист');
   console.log('OK: плейлисты пережили перезагрузку, плейлист удалён');
 
   // ── Трек в чат: карточка в «Избранном», из неё трек играет ────────────────
-  const wide2 = (view) => again2.locator(`[data-music-nav] [data-view="${view}"]`).click();
-  await wide2('albums');
-  await again2.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  await pickTrackAction(page, again2.locator('[data-music-tracks] [data-track="t2"]'), 'Send to chat…');
+  const chatAlbum = await openAlbumBySearch(await openMusic(page), 'Берег', 'al-1');
+  await pickTrackAction(page, chatAlbum.locator('[data-track="t2"]'), 'Send to chat…');
   const trackSend = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
   await trackSend.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first()
     .locator('input[type="checkbox"]').check();
   await trackSend.locator('[data-send-submit]').click();
-  await page.getByText('Track sent').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(page.getByText('Track sent'));
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
   await page.locator('#LeftColumn .chat-list').getByText('Saved Messages').first().click();
   const card = page.locator('[data-music-track-card="t2"]');
-  await card.getByText('Harbor Lights').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await card.getByText('Server music').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(card.getByText('Harbor Lights'));
+  await visible(card.getByText('Server music'));
   // Телефон: карточка трека во всю ширину ленты, без переполнения (доска `MusicChat`)
   await page.setViewportSize(PHONE);
-  await card.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(card);
   const cardOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(cardOverflow <= 0, `карточка трека переполняет телефон: ${cardOverflow}`);
-  // Кадр карточки трека в чате для сверки с доской `MusicChat`
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.waitForTimeout(600);
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-chat-track-phone.png` });
   }
   await page.setViewportSize(WIDE);
-  await page.locator('#LeftColumn .chat-list').getByText(/Track: .*Harbor Lights/).first()
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(page.locator('#LeftColumn .chat-list').getByText(/Track: .*Harbor Lights/).first());
   await card.getByRole('button', { name: 'Play track', exact: true }).click();
   await waitPlaying(page, 'Harbor Lights', 'playing');
   console.log('OK: трек отправлен в чат карточкой и играет из неё');
@@ -639,19 +674,18 @@ try {
   // ── Плейлист в чат: карточка, «Открыть», «Сохранить к себе», «Слушать» ────
   const backInMusic = await openMusic(page);
   await pause(page);
-  await backInMusic.locator('[data-music-nav] [data-playlist]').filter({ hasText: 'В дорогу' }).click();
-  await backInMusic.locator('[data-music-playlist] [data-music-playlist-to-chat]').click();
+  await backInMusic.locator('[data-music-nav] [data-view="playlist"]').filter({ hasText: 'В дорогу' }).click();
+  await backInMusic.locator('[data-music-playlist] [data-music-playlist-to-chat]').first().click();
   const playlistSend = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
   await playlistSend.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first()
     .locator('input[type="checkbox"]').check();
   await playlistSend.locator('[data-send-submit]').click();
-  await page.getByText('Playlist sent').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(page.getByText('Playlist sent'));
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
   await page.locator('#LeftColumn .chat-list').getByText('Saved Messages').first().click();
   const playlistCard = page.locator('[data-music-playlist-card="В дорогу"]');
-  await playlistCard.getByText('Северный ветер').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await playlistCard.getByText(/^1 track/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Кадр карточек трека и плейлиста в чате на телефоне (доска `MusicChat`)
+  await visible(playlistCard.getByText('Северный ветер'));
+  await visible(playlistCard.getByText(/^1 track/));
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.setViewportSize(PHONE);
     await page.waitForTimeout(800);
@@ -661,185 +695,172 @@ try {
   }
   await playlistCard.getByRole('button', { name: 'Open', exact: true }).click();
   const sharedSheet = page.locator('[data-music-playlist-sheet]');
-  await sharedSheet.locator('[data-track="t1"]').getByText('Северный ветер').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(sharedSheet.locator('[data-track="t1"]').getByText('Северный ветер'));
   await sharedSheet.getByRole('button', { name: 'Save to my playlists' }).click();
-  await page.getByText('Playlist saved to your playlists').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await sharedSheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await visible(page.getByText('Playlist saved to your playlists'));
+  await gone(sharedSheet);
   await playlistCard.getByRole('button', { name: 'Listen', exact: true }).click();
   await waitPlaying(page, 'Северный ветер');
   await openMusic(page);
   await pause(page).catch(() => undefined);
-  await backInMusic.locator('[data-music-nav] [data-playlist]').filter({ hasText: 'В дорогу' }).nth(1)
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(backInMusic.locator('[data-music-nav] [data-view="playlist"]').filter({ hasText: 'В дорогу' }).nth(1));
   console.log('OK: плейлист отправлен в чат карточкой, открыт, сохранён к себе и играет');
 
   // ── «Загруженное»: группы, один трек и альбом на устройстве, без сети ─────
-  const offNav = (view) => backInMusic.locator(`[data-music-nav] [data-view="${view}"]`).click();
+  const offNav = (view) => backInMusic.locator(`[data-music-nav] [data-view="${view}"]`).first().click();
   await offNav('offline');
-  await backInMusic.locator('[data-music-offline="0"] [data-music-empty]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await backInMusic.getByRole('switch', { name: /Download new tracks/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await backInMusic.locator('[data-music-offline-quality]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await offNav('albums');
-  await backInMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  const albumTracks = backInMusic.locator('[data-music-tracks]');
-  await albumTracks.locator('[data-track="t2"][data-music-offline-track="none"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(backInMusic.locator('[data-music-offline="0"] [data-music-empty]'));
+  let offAlbum = await openAlbumBySearch(await openMusic(page), 'Берег', 'al-1');
+  await visible(offAlbum.locator('[data-track="t2"][data-music-offline-track="none"]'));
   if (process.env.PARVANE_E2E_SHOT_DIR) {
-    await albumTracks.locator('[data-track="t2"] [data-music-menu]').click();
-    await page.getByRole('menu').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await offAlbum.locator('[data-track="t2"] [data-music-menu]').click();
+    await visible(page.getByRole('menu').first());
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-track-menu-desk.png` });
     await page.keyboard.press('Escape');
-    await page.getByRole('menu').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+    await menuGone(page);
   }
-  await pickTrackAction(page, albumTracks.locator('[data-track="t2"]'), 'Download to this computer');
-  await albumTracks.locator('[data-track="t2"][data-music-offline-track="saved"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await pickTrackAction(page, offAlbum.locator('[data-track="t2"]'), 'Download to this computer');
+  await visible(offAlbum.locator('[data-track="t2"][data-music-offline-track="saved"]'), STEP_TIMEOUT_MS * 2);
   await offNav('offline');
-  await backInMusic.locator('[data-music-offline="1"] [data-offline-group="tracks:"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(backInMusic.locator('[data-music-offline="1"] [data-offline-group="tracks:"]'));
   console.log('OK: один трек загружен на устройство из меню трека — «Отдельные треки»');
-  await offNav('albums');
-  await backInMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  await backInMusic.locator('[data-music-save-offline]').click();
+  offAlbum = await openAlbumBySearch(await openMusic(page), 'Берег', 'al-1');
+  await offAlbum.getByRole('button', { name: 'More', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Download to this computer', exact: true }).click();
   await offNav('offline');
-  await backInMusic.locator('[data-music-offline="3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await backInMusic.locator('[data-offline-usage]').getByText(/3 tracks · .* of 1 GB on this device/)
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(backInMusic.locator('[data-music-offline="3"]'), STEP_TIMEOUT_MS * 2);
+  await visible(backInMusic.locator('[data-offline-usage]').getByText(/3 tracks · .* of 1 GB on this device/));
   const albumGroup = backInMusic.locator('[data-offline-group="album:al-1"]');
-  await albumGroup.getByText('album · 3 tracks').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(albumGroup.getByText('album · 3 tracks'));
   await albumGroup.locator('[data-group]').first().click();
-  // Оболочка приложения в кэше сервис-воркера целиком — для перезагрузки без сети ниже (PWA, spec 041 F1)
+  // Оболочка приложения в кэше сервис-воркера целиком — для перезагрузки без сети ниже (PWA)
   await page.locator('html[data-app-shell]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS * 6 });
   await context.setOffline(true);
-  await backInMusic.locator('[data-offline-bar]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(backInMusic.locator('[data-offline-bar]'));
   await albumGroup.locator('[data-track="t3"]').getByRole('button').first().click();
   await waitPlaying(page, 'Соль', 'playing');
   await pause(page);
   console.log('OK: альбом загружен на устройство одной группой и играет без сети');
 
   // ── Приложение запущено без сети: «Загруженное» на месте и играет ─────────
-  // `reloadPage`, а не `goto`: закрытие полного плеера в `pause` снимает запись истории отложенным переходом, и
-  // выданная в этот момент навигация обрывалась `net::ERR_ABORTED`
   await reloadPage(page);
   const offlineMusic = await openMusic(page);
   await offlineMusic.locator('[data-music-nav] [data-view="offline"]').click();
-  await offlineMusic.locator('[data-music-offline="3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(offlineMusic.locator('[data-music-offline="3"]'));
   const offlineGroup = offlineMusic.locator('[data-offline-group="album:al-1"]');
   await offlineGroup.locator('[data-group]').first().click();
   await offlineGroup.locator('[data-track="t1"]').getByRole('button').first().click();
   await waitPlaying(page, 'Северный ветер', 'playing');
   await pause(page);
   await context.setOffline(false);
-  await offlineMusic.locator('[data-offline-bar]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS * 3 });
+  await gone(offlineMusic.locator('[data-offline-bar]'), STEP_TIMEOUT_MS * 3);
   console.log('OK: запуск без сети — «Загруженное» открывается и играет');
   await pickTrackAction(page, offlineGroup.locator('[data-track="t3"]'), 'Remove from this device');
-  await offlineMusic.locator('[data-music-offline="2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(offlineMusic.locator('[data-music-offline="2"]'));
   await offlineMusic.locator('[data-offline-clear="ask"]').click();
   await offlineMusic.locator('[data-offline-clear="confirm"]').click();
-  await offlineMusic.locator('[data-music-offline="0"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(offlineMusic.locator('[data-music-offline="0"]'));
   console.log('OK: загруженное убирается по одному и целиком');
 
   // ── Загруженный плейлист следует за составом: новое докачивается, убранное стирается ─
-  const plNav = (view) => offlineMusic.locator(`[data-music-nav] [data-view="${view}"]`).click();
-  await plNav('albums');
-  await offlineMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  const offAlbum = offlineMusic.locator('[data-music-tracks]');
-  await addToPlaylist(page, offAlbum.locator('[data-track="t3"]'), 'New…');
+  let plAlbum = await openAlbumBySearch(await openMusic(page), 'Берег', 'al-1');
+  await addToPlaylist(page, plAlbum.locator('[data-track="t3"]'), 'New…');
   await createForm.getByPlaceholder('for example: For the road').fill('Офлайн');
   await createForm.getByRole('button', { name: 'Create', exact: true }).click();
-  await createForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await gone(createForm);
   const toastsAfterCreate = await page.locator('.Notification').allInnerTexts().catch(() => []);
   const offList = offlineMusic.locator('[data-music-playlist]');
-  // Под нагрузкой плейлист однажды не появился в навигации после закрытия окна: тогда — состояние плейлистов,
+  // Под нагрузкой плейлист однажды не появился в медиатеке после закрытия окна: тогда — состояние плейлистов,
   // уведомление и журнал диагностики, чтобы было видно, создан ли он
-  const offlineListNav = offlineMusic.locator('[data-music-nav] [data-playlist]').filter({ hasText: 'Офлайн' });
-  await offlineListNav.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }).catch(async () => {
+  const offlineListNav = offlineMusic.locator('[data-music-nav] [data-view="playlist"]').filter({ hasText: 'Офлайн' });
+  await visible(offlineListNav).catch(async () => {
     const reply = await page.evaluate(() => window.__parvaneDiagCallApi('parvaneMusicPlaylists')).catch(String);
     const names = reply?.view ? JSON.parse(reply.view).playlists.map((list) => list.name) : reply;
     const toasts = await page.locator('.Notification').allInnerTexts().catch(() => []);
     await dumpDiagJournal(page, 'плейлист «Офлайн»', 80);
-    assert.fail(`плейлиста «Офлайн» нет в навигации: ${JSON.stringify({
+    assert.fail(`плейлиста «Офлайн» нет в медиатеке: ${JSON.stringify({
       status: reply?.status, names, toastsAfterCreate, toasts,
     })}`);
   });
   await offlineListNav.click();
-  await offList.locator('[data-track="t3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(offList.locator('[data-track="t3"]'));
   await offList.locator('[data-music-playlist-menu]').click();
   await page.getByRole('menuitem', { name: 'Download the playlist for offline', exact: true }).click();
-  await offList.locator('[data-track="t3"][data-music-offline-track="saved"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await offList.getByText('downloaded for offline').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await plNav('albums');
-  await offlineMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  await addToPlaylist(page, offAlbum.locator('[data-track="t2"]'), 'Офлайн');
-  await offAlbum.locator('[data-track="t2"][data-music-offline-track="saved"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await offlineMusic.locator('[data-music-nav] [data-playlist]').filter({ hasText: 'Офлайн' }).click();
+  await visible(offList.locator('[data-track="t3"][data-music-offline-track="saved"]'), STEP_TIMEOUT_MS * 2);
+  await visible(offList.getByText('downloaded for offline'));
+  plAlbum = await openAlbumBySearch(await openMusic(page), 'Берег', 'al-1');
+  await addToPlaylist(page, plAlbum.locator('[data-track="t2"]'), 'Офлайн');
+  await visible(plAlbum.locator('[data-track="t2"][data-music-offline-track="saved"]'), STEP_TIMEOUT_MS * 2);
+  await offlineListNav.click();
   await pickTrackAction(page, offList.locator('[data-track="t3"]'), 'Remove from the playlist');
-  await plNav('offline');
+  await offlineMusic.locator('[data-music-nav] [data-view="offline"]').click();
   const playlistGroup = offlineMusic.locator('[data-music-offline="1"] [data-offline-group^="playlist:"]');
-  await playlistGroup.getByText('Офлайн').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await playlistGroup.getByText('playlist · 1 track').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(playlistGroup.getByText('Офлайн'), STEP_TIMEOUT_MS * 2);
+  await visible(playlistGroup.getByText('playlist · 1 track'));
   console.log('OK: загруженный плейлист — новый трек докачан, убранный стёрт с устройства, группа плейлиста');
 
-  // ── Длинные списки страницами, исполнители, «Популярное», синглы ──────────
+  // ── Длинные списки страницами, исполнитель и его выпуски ─────────────────
   await fetch(`${LIBRARY_URL}?extra=60`);
   await page.waitForTimeout(1500);
   await reloadPage(page);
   const big = await openMusic(page);
-  const bigNav = (view) => big.locator(`[data-music-nav] [data-view="${view}"]`).click();
-  await bigNav('artists');
-  await big.locator('[data-music-title]').getByText('Artists').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Обзор» поиска: «Исполнители» — весь список сервера
+  await big.locator('[data-music-nav] [data-view="search"]').click();
+  await big.locator('[data-music-search]').getByRole('button', { name: /^Artists/ }).click();
+  await visible(big.locator('[data-music-title]').getByText('Artists'));
   // В библиотеке — 2 исполнителя сценария, добавленные «Найти и скачать» и 60 сингловых: больше одной страницы
-  await big.getByText(/\d+ in the server library/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(big.getByText(/\d+ in the server library/));
   const artistRows = big.locator('[data-music-artists] [data-id]');
-  await artistRows.nth(49).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(artistRows.nth(49));
   await big.locator('[data-music-more]').scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelectorAll('#ParvaneMusic [data-music-artists] [data-id]').length >= 62,
     undefined, { timeout: STEP_TIMEOUT_MS });
   console.log('OK: исполнители — шапка с числом, подгрузка второй страницы при прокрутке');
   await big.getByRole('button', { name: 'By tracks', exact: true }).click();
-  await big.locator('[data-music-artists] [data-id]').first().getByText('Тихий порт').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(big.locator('[data-music-artists] [data-id]').first().getByText('Тихий порт'));
   await big.getByPlaceholder('Find an artist').fill('тихий');
   await page.waitForFunction(() => document.querySelectorAll('#ParvaneMusic [data-music-artists] [data-id]').length === 1,
     undefined, { timeout: STEP_TIMEOUT_MS });
-  await big.locator('[data-music-artist-panel="ar-1"]').getByText('Берег').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await visible(big.locator('[data-music-artist-panel="ar-1"]').getByText('Берег'));
   await big.locator('[data-music-artists] [data-id="ar-1"]').dblclick();
-  const artistPage = big.locator('[data-music-artist="ar-1"]');
-  await artistPage.getByText('1 album · 3 tracks on the server').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await artistPage.locator('[data-music-popular] [data-track]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await artistPage.getByRole('button', { name: 'Play all' }).click();
-  await waitPlaying(page, 'Северный ветер', 'playing');
+  const bigArtist = big.locator('[data-music-artist-page]');
+  await visible(bigArtist.getByRole('heading', { name: 'Тихий порт' }));
+  await visible(bigArtist.locator('[data-music-tracks] [data-track]').first());
+  await visible(bigArtist.locator('[data-music-albums] [data-id="al-1"]'));
+  await bigArtist.locator('[data-music-play-all]').click();
+  await waitPlaying(page, 'Тихий порт', 'playing');
   await pause(page);
-  assert.equal(await big.locator('[data-music-nav] [data-view="artists"][aria-current="page"]').count(), 1, 'исполнитель подсвечивает «Исполнители»');
-  console.log('OK: исполнитель — шапка, «Играть всё», «Популярное на сервере»');
-  // Сингл исполнителя — плиткой «Синглы»
-  await bigNav('artists');
-  await big.getByPlaceholder('Find an artist').fill('Echo 07');
-  await big.locator('[data-music-artists] [data-id="ar-x07"]').dblclick();
-  await big.locator('[data-music-artist="ar-x07"] [data-singles="ar-x07"]').click();
-  await big.locator('[data-music-album="ar-x07"] [data-track="x07"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await bigNav('albums');
-  await big.locator('[data-music-title]').getByText(/Albums · \d+/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: исполнитель — страница, «Популярное», выпуски, «Играть»');
+  // Сингл исполнителя — среди его выпусков
+  await big.locator('[data-music-nav] [data-view="search"]').click();
+  await big.locator('[data-music-desk-search]').fill('Echo 07');
+  await big.locator('[data-music-artists] [data-id="ar-x07"]').click();
+  await bigArtist.locator('[data-music-albums] [data-id]').first().click();
+  await visible(big.locator('[data-music-album-page] [data-track="x07"]'));
+  await big.locator('[data-music-nav] [data-view="search"]').click();
+  await big.locator('[data-music-desk-search]').fill('');
+  await big.locator('[data-music-search]').getByRole('button', { name: /^New on the server/ }).click();
+  await visible(big.locator('[data-music-title]').getByText(/Albums · \d+/));
   await page.waitForFunction(() => document.querySelectorAll('#ParvaneMusic [data-music-albums] [data-id]').length >= 50,
     undefined, { timeout: STEP_TIMEOUT_MS });
   await big.locator('[data-music-more]').scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelectorAll('#ParvaneMusic [data-music-albums] [data-id]').length >= 62,
     undefined, { timeout: STEP_TIMEOUT_MS });
   await big.getByRole('button', { name: 'Newest', exact: true }).click();
-  await big.locator('[data-music-albums] [data-id]').first().getByText('Echo 60 — сингл').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: синглы плиткой, альбомы — подгрузка страниц, «Новые»');
+  await visible(big.locator('[data-music-albums] [data-id]').first().getByText('Echo 60 — сингл'));
+  console.log('OK: сингл среди выпусков, альбомы — подгрузка страниц, «Новые»');
 
   // ── Пустая библиотека: главная по доске ───────────────────────────────────
   await fetch(`${LIBRARY_URL}?empty=1`);
   await page.waitForTimeout(1500);
   await reloadPage(page);
   const emptyMusic = await openMusic(page);
-  await emptyMusic.locator('[data-music-empty="library"]').getByText('Find and download to the server')
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await emptyMusic.locator('[data-music-empty="library"]').getByText(/The player appears in the side panel/)
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const empty = emptyMusic.locator('[data-music-empty="library"]');
+  await visible(empty.getByText('No music on the server yet'));
+  await visible(empty.locator('[data-music-empty-find]'));
   await page.setViewportSize(PHONE);
-  await emptyMusic.locator('[data-music-empty="library"]').getByText('No music on the server yet')
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Кадры пустой библиотеки для сверки с доской `RpMusicB-03`
+  await visible(empty.getByText('No music on the server yet'));
   if (process.env.PARVANE_E2E_SHOT_DIR) {
-    // Пауза — на перестройку с компьютера на телефон: раньше блок ещё стоит с отступом под боковую панель
     await page.waitForTimeout(2000);
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-empty-phone.png` });
   }
@@ -848,7 +869,7 @@ try {
     await page.waitForTimeout(600);
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-empty-desk.png` });
   }
-  console.log('OK: пустая библиотека — компьютер и телефон по доскам');
+  console.log('OK: пустая библиотека — компьютер и телефон по доске');
 
   assertNoPageErrors({ session });
   console.log('OK: модуль «Музыка»');

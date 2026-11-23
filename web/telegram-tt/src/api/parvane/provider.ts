@@ -115,6 +115,7 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { createModReports } from './modReports';
 import { createMusicApi } from './musicApi';
+import { createMusicCall } from './musicCall';
 import { createMusicCatalogApi } from './musicCatalogApi';
 import { createMusicFilesApi } from './musicFilesApi';
 import { createMusicSharedApi } from './musicSharedApi';
@@ -2874,9 +2875,10 @@ const healthImportMethods = createHealthImport({
   log: logDebug,
 });
 
-// «Музыка» (spec 039): методы раздела — `musicApi.ts`
+// «Музыка» (spec 039): методы раздела — `musicApi.ts`; отказ «слишком часто» повторяется (`musicCall.ts`)
+const musicCall = createMusicCall((method, request) => getV2Bridge().control.call(method, request));
 const musicMethods = createMusicApi({
-  call: (method, request) => getV2Bridge().control.call(method, request),
+  call: musicCall,
   playlists: () => v2Controller.music,
   selfDomain: () => store.self.split('@')[1] || '',
   selfName: () => store.self.split('@')[0] || '',
@@ -2885,16 +2887,16 @@ const musicMethods = createMusicApi({
 
 // Каталог «Музыки», история поиска и тексты песен — `musicCatalogApi.ts`
 const musicCatalogMethods = createMusicCatalogApi({
-  call: (method, request) => getV2Bridge().control.call(method, request),
+  call: musicCall,
 });
 // Файлы библиотеки «Музыки»: «Откуда файл», правка тегов, корзина, ссылки — `musicFilesApi.ts`
 const musicFilesMethods = createMusicFilesApi({
-  call: (method, request) => getV2Bridge().control.call(method, request),
+  call: musicCall,
 });
 
 // Общие плейлисты «Музыки» (spec 041, MUSIC-3): методы `music.shared.*` — `musicSharedApi.ts`
 const musicSharedMethods = createMusicSharedApi({
-  call: (method, request) => getV2Bridge().control.call(method, request),
+  call: musicCall,
   resolveNick: (nick) => resolveUserAddressByNick(nick),
   selfAddress: () => store.self,
   displayName: (address) => store.getDisplayName(address),

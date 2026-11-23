@@ -8,6 +8,7 @@ import type { MusicSearchFound } from './musicSearchLists';
 
 import buildClassName from '../../../util/buildClassName';
 import { getSharedPlaylists } from './shared/musicShared';
+import { MUSIC_LIBRARY_CHANGED_EVENT } from './musicAdded';
 import {
   callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
@@ -116,6 +117,16 @@ const MusicSearchView = ({
   useEffect(() => {
     if (effective) search(effective);
   }, [effective, search]);
+
+  // Трек из каталога скачан — найденное перечитывается: он уже на сервере
+  useEffect(() => {
+    const handleChanged = () => {
+      const text = getMusicQuery().trim();
+      if (text) search(text);
+    };
+    window.addEventListener(MUSIC_LIBRARY_CHANGED_EVENT, handleChanged);
+    return () => window.removeEventListener(MUSIC_LIBRARY_CHANGED_EVENT, handleChanged);
+  }, [search]);
 
   const handleMore = useLastCallback(async () => {
     const catalog = found?.catalog;

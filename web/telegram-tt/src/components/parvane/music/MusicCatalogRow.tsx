@@ -34,7 +34,7 @@ type OwnProps = {
   sub?: string;
 };
 
-type State = 'catalog' | 'waiting' | 'adding' | 'processing' | 'failed';
+type State = 'catalog' | 'waiting' | 'adding' | 'processing' | 'failed' | 'choice';
 
 const PHONE_MAX_WIDTH = 925;
 
@@ -57,6 +57,8 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     else if (result === 'duplicate') showNotification({ message: lang('MusicFetchDuplicate') });
     else if (result === 'failed') showNotification({ message: lang('MusicFetchFailedShort') });
   });
+  // Уверенного совпадения нет — файл выбирают в «Загрузках на сервер»
+  const handleChoose = useLastCallback(() => openMusicView({ kind: 'uploads' }));
   const handleRetry = useLastCallback(() => {
     if (job) void retryFetchJob(job);
   });
@@ -148,6 +150,16 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
           <ParvaneIcon name="cloudAdd" isSmall />
         </button>
       )}
+      {state === 'choice' && (
+        <button
+          type="button"
+          className={buildClassName(kit.ib, styles.trackMenu)}
+          data-catalog-choose
+          onClick={handleChoose}
+        >
+          <ParvaneIcon name="list" isSmall />
+        </button>
+      )}
       {state === 'failed' && (
         <button
           type="button"
@@ -196,6 +208,7 @@ const STATE_ICONS: Record<State, ParvaneIconName> = {
   adding: 'refresh',
   processing: 'refresh',
   failed: 'warn',
+  choice: 'warn',
 };
 const STATE_CLASSES: Record<State, string | undefined> = {
   catalog: undefined,
@@ -203,6 +216,7 @@ const STATE_CLASSES: Record<State, string | undefined> = {
   adding: undefined,
   processing: styles.trackStateBusy,
   failed: styles.trackStateFailed,
+  choice: styles.trackStateBusy,
 };
 const STATE_KEYS = {
   catalog: 'MusicStateCatalog',
@@ -210,11 +224,13 @@ const STATE_KEYS = {
   adding: 'MusicStateAdding',
   processing: 'MusicStateProcessing',
   failed: 'MusicStateFailed',
+  choice: 'MusicStateChoice',
 } as const;
 
 function stateOf(job?: MusicFetchJob): State {
   if (!job) return 'catalog';
   if (job.state === 'failed') return 'failed';
+  if (job.state === 'choice') return 'choice';
   if (job.state === 'queued') return 'waiting';
   if (job.state === 'downloading' && job.bytesTotal && job.bytesDone >= job.bytesTotal) return 'processing';
   return 'adding';

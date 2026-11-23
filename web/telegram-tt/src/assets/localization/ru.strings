@@ -1715,6 +1715,7 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicStateChoice" = "выберите файл";
 "MusicListenPreview" = "Послушать превью";
 "MusicPreviewOnly" = "Превью — в каталоге только 30 секунд";
 "MusicFavFromCatalog" = "«В Любимое» из каталога";

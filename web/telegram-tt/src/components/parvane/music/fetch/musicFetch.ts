@@ -8,6 +8,7 @@ import { showMusicTrackNotification } from '../../../../util/pageNotify';
 import { ACCOUNT_WIPED_EVENT } from '../../../../util/parvaneEvents';
 import { createSignal } from '../../../../util/signals';
 import { buildNotifyTitle } from '../../../../util/systemNotify';
+import { MUSIC_LIBRARY_CHANGED_EVENT, refreshOwnAdded } from '../musicAdded';
 import { callMusic, loadMusicInfo } from '../musicPlayer';
 
 // Parvane (spec 039 этап B, spec 041): «Найти и скачать» и свои файлы — задачи пользователя на сервере («Загрузки на
@@ -107,6 +108,9 @@ function notifyFinished(jobs: MusicFetchJob[]) {
       : lang('MusicFetchFailedNotice', { name });
     getActions().showNotification({ message: text });
     if (job.state === 'done') {
+      // Трек на сервере: «Добавлено мной» и экраны «Музыки» (поиск, альбом) перечитывают библиотеку
+      void refreshOwnAdded();
+      window.dispatchEvent(new Event(MUSIC_LIBRARY_CHANGED_EVENT));
       // Доска `ZpSystem`: «Parvane · Музыка — Трек скачан на сервер» с «Слушать»
       showMusicTrackNotification({
         jobId: job.jobId, trackId: job.trackId, title: name, artist: job.uploadName ? undefined : job.track.artist,
@@ -135,7 +139,8 @@ type StartResult = 'ok' | 'limit' | 'duplicate' | 'failed';
 
 function failureOf(err: unknown): StartResult {
   const text = String(err);
-  if (text.includes('LIMIT')) return 'limit';
+  // `RATE_LIMITED` — «слишком часто», а не суточный лимит
+  if (text.includes('ERROR_CODE_LIMIT')) return 'limit';
   if (text.includes('DUPLICATE')) return 'duplicate';
   return 'failed';
 }

@@ -57,7 +57,8 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
   const { positionSecs } = useDerivedState(getMusicPosition);
   const track = getCurrentTrack(player);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  // Меню трека: на компьютере — у кнопки «⋯», на телефоне — шторкой
+  const [menu, setMenu] = useState<{ anchor?: { x: number; y: number } }>();
   const [playlistTracks, setPlaylistTracks] = useState<MusicTrack[]>();
   const [sendTrack, setSendTrack] = useState<MusicTrack>();
   const { data: lyrics } = useMusicData(track ? `lyrics:${track.id}` : undefined, () => (
@@ -76,8 +77,11 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
   });
   const handleOpenQueue = useLastCallback(() => setIsQueueOpen(true));
   const handleCloseQueue = useLastCallback(() => setIsQueueOpen(false));
-  const handleOpenMenu = useLastCallback(() => setIsMenuOpen(true));
-  const handleCloseMenu = useLastCallback(() => setIsMenuOpen(false));
+  const handleOpenMenu = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMenu({ anchor: isPhone ? undefined : { x: rect.left, y: rect.bottom } });
+  });
+  const handleCloseMenu = useLastCallback(() => setMenu(undefined));
   const handleClosePlaylist = useLastCallback(() => setPlaylistTracks(undefined));
   const handleCloseSend = useLastCallback(() => setSendTrack(undefined));
   const handlePlayNext = useLastCallback(() => playQueueItem(player.queue.index + 1));
@@ -258,9 +262,10 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
           {renderScreen()}
         </Modal>
       )}
-      {isMenuOpen && (
+      {menu && (
         <MusicTrackMenu
           track={track}
+          anchor={menu.anchor}
           canSaveOffline
           onStar={handleStarTrack}
           onSendToChat={setSendTrack}

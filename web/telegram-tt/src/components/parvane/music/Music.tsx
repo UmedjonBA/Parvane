@@ -127,6 +127,11 @@ const Music = () => {
     setSearchFocus((previous) => previous + 1);
   }, [isShown, addRequest, isEnabled]);
 
+  // На компьютере поле поиска — в шапке модуля, а не в виде поиска
+  useEffect(() => {
+    if (searchFocus && !isPhone) deskSearchRef.current?.focus();
+  }, [searchFocus, isPhone]);
+
   // Страница на телефоне закрывает ленту модулей (своя шапка с «назад», внизу — только мини-плеер)
   useLayoutEffect(() => {
     if (!isShown || !isPage) return undefined;

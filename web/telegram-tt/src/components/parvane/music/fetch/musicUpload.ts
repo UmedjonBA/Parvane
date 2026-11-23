@@ -86,7 +86,7 @@ export async function uploadMusicFile(file: File): Promise<MusicUploadOutcome> {
       durationSecs: tags.durationSecs,
     });
   } catch (err) {
-    return String(err).includes('LIMIT') ? 'limit' : 'failed';
+    return String(err).includes('ERROR_CODE_LIMIT') ? 'limit' : 'failed';
   }
   putJob(started.job);
   if (!started.url) return 'duplicate';

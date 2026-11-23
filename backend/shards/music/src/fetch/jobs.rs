@@ -104,6 +104,8 @@ pub(crate) struct Job {
     pub star: bool,
     /// Трек уже был на сервере: задача готова без скачивания.
     pub existing: bool,
+    /// Файл уже записан в «добавленные» (суточный расход его учёл), задача ждёт сканирования библиотеки.
+    pub recorded: bool,
 }
 
 fn day_text(day: Option<i64>) -> String {
@@ -205,6 +207,7 @@ impl Job {
             as_version: false,
             star: false,
             existing: false,
+            recorded: false,
         }
     }
 
@@ -345,7 +348,9 @@ impl Fetch {
         if mine.iter().any(|j| j.is_active() && same(j)) {
             return Err(ErrorCode::Duplicate);
         }
-        if mine.len() >= JOBS_PER_USER || today as usize + mine.iter().filter(|j| j.is_active()).count() >= limits.per_day as usize {
+        // Идущая задача, файл которой уже записан, учтена в `today` — дважды её не считать
+        let pending = mine.iter().filter(|j| j.is_active() && !j.recorded).count();
+        if mine.len() >= JOBS_PER_USER || today as usize + pending >= limits.per_day as usize {
             return Err(ErrorCode::Limit);
         }
         jobs.insert(job.id.clone(), job);
@@ -819,6 +824,7 @@ impl Fetch {
             self.fail(id, pb::FetchFailure::Library);
             return Ok(());
         }
+        self.update(id, |j| j.recorded = true);
         // Теги и обложку сервис уже переписал при скачивании
         let _ = store::mark_tagged(&self.pool, &file.path, &file.path, 1).await;
         // Откуда файл и какая версия: вторая версия — следующий номер, иначе та же, что у уже лежащего (копия)

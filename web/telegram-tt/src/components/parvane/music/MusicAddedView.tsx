@@ -53,8 +53,6 @@ const MusicAddedView = ({ info, isPhone, onSendToChat }: OwnProps) => {
   const handlePlay = useLastCallback((index: number) => {
     playTracks(data!.map((item) => item.track), index, { source: { kind: 'home' } });
   });
-  const handleDelete = useLastCallback((track: MusicTrack) => void deleteLibraryTrack(track.id));
-
   // Выбор нескольких (доски `MusicLibrary-07/08`, `RdMusic-02`): правка, «В плейлист», «В корзину»
   const { showNotification } = getActions();
   const [selected, setSelected] = useState<Set<string>>();
@@ -186,7 +184,6 @@ const MusicAddedView = ({ info, isPhone, onSendToChat }: OwnProps) => {
               canSaveOffline
               onPlay={selected ? handleToggle : handlePlay}
               onSendToChat={onSendToChat}
-              onDelete={handleDelete}
             />
           ))}
         </ul>

@@ -80,7 +80,8 @@ const MusicUploadsView = ({ info, isPhone }: OwnProps) => {
     const url = link.trim();
     if (!LINK_HOSTS.test(url)) return;
     const job = await callMusic('parvaneMusicFetchLink', { url, isStar }).catch((err: unknown) => {
-      showNotification({ message: lang(String(err).includes('LIMIT') ? 'MusicFetchLimit' : 'MusicFetchFailedShort') });
+      const isLimit = String(err).includes('ERROR_CODE_LIMIT');
+      showNotification({ message: lang(isLimit ? 'MusicFetchLimit' : 'MusicFetchFailedShort') });
       return undefined;
     });
     if (!job) return;

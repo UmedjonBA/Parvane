@@ -1433,6 +1433,7 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicStateChoice': undefined;
   'MusicListenPreview': undefined;
   'MusicPreviewOnly': undefined;
   'MusicFavFromCatalog': undefined;
