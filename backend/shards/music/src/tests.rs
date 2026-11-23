@@ -288,6 +288,8 @@ async fn stream_links_carry_ranges_and_refuse_foreign_tokens() {
     let c = http.get(format!("{}al-1?size=99999", info.cover_base)).send().await.unwrap();
     assert_eq!((c.status().as_u16(), c.headers()["content-type"].to_str().unwrap()), (200, "image/jpeg"));
     assert_eq!(c.text().await.unwrap(), "jpeg:1200");
+    let doubled = http.get(format!("{}/al-1", info.cover_base)).send().await.unwrap();
+    assert_eq!(doubled.status().as_u16(), 200, "лишний `/` перед id обложки");
     assert_eq!(http.get(format!("{}al-404", info.cover_base)).send().await.unwrap().status().as_u16(), 404, "отказ сервера — не картинка");
     let s = stream(&ctx.key, now_ms() + 60_000);
     assert_eq!(http.get(format!("{public}/_parvane/music/c/{s}/al-1")).send().await.unwrap().status().as_u16(), 403);

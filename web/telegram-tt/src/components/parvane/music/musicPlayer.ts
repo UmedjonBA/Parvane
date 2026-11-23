@@ -164,7 +164,9 @@ const COVER_KEEP_MS = 60 * 60 * 1000;
 
 export function coverUrl(coverId: string | undefined, size: number) {
   const base = getMusicInfo()?.coverBase;
-  return base && coverId ? `${base}/${encodeURIComponent(coverId)}?size=${size}` : undefined;
+  if (!base || !coverId) return undefined;
+  // База кончается на `/` (`…/c/<подпись>/`): второй `/` давал адрес, на который сервер отвечал 404, — обложек не было
+  return `${base.replace(/\/+$/, '')}/${encodeURIComponent(coverId)}?size=${size}`;
 }
 
 export async function loadMusicInfo() {

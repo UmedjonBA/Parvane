@@ -95,6 +95,8 @@ async fn serve(ctx: &Ctx, req: Request<Incoming>) -> Response<Body> {
         }
     } else if let Some(rest) = path.strip_prefix("/_parvane/music/c/") {
         let Some((tok, cover)) = rest.split_once('/') else { return plain(StatusCode::NOT_FOUND) };
+        // База обложек кончается на `/`; лишний `/` перед id (`c/<жетон>//<id>`) — та же обложка, а не 404
+        let cover = cover.trim_start_matches('/');
         match token::verify(&ctx.key, tok, now_ms()) {
             Some(token::Claims { user, grant: Grant::Covers, .. }) if valid_id(cover, 96) => {
                 let size = req

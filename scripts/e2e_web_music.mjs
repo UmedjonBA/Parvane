@@ -396,6 +396,15 @@ try {
   await page.locator('[data-music-desk-player] [data-music-desk-queue]').click();
   console.log('OK: очередь, играющий трек и повтор пережили перезагрузку');
 
+  // Обложки грузятся по-настоящему (картинка, а не заглушка): прежде адрес с лишним `/` получал 404 на проде
+  await page.waitForFunction(() => [...document.querySelectorAll('#ParvaneMusic img')]
+    .some((img) => img.src.includes('/_parvane/music/c/') && img.complete && img.naturalWidth > 0), undefined,
+  { timeout: STEP_TIMEOUT_MS });
+  const coverSrc = await page.evaluate(() => [...document.querySelectorAll('#ParvaneMusic img')]
+    .map((img) => img.src).find((src) => src.includes('/_parvane/music/c/')));
+  assert.ok(!/\/c\/[^/]+\/\//.test(new URL(coverSrc).pathname), `лишний «/» в адресе обложки: ${coverSrc}`);
+  console.log('OK: обложки загружаются');
+
   // ── Телефон: вкладки, медиатека, страницы исполнителя и альбома, мини-плеер ─
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(800);

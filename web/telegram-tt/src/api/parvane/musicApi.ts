@@ -97,7 +97,7 @@ export type MusicInfo = {
   server: string;
   // Свой ник (как `adder` у добавленных треков)
   selfName: string;
-  // База ссылок обложек: `<coverBase>/<coverId>?size=N`; пусто — обложек нет
+  // База ссылок обложек (кончается на `/`): `<coverBase><coverId>?size=N`; пусто — обложек нет
   coverBase: string;
   coverExpiresMs: number;
   // «Найти и скачать»: сервис скачивания подключён; лимиты и расход пользователя
