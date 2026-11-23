@@ -87,3 +87,37 @@ async fn link_of_track_on_server_asks_and_second_version_is_marked() {
     assert_eq!((source.as_str(), version), ("soundcloud", 1), "первая учтённая версия этого трека на сервере");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn admin_sets_limits_sources_and_personal_limits() {
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    crate::library::open_plays(dir.join("music.db").to_str().unwrap()).await;
+    let get = |user: &'static str| call::<pb::AdminGetResponse>(&ctx, user, "music.admin.get", pb::AdminGetRequest {});
+    let alice = get("alice@local").await.unwrap();
+    assert!(!alice.admin && alice.library_dir.is_empty(), "путь библиотеки — только администратору");
+    assert_eq!(alice.settings.unwrap().per_day, 30);
+    let set = |fields: &[&str], s: pb::AdminSettings| pb::AdminSetRequest { settings: Some(s), fields: fields.iter().map(|f| f.to_string()).collect() };
+    assert_eq!(call::<pb::AdminSetResponse>(&ctx, "alice@local", "music.admin.set", set(&["per_day"], pb::AdminSettings { per_day: 5, ..Default::default() })).await.unwrap_err(), ErrorCode::Forbidden);
+    // Общий лимит 5, ссылки выключены — только тронутые поля
+    let r: pb::AdminSetResponse = call(&ctx, "admin@local", "music.admin.set", set(&["per_day", "links"], pb::AdminSettings { per_day: 5, links: false, ..Default::default() })).await.unwrap();
+    let s = r.settings.unwrap();
+    assert_eq!((s.per_day, s.links, s.uploads), (5, false, true));
+    let info: pb::InfoResponse = call(&ctx, "alice@local", "music.info", pb::InfoRequest {}).await.unwrap();
+    assert_eq!(info.add_per_day, 5);
+    let link = pb::FetchStartRequest { url: "https://soundcloud.com/gruppa/t2".into(), ..Default::default() };
+    assert_eq!(call::<pb::FetchStartResponse>(&ctx, "alice@local", "music.fetch.start", link).await.unwrap_err(), ErrorCode::Forbidden, "ссылки выключены");
+    // Свой лимит перекрывает общий; «без каталога» — только слушать
+    let person = |per_day: u32, reset: bool, no_catalog: bool| pb::AdminPersonSetRequest { address: "alice@local".into(), per_day, reset, no_catalog };
+    let p: pb::AdminPersonSetResponse = call(&ctx, "admin@local", "music.admin.person_set", person(50, false, false)).await.unwrap();
+    let p = p.person.unwrap();
+    assert_eq!((p.nick.as_str(), p.per_day, p.own_limit), ("alice", 50, true));
+    let _: pb::AdminPersonSetResponse = call(&ctx, "admin@local", "music.admin.person_set", person(0, true, true)).await.unwrap();
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("a", "Группа - Песня t1", 215)]);
+    assert_eq!(start(&ctx, "alice@local", "Песня t1").await.unwrap_err(), ErrorCode::Limit, "без каталога — не скачивает");
+    let people: pb::AdminPeopleResponse = call(&ctx, "admin@local", "music.admin.people", pb::AdminPeopleRequest {}).await.unwrap();
+    let alice = people.people.iter().find(|p| p.nick == "alice").unwrap();
+    assert!(alice.no_catalog && alice.per_day == 0);
+    assert!(people.people[0].admin, "администраторы первыми");
+    assert_eq!(call::<pb::AdminPeopleResponse>(&ctx, "alice@local", "music.admin.people", pb::AdminPeopleRequest {}).await.unwrap_err(), ErrorCode::Forbidden);
+    let _ = std::fs::remove_dir_all(dir);
+}

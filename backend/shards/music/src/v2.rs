@@ -53,7 +53,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
         return crate::shared::dispatch(method, &req).await;
     }
     // Этап B: добавление треков — нужна папка библиотеки; «Найти и скачать» — ещё и сервис скачивания
-    if method.starts_with("music.fetch.") || method.starts_with("music.added.") || method.starts_with("music.upload.") || method.starts_with("music.catalog.") || method.starts_with("music.file.") || method.starts_with("music.trash.") {
+    if method.starts_with("music.fetch.") || method.starts_with("music.added.") || method.starts_with("music.upload.") || method.starts_with("music.catalog.") || method.starts_with("music.file.") || method.starts_with("music.trash.") || method.starts_with("music.admin.") {
         let fetch = ctx.fetch.as_ref().ok_or(ErrorCode::Unavailable)?;
         return match method {
             "music.fetch.catalog" => fetch.catalog(sub, &user, body(&req)?).await,
@@ -72,6 +72,11 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
             "music.trash.list" => fetch.trash_list(&req.user).await,
             "music.trash.restore" => fetch.trash_restore(sub, &req.user, body(&req)?).await,
             "music.trash.purge" => fetch.trash_purge(&req.user, body(&req)?).await,
+            "music.admin.get" => fetch.admin_get(sub, &req.user).await,
+            "music.admin.set" => fetch.admin_set(&req.user, body(&req)?).await,
+            "music.admin.people" => fetch.admin_people(&req.user).await,
+            "music.admin.person_set" => fetch.admin_person_set(&req.user, body(&req)?).await,
+            "music.admin.scan" => fetch.admin_scan(sub, &req.user).await,
             _ => Err(ErrorCode::Unavailable),
         };
     }
@@ -118,10 +123,12 @@ async fn info_reply(ctx: &Ctx, address: &str, user: &str) -> Reply {
         info.fetch_parallel = u32::try_from(fetch.parallel).unwrap_or(u32::MAX);
         let (today, used) = fetch.usage(address).await;
         info.fetch_enabled = fetch.service.is_some();
-        info.upload_enabled = true;
-        info.upload_max_bytes = fetch.upload_max_bytes;
-        info.add_per_day = fetch.add_per_day;
-        info.quota_bytes = fetch.quota_bytes;
+        let limits = fetch.limits_for(address).await;
+        info.fetch_enabled = info.fetch_enabled && limits.per_day > 0;
+        info.upload_enabled = limits.uploads;
+        info.upload_max_bytes = limits.upload_max_bytes;
+        info.add_per_day = limits.per_day;
+        info.quota_bytes = limits.quota_bytes;
         info.added_today = today;
         info.used_bytes = used;
     }

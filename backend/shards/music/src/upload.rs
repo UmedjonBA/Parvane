@@ -53,7 +53,12 @@ pub async fn start(fetch: &Arc<Fetch>, ctx: &Ctx, address: &str, r: pb::UploadSt
     if name.is_empty() || !extension_ok(&name) || !hex_ok(&sha) || r.bytes == 0 {
         return Err(ErrorCode::Invalid);
     }
-    if r.bytes > fetch.upload_max_bytes {
+    let limits = fetch.limits_for(address).await;
+    // «Свои файлы» выключил администратор
+    if !limits.uploads {
+        return Err(ErrorCode::Forbidden);
+    }
+    if r.bytes > limits.upload_max_bytes {
         return Err(ErrorCode::Limit);
     }
     let mut job = Job::new(new_id(), address, pb::FetchState::Downloading);
@@ -70,7 +75,7 @@ pub async fn start(fetch: &Arc<Fetch>, ctx: &Ctx, address: &str, r: pb::UploadSt
         return Ok(pb::UploadStartResponse { job: fetch.job_pb(&job.id), ..Default::default() }.encode_to_vec());
     }
     let (_, used) = fetch.usage(address).await;
-    if used.saturating_add(r.bytes) > fetch.quota_bytes {
+    if used.saturating_add(r.bytes) > limits.quota_bytes {
         return Err(ErrorCode::Limit);
     }
     fetch.admit(address, job.clone(), |j| j.sha256 == sha).await?;
@@ -148,7 +153,7 @@ async fn store_file(fetch: &Fetch, job: &Job, mut body: Incoming) -> Result<(Str
             return Err((StatusCode::CONFLICT, pb::FetchFailure::Duplicate));
         }
         let (_, used) = fetch.usage(&job.user).await;
-        if used.saturating_add(got) > fetch.quota_bytes {
+        if used.saturating_add(got) > fetch.limits_for(&job.user).await.quota_bytes {
             return Err((StatusCode::PAYLOAD_TOO_LARGE, pb::FetchFailure::Limit));
         }
         // Задачу сняли, пока шли байты, — файл не берём

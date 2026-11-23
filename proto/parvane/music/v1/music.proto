@@ -147,6 +147,21 @@ service MusicService {
   rpc TrashPurge(TrashPurgeRequest) returns (TrashPurgeResponse) {
     option (parvane.core.v2.method) = {name: "music.trash.purge" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  rpc AdminGet(AdminGetRequest) returns (AdminGetResponse) {
+    option (parvane.core.v2.method) = {name: "music.admin.get" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc AdminSet(AdminSetRequest) returns (AdminSetResponse) {
+    option (parvane.core.v2.method) = {name: "music.admin.set" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc AdminPeople(AdminPeopleRequest) returns (AdminPeopleResponse) {
+    option (parvane.core.v2.method) = {name: "music.admin.people" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc AdminPersonSet(AdminPersonSetRequest) returns (AdminPersonSetResponse) {
+    option (parvane.core.v2.method) = {name: "music.admin.person_set" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc AdminScan(AdminScanRequest) returns (AdminScanResponse) {
+    option (parvane.core.v2.method) = {name: "music.admin.scan" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
 }
 
 message Track {
@@ -986,3 +1001,85 @@ message TrashPurgeRequest {
   bool all = 2;
 }
 message TrashPurgeResponse {}
+
+// ── «Музыка на сервере · для администратора» и «Люди и лимиты» (макет 23 ноя, доски `MusicSettings`, `ZdMusicX-06`) ──
+// Настройки сервера хранит шард; значения переменных окружения — исходные. Менять — только администратор
+// (иначе FORBIDDEN); читать общие лимиты может каждый (их показывают «Загрузки на сервер»).
+
+message AdminSettings {
+  // Треков из каталога и по ссылкам в сутки на человека; место под добавленное на человека; предел своего файла.
+  uint32 per_day = 1;
+  uint64 quota_bytes = 2;
+  uint64 upload_max_bytes = 3;
+  // Скачивание по ссылкам и загрузка своих файлов.
+  bool links = 4;
+  bool uploads = 5;
+  // Чужое удаляют только администраторы (иначе — любой).
+  bool only_admins_delete = 6;
+  // Перед удалением альбома — переспросить.
+  bool confirm_album_delete = 7;
+}
+
+message ScanStatus {
+  bool scanning = 1;
+  int64 last_scan_ms = 2;
+  uint32 tracks = 3;
+}
+
+message AdminGetRequest {}
+message AdminGetResponse {
+  AdminSettings settings = 1;
+  bool admin = 2;
+  // Папка библиотеки (как её видит сервер), сканирование, найденные дубликаты, людей с музыкой.
+  string library_dir = 3 [(parvane.core.v2.max_len) = 1024];
+  ScanStatus scan = 4;
+  uint32 duplicates = 5;
+  uint32 people = 6;
+  uint32 parallel = 7;
+  // Сервис скачивания подключён.
+  bool fetch_enabled = 8;
+}
+
+// Меняются только поля из `fields` (per_day, quota_bytes, upload_max_bytes, links, uploads, only_admins_delete,
+// confirm_album_delete).
+message AdminSetRequest {
+  AdminSettings settings = 1;
+  repeated string fields = 2 [(parvane.core.v2.max_items) = 7, (parvane.core.v2.max_len) = 32];
+}
+message AdminSetResponse {
+  AdminSettings settings = 1;
+}
+
+message Person {
+  string address = 1 [(parvane.core.v2.max_len) = 128];
+  string nick = 2 [(parvane.core.v2.max_len) = 64];
+  bool admin = 3;
+  uint32 today = 4;
+  uint64 bytes = 5;
+  // Действующий суточный лимит; `own_limit` — свой (перекрывает общий), иначе общий.
+  uint32 per_day = 6;
+  bool own_limit = 7;
+  // Без каталога: слушает, но не скачивает.
+  bool no_catalog = 8;
+}
+message AdminPeopleRequest {}
+message AdminPeopleResponse {
+  repeated Person people = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+// Свой лимит человека: `per_day` 0 и `reset` — снова общий; `no_catalog` — только слушать.
+message AdminPersonSetRequest {
+  string address = 1 [(parvane.core.v2.max_len) = 128];
+  uint32 per_day = 2;
+  bool reset = 3;
+  bool no_catalog = 4;
+}
+message AdminPersonSetResponse {
+  Person person = 1;
+}
+
+// Пересканировать библиотеку сейчас (только администратор); ответ — состояние сканирования.
+message AdminScanRequest {}
+message AdminScanResponse {
+  ScanStatus scan = 1;
+}

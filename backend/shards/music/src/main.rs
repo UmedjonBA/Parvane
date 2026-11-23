@@ -6,6 +6,7 @@
 //! `PARVANE_MUSIC_PUBLIC_BASE` (внешний адрес сервера для ссылок), `PARVANE_MUSIC_HTTP_BIND` (по умолчанию
 //! `0.0.0.0:9340`), `PARVANE_MUSIC_URL_KEY_FILE` (ключ подписи ссылок, создаётся при первом старте).
 
+mod admin;
 mod fetch;
 mod files;
 mod http;

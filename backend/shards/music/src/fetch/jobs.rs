@@ -331,7 +331,8 @@ impl Fetch {
     /// обходят пачкой запросов), место и число задач. `same` — такая же задача уже идёт (`DUPLICATE`).
     pub(crate) async fn admit(&self, address: &str, job: Job, same: impl Fn(&Job) -> bool) -> Result<(), ErrorCode> {
         let (today, used) = self.usage(address).await;
-        if self.add_per_day == 0 || today >= self.add_per_day || used >= self.quota_bytes {
+        let limits = self.limits_for(address).await;
+        if limits.per_day == 0 || today >= limits.per_day || used >= limits.quota_bytes {
             return Err(ErrorCode::Limit);
         }
         self.sweep();
@@ -342,7 +343,7 @@ impl Fetch {
         if mine.iter().any(|j| j.is_active() && same(j)) {
             return Err(ErrorCode::Duplicate);
         }
-        if mine.len() >= JOBS_PER_USER || today as usize + mine.iter().filter(|j| j.is_active()).count() >= self.add_per_day as usize {
+        if mine.len() >= JOBS_PER_USER || today as usize + mine.iter().filter(|j| j.is_active()).count() >= limits.per_day as usize {
             return Err(ErrorCode::Limit);
         }
         jobs.insert(job.id.clone(), job);
@@ -433,6 +434,10 @@ impl Fetch {
         if !url.is_empty() {
             if !url.starts_with("https://") || url.len() > 512 {
                 return Err(ErrorCode::Invalid);
+            }
+            // «По ссылкам» выключил администратор
+            if !self.limits_for(address).await.links {
+                return Err(ErrorCode::Forbidden);
             }
             job.url = url.clone();
             self.admit(address, job.clone(), |j| j.url == url).await?;
@@ -789,7 +794,7 @@ impl Fetch {
         // Проверка после загрузки: отрывок вместо трека и выход за отведённое место — файл убирается
         let too_short = query.duration_secs >= 90 && file.duration_secs > 0 && (file.duration_secs as f32) < query.duration_secs as f32 * MIN_LENGTH_SHARE;
         let (_, used) = self.usage(&user).await;
-        let over_quota = used.saturating_add(file.bytes) > self.quota_bytes;
+        let over_quota = used.saturating_add(file.bytes) > self.limits_for(&user).await.quota_bytes;
         if too_short || over_quota {
             self.remove_file(&file.path).await;
             self.fail(id, if over_quota { pb::FetchFailure::Limit } else { pb::FetchFailure::Source });
@@ -963,7 +968,8 @@ impl Fetch {
 
     pub async fn added_delete(&self, sub: &Subsonic, address: &str, r: pb::AddedDeleteRequest) -> Reply {
         let row = store::by_track(&self.pool, &r.track_id).await.map_err(|_| ErrorCode::Unavailable)?.ok_or(ErrorCode::NotFound)?;
-        if row.adder != address && !self.admins.iter().any(|a| a == address) {
+        // Своё удаляет добавивший, чужое — администратор (либо любой, если администратор так разрешил)
+        if row.adder != address && !self.is_admin(address) && self.limits_for(address).await.only_admins_delete {
             return Err(ErrorCode::Forbidden);
         }
         // В корзину на 30 дней (макет 23 ноя): вернуть может добавивший, удаливший и администратор
