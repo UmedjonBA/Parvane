@@ -59,6 +59,7 @@ import MusicSearchView from './MusicSearchView';
 import MusicSendDialog from './MusicSendDialog';
 import MusicSettingsView from './MusicSettingsView';
 import MusicStarredView from './MusicStarredView';
+import MusicToast from './MusicToast';
 import MusicTrashView from './MusicTrashView';
 import MusicUploadStatus from './MusicUploadStatus';
 import MusicSharedPage from './shared/MusicSharedPage';
@@ -381,6 +382,7 @@ const Music = () => {
       <MusicSendDialog track={sentTrack} onClose={handleCloseSend} />
       <MusicNewPlaylist />
       <MusicFileSheets />
+      {isPhone && <MusicToast />}
     </div>
   );
 };

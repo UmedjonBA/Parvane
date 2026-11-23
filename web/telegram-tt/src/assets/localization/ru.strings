@@ -1715,6 +1715,8 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicQueuedNextToast" = "«{name}» — в очереди следующим";
+"MusicUndo" = "Отменить";
 "MusicStarWhenAdded" = "Будет в «Любимом», когда добавится";
 "MusicFetchFirst" = "Добавить первым";
 "MusicFetchCancelShort" = "Отменить";

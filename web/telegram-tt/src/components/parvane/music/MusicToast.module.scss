@@ -1,0 +1,43 @@
+// Строка-уведомление (доска `RpMusicA-06`): тёмная плашка 12 px от краёв над мини-плеером, «Отменить» подчёркнуто
+.root {
+  position: fixed;
+  z-index: 20;
+  right: 0.75rem;
+  bottom: calc(var(--parvane-music-toast-bottom, 8.5rem) + env(safe-area-inset-bottom));
+  left: 0.75rem;
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: 3.5rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.625rem;
+
+  color: var(--pv-panel);
+
+  background: var(--pv-fg);
+}
+
+.text {
+  flex: 1 1 auto;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.undo {
+  cursor: pointer;
+
+  flex: none;
+
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: inherit;
+  text-decoration: underline;
+
+  background: none;
+}

@@ -484,6 +484,22 @@ try {
   // Телефон: меню трека — шторка снизу с обложкой, быстрые действия кругами (доска `RpMusicA`)
   const phoneMusic = await openMusic(page);
   await phoneMusic.locator('[data-music-fresh] [data-album="al-1"]').click();
+  // Свайп вправо (доска `RpMusicA-06`): «в очереди следующим» и «Отменить»
+  await page.locator('[data-music-album-page] [data-track="t3"]').evaluate((row) => {
+    const box = row.getBoundingClientRect();
+    const y = box.top + box.height / 2;
+    const fire = (type, x) => row.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, pointerType: 'touch', pointerId: 7, clientX: x, clientY: y, isPrimary: true,
+    }));
+    fire('pointerdown', 40);
+    [60, 100, 140, 180].forEach((x) => fire('pointermove', x));
+    fire('pointerup', 180);
+  });
+  const toast = page.locator('[data-music-toast]');
+  await visible(toast.getByText('“Соль” plays next'));
+  await toast.locator('[data-music-toast-undo]').click();
+  await gone(toast);
+  console.log('OK: телефон — свайп вправо ставит трек следующим, «Отменить» убирает');
   const phoneRow = phoneMusic.locator('[data-music-album-page] [data-track="t2"]');
   await phoneRow.locator('[data-music-menu]').click();
   const sheetMenu = page.locator('.Modal [role="menu"]');

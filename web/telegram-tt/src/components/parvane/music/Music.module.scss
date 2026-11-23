@@ -217,6 +217,7 @@
 .navToneAqua { color: var(--pv-aqua); }
 
 .main {
+  overflow-x: hidden;
   overflow-y: auto;
   display: flex;
   flex: 1;
@@ -505,12 +506,41 @@
 
 // Строка трека (доски `MusicOverview`, `RpMusicA`): 58 px, обложка 46 px, состояние значком под названием, «⋯»
 .track {
+  touch-action: pan-y;
+
   display: flex;
   gap: 0;
   align-items: center;
 
   min-height: 3.625rem;
   padding-inline-end: 0.125rem;
+}
+
+// Свайп вправо на телефоне (доска `RpMusicA-06`): строка уезжает за пальцем, слева — зелёная «В очередь»
+.trackSwiping {
+  position: relative;
+  transform: translateX(var(--swipe));
+}
+
+.swipeBack {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  bottom: 0;
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+
+  width: var(--swipe);
+
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+  white-space: nowrap;
+
+  background: var(--pv-green);
 }
 
 .trackSelected {
@@ -1609,4 +1639,9 @@
 .trackCheckOn {
   border-color: var(--pv-accent);
   background: var(--pv-accent);
+}
+
+// Страница поверх ленты: строка-уведомление — сразу над мини-плеером (ленты нет)
+.rootPage {
+  --parvane-music-toast-bottom: 4.75rem;
 }

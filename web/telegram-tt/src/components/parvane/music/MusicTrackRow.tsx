@@ -8,6 +8,11 @@ import type { DragHandlers, DragRowState } from './useDragReorder';
 import buildClassName from '../../../util/buildClassName';
 import { formatTrackTime } from './musicFormat';
 import { getOfflineState, isTrackSaving } from './musicOffline';
+import {
+  addToQueue, getMusicPlayer, removeQueueItem,
+} from './musicPlayer';
+import { showMusicToast } from './musicToast';
+import useSwipeQueue from './useSwipeQueue';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
@@ -98,7 +103,20 @@ const MusicTrackRow = ({
     : offline.entries.some((entry) => entry.track.id === track.id) ? 'saved'
       : offline.pending > 0 && isTrackSaving(track.id) ? 'saving' : 'none';
 
-  const handlePlay = useLastCallback(() => onPlay(index));
+  // Телефон: свайп вправо — «в очереди следующим» с «Отменить» (доска `RpMusicA-06`)
+  const handleSwipe = useLastCallback(() => {
+    addToQueue([track], true);
+    showMusicToast(lang('MusicQueuedNextToast', { name: track.title }), () => {
+      const { queue } = getMusicPlayer();
+      const position = queue.upcoming.findIndex((id, at) => at > queue.index && id === track.id);
+      if (position >= 0) removeQueueItem(position);
+    });
+  });
+  const swipe = useSwipeQueue(Boolean(canQueueHere) && window.innerWidth <= PHONE_MAX_WIDTH, handleSwipe);
+  const handlePlay = useLastCallback(() => {
+    if (swipe.consumeSwipe()) return;
+    onPlay(index);
+  });
   const handleRemove = useLastCallback(() => onRemove?.(index));
   const handleCloseMenu = useLastCallback(() => setMenu(undefined));
   const handleUnstar = useLastCallback(() => onStar?.(track));
@@ -134,13 +152,22 @@ const MusicTrackRow = ({
         isTable && styles.trackTable,
         (canRemove || drag) && styles.trackHoverTools,
         dragState && DRAG_STATE_CLASSES[dragState],
+        swipe.offset > 0 && styles.trackSwiping,
       )}
+      {...swipe.handlers}
+      style={swipe.offset ? `--swipe: ${swipe.offset}px` : undefined}
       data-track={track.id}
       data-music-current={isCurrent ? true : undefined}
       data-drag-row={drag ? true : undefined}
       data-music-offline-track={offlineState}
       onContextMenu={handleContextMenu}
     >
+      {swipe.offset > 0 && (
+        <span className={styles.swipeBack} aria-hidden>
+          <ParvaneIcon name="list" isSmall />
+          {lang('MusicToQueue')}
+        </span>
+      )}
       <button type="button" className={styles.trackMain} disabled={isMissing} onClick={handlePlay}>
         {isSelecting && (
           <span

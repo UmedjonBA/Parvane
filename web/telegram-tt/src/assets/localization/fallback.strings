@@ -1971,6 +1971,8 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicQueuedNextToast" = "“{name}” plays next";
+"MusicUndo" = "Undo";
 "MusicStarWhenAdded" = "It goes to Favorites once added";
 "MusicFetchFirst" = "Add first";
 "MusicFetchCancelShort" = "Cancel";
