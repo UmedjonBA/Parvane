@@ -1,6 +1,7 @@
 import { memo } from '../../../lib/teact/teact';
 import { getActions } from '../../../global';
 
+import { announceLibraryRescan } from './musicAdded';
 import { callMusic } from './musicPlayer';
 import { goBackMusic } from './musicView';
 import useMusicData from './useMusicData';
@@ -34,6 +35,8 @@ const MusicTrashView = ({ isPhone }: OwnProps) => {
     const isDone = await callMusic('parvaneMusicTrashRestore', { id: id! }).then(() => true, () => false);
     showNotification({ message: lang(isDone ? 'MusicRestored' : 'MusicPlaylistFailed') });
     if (!isDone) reload();
+    // Вернувшийся трек снова в списках «Музыки» и в «Добавлено мной»
+    if (isDone) announceLibraryRescan();
   });
   const handlePurge = useLastCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
     const { id } = e.currentTarget.dataset;

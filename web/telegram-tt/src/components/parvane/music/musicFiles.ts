@@ -4,7 +4,7 @@ import type useLang from '../../../hooks/useLang';
 
 import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
 import { createSignal } from '../../../util/signals';
-import { MUSIC_LIBRARY_CHANGED_EVENT } from './musicAdded';
+import { announceLibraryRescan } from './musicAdded';
 
 // Parvane (макет «Музыки» 23 ноя): какой экран правки файлов открыт — «Откуда файл», «Изменить трек / треки /
 // альбом», «Объединить исполнителей», «Перенести треки». Открываются из меню трека, альбома, исполнителя и выбора
@@ -33,9 +33,9 @@ export function closeMusicFileSheet() {
   setMusicFileSheet(undefined);
 }
 
-/** Теги изменились: экраны «Музыки» перечитывают библиотеку. */
+/** Теги изменились: экраны «Музыки» перечитывают библиотеку (сразу и после пересканирования). */
 export function notifyMusicLibraryChanged() {
-  window.dispatchEvent(new Event(MUSIC_LIBRARY_CHANGED_EVENT));
+  announceLibraryRescan();
 }
 
 const COVER_SIZE = 600;

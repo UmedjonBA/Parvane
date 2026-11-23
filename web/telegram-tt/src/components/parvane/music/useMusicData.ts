@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from '../../../lib/teact/teact';
 
+import { MUSIC_LIBRARY_CHANGED_EVENT } from './musicAdded';
+
 import useLastCallback from '../../../hooks/useLastCallback';
 
 // Последние данные экранов по ключу: при возврате на экран (главная → альбом → назад) они видны сразу, свежие
@@ -40,6 +42,13 @@ export default function useMusicData<T>(key: string | undefined, load: () => Pro
   const reload = useLastCallback(() => {
     if (key !== undefined) void fetchData(key);
   });
+
+  // Библиотека изменилась (скачан, удалён, возвращён трек, правка тегов): открытый экран перечитывается — иначе
+  // удалённое оставалось в «Новом» и «Популярном», а скачанное не появлялось до повторного входа
+  useEffect(() => {
+    window.addEventListener(MUSIC_LIBRARY_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(MUSIC_LIBRARY_CHANGED_EVENT, reload);
+  }, [reload]);
 
   // Правка на месте (отметка «любимое» в открытом списке)
   const patch = useLastCallback((update: (data: T) => T) => {

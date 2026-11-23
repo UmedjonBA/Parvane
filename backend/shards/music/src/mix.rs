@@ -197,7 +197,13 @@ async fn today(ctx: &Ctx, sub: &Subsonic, address: &str, r: pb::MixTodayRequest)
         return Ok(pb::MixTodayResponse { settings: Some(settings_pb(&s)), building: true, ..Default::default() }.encode_to_vec());
     };
     let rows: Vec<Value> = serde_json::from_str(&tracks).unwrap_or_default();
-    let tracks = resolve(ctx, sub, address, &rows).await;
+    let mut tracks = resolve(ctx, sub, address, &rows).await;
+    // Удалённое в корзину выпадает из микса, даже пока музыкальный сервер его отдаёт
+    if let Some(pool) = crate::library::plays_pool() {
+        let ids: Vec<&str> = tracks.iter().filter_map(|t| t.track.as_ref()).map(|t| t.id.as_str()).collect();
+        let gone = crate::files::trashed_ids(pool, &ids).await;
+        tracks.retain(|t| t.track.as_ref().is_none_or(|x| !gone.contains(&x.id)));
+    }
     let mix = pb::Mix { next_ms: next_build_ms(&day, &s), day, built_ms, mode, tracks };
     let is_building = building().lock().map(|b| b.contains(&(address.to_string(), mix.day.clone()))).unwrap_or(false);
     Ok(pb::MixTodayResponse { mix: Some(mix), settings: Some(settings_pb(&s)), building: is_building, needs_artists: false }.encode_to_vec())

@@ -406,6 +406,16 @@ export function removeQueueItem(position: number) {
   applyQueue(queueCall('musicQueueRemove', { position }), getMusicPlayer().isPlaying);
 }
 
+/** Трек удалён с сервера: убрать его из очереди (играть его уже нечем). */
+export function dropTrackFromQueue(trackId: string) {
+  const { queue } = getMusicPlayer();
+  const positions = queue.order
+    .map((trackIndex, position) => (queue.tracks[trackIndex] === trackId ? position : -1))
+    .filter((position) => position >= 0)
+    .reverse();
+  positions.forEach((position) => removeQueueItem(position));
+}
+
 export function moveQueueItem(from: number, to: number) {
   applyQueue(queueCall('musicQueueMove', { from, to }), false);
 }

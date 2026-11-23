@@ -171,7 +171,7 @@ async fn search(sub: &Subsonic, user: &str, r: pb::LibrarySearchRequest) -> Repl
         }
     }
     let mut tracks: Vec<pb::Track> = list(&v, &["searchResult3", "song"]).iter().filter_map(track_of).take(cap).collect();
-    crate::files::annotate_tracks(&mut tracks).await;
+    crate::files::clean_tracks(&mut tracks).await;
     Ok(pb::LibrarySearchResponse {
         tracks,
         albums: list(&v, &["searchResult3", "album"]).iter().filter_map(album_of).take(cap).collect(),
@@ -232,7 +232,7 @@ async fn album(sub: &Subsonic, user: &str, r: pb::LibraryAlbumRequest) -> Reply 
     let v = sub.call(user, "getAlbum", &[("id", r.album_id)]).await?;
     let a = v.get("album").ok_or(ErrorCode::NotFound)?;
     let mut tracks: Vec<pb::Track> = list(a, &["song"]).iter().filter_map(track_of).take(ALBUM_TRACKS_MAX).collect();
-    crate::files::annotate_tracks(&mut tracks).await;
+    crate::files::clean_tracks(&mut tracks).await;
     Ok(pb::LibraryAlbumResponse { album: album_of(a), tracks }.encode_to_vec())
 }
 
@@ -260,7 +260,7 @@ async fn genre(sub: &Subsonic, user: &str, r: pb::LibraryGenreRequest) -> Reply 
     }
     let v = sub.call(user, "getSongsByGenre", &[("genre", name.to_string()), ("count", GENRE_PAGE.to_string()), ("offset", r.offset.to_string())]).await?;
     let mut tracks: Vec<pb::Track> = list(&v, &["songsByGenre", "song"]).iter().filter_map(track_of).collect();
-    crate::files::annotate_tracks(&mut tracks).await;
+    crate::files::clean_tracks(&mut tracks).await;
     Ok(pb::LibraryGenreResponse { tracks }.encode_to_vec())
 }
 
@@ -276,7 +276,7 @@ async fn artist(sub: &Subsonic, user: &str, r: pb::LibraryArtistRequest) -> Repl
         x
     });
     let mut popular = crate::library::popular(sub, user, &r.artist_id).await;
-    crate::files::annotate_tracks(&mut popular).await;
+    crate::files::clean_tracks(&mut popular).await;
     let top_listener = crate::library::top_listener(&r.artist_id).await;
     Ok(pb::LibraryArtistResponse { artist, albums, popular, top_listener }.encode_to_vec())
 }
@@ -304,7 +304,7 @@ async fn track_get(sub: &Subsonic, user: &str, r: pb::TrackGetRequest) -> Reply 
             Err(e) => return Err(e),
         }
     }
-    crate::files::annotate_tracks(&mut tracks).await;
+    crate::files::clean_tracks(&mut tracks).await;
     Ok(pb::TrackGetResponse { tracks }.encode_to_vec())
 }
 
@@ -344,7 +344,7 @@ async fn star_list(sub: &Subsonic, user: &str, r: pb::StarListRequest) -> Reply 
     let (off, n) = (r.offset as usize, page(r.limit) as usize);
     let more = all.len() > off.saturating_add(n);
     let mut tracks: Vec<pb::Track> = all.into_iter().skip(off).take(n).collect();
-    crate::files::annotate_tracks(&mut tracks).await;
+    crate::files::clean_tracks(&mut tracks).await;
     Ok(pb::StarListResponse { tracks, more }.encode_to_vec())
 }
 

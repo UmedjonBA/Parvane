@@ -401,7 +401,9 @@ impl Fetch {
     /// Уже есть в библиотеке: тот же исполнитель и название, длительность в пределах допуска.
     pub(crate) async fn in_library(&self, sub: &Subsonic, user: &str, q: &Query) -> Option<pb::Track> {
         let v = sub.call(user, "search3", &[("query", format!("{} {}", q.artist, q.title)), ("songCount", "10".into()), ("albumCount", "0".into()), ("artistCount", "0".into())]).await.ok()?;
-        let found: Vec<pb::Track> = list(&v, &["searchResult3", "song"]).iter().filter_map(track_of).collect();
+        let mut found: Vec<pb::Track> = list(&v, &["searchResult3", "song"]).iter().filter_map(track_of).collect();
+        // Трек из корзины «уже на сервере» не считается: иначе удалённое нельзя было скачать заново
+        crate::files::drop_trashed(&self.pool, &mut found).await;
         let as_candidates: Vec<Candidate> =
             found.iter().map(|t| Candidate { id: t.id.clone(), source: "library".into(), title: format!("{} - {}", t.artist, t.title), uploader: t.artist.clone(), duration_secs: t.duration_secs, ..Default::default() }).collect();
         let best = matching::rank(q, &as_candidates, &self.rules).into_iter().next()?;

@@ -76,6 +76,21 @@ pub(crate) async fn annotate_tracks(tracks: &mut [pb::Track]) {
     }
 }
 
+/// Список треков для экрана: без треков из корзины (музыкальный сервер отдаёт их до пересканирования) и с пометками.
+pub(crate) async fn clean_tracks(tracks: &mut Vec<pb::Track>) {
+    let Some(pool) = crate::library::plays_pool() else { return };
+    drop_trashed(pool, tracks).await;
+    annotate(pool, tracks).await;
+}
+
+/// Убрать из списка треки, файлы которых лежат в корзине.
+pub(crate) async fn drop_trashed(pool: &SqlitePool, tracks: &mut Vec<pb::Track>) {
+    let gone = trashed_ids(pool, &tracks.iter().map(|t| t.id.as_str()).filter(|id| !id.is_empty()).collect::<Vec<_>>()).await;
+    if !gone.is_empty() {
+        tracks.retain(|t| !gone.contains(&t.id));
+    }
+}
+
 /// Треки из корзины среди `ids`: файл переехал в `.trash`, а музыкальный сервер может ещё отдавать его до пересканирования
 /// («Популярное на сервере» по таблице прослушиваний показывало удалённую копию).
 pub(crate) async fn trashed_ids(pool: &SqlitePool, ids: &[&str]) -> HashSet<String> {

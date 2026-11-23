@@ -1,10 +1,10 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import { memo, useState } from '../../../lib/teact/teact';
 import { getActions } from '../../../global';
 
 import type { MusicInfo, MusicTrack } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
-import { deleteLibraryTrack, MUSIC_LIBRARY_CHANGED_EVENT } from './musicAdded';
+import { deleteLibraryTrack } from './musicAdded';
 import { openMusicFileSheet } from './musicFiles';
 import {
   callMusic, getCurrentTrack, getMusicPlayer, playTracks,
@@ -40,15 +40,10 @@ const MusicAddedView = ({ info, isPhone, onSendToChat }: OwnProps) => {
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
   const current = getCurrentTrack(player);
-  const { data, isFailed, reload } = useMusicData('added', async () => {
+  const { data, isFailed } = useMusicData('added', async () => {
     const added = await callMusic('parvaneMusicAdded', { isMine: true });
     return added.filter((item) => item.track.id);
   });
-
-  useEffect(() => {
-    window.addEventListener(MUSIC_LIBRARY_CHANGED_EVENT, reload);
-    return () => window.removeEventListener(MUSIC_LIBRARY_CHANGED_EVENT, reload);
-  }, [reload]);
 
   const handlePlay = useLastCallback((index: number) => {
     playTracks(data!.map((item) => item.track), index, { source: { kind: 'home' } });

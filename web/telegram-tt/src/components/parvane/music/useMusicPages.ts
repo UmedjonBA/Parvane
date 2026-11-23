@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from '../../../lib/teact/teact';
 
+import { MUSIC_LIBRARY_CHANGED_EVENT } from './musicAdded';
 import { mergePage } from './musicLibrary';
 
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -53,6 +54,12 @@ export default function useMusicPages<T extends { id: string }>(
   const reload = useLastCallback(() => {
     if (key !== undefined) void fetchPage(key, 0);
   });
+
+  // Библиотека изменилась — открытый список перечитывается с начала (альбомы, исполнители, любимое, жанр)
+  useEffect(() => {
+    window.addEventListener(MUSIC_LIBRARY_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(MUSIC_LIBRARY_CHANGED_EVENT, reload);
+  }, [reload]);
 
   const current = state?.key === key ? state : undefined;
   return {
