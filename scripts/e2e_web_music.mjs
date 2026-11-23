@@ -128,7 +128,7 @@ try {
   const nav = (view) => navBar.locator(`[data-view="${view}"]`).click();
   const main = music.locator('[data-music-view]');
   const side = music.locator('aside');
-  await music.locator('[data-music-mix]').getByText('Recommendations are coming soon').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await music.locator('[data-music-mix="pick"]').getByText('Pick favorite artists').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await music.locator('[data-music-total]').getByText('5 tracks').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await navBar.getByText('Library', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await navBar.locator('[data-view="artists"]').getByText('2', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -136,6 +136,23 @@ try {
   await side.locator('[data-music-queue="empty"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await music.locator('h1').count(), 0, 'на компьютере у модуля нет своей шапки');
   console.log('OK: главная — навигация с группами и счётчиками, число треков сервера, очередь справа пуста');
+
+  // ── «Микс дня»: выбрать исполнителей → микс из библиотеки и похожих из каталога ─────
+  await music.locator('[data-music-mix] button').first().click();
+  const picker = music.locator('[data-music-mix-artists]');
+  await picker.locator('[data-music-mix-artist="Kora Mesh"]').click();
+  await picker.getByText('Chosen 1 of 20').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await picker.locator('[data-music-mix-artists-done]').click();
+  await nav('home');
+  await music.locator('[data-music-mix="ready"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await music.locator('[data-music-mix] button').first().click();
+  const mixView = music.locator('[data-music-mix-view="ready"]');
+  await mixView.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await mixView.locator('[data-music-mix-catalog]').filter({ hasText: 'like Kora Mesh' }).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert(await mixView.locator('[data-music-mix-play]').isEnabled(), '«Слушать» — есть треки библиотеки');
+  await nav('home');
+  console.log('OK: «Микс дня» — выбор исполнителей, микс из библиотеки и похожих из каталога');
 
   // ── Альбомы: шапка с числом, альбом, воспроизведение ──────────────────────
   await nav('albums');
@@ -153,7 +170,8 @@ try {
   await deskMenu.getByRole('menuitem', { name: 'Download to this computer' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const deskItems = await deskMenu.getByRole('menuitem').allInnerTexts();
   assert.deepEqual(deskItems.map((text) => text.replace('›', '').trim()), ['Play next', 'Add to queue', 'Add to a playlist',
-    'Add to favorites', 'Go to artist', 'Go to album', 'Send to chat…', 'Download to this computer'],
+    'Add to favorites', 'Go to artist', 'Go to album', 'Send to chat…', 'Download to this computer',
+    "Don't like", "Don't like the artist"],
   `меню у курсора по доске ZdMusicX: ${deskItems}`);
   await page.keyboard.press('Escape');
   await page.getByRole('menu').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -431,7 +449,8 @@ try {
   await sheetMenu.getByRole('menuitem', { name: 'Go to artist', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const sheetItems = await sheetMenu.getByRole('menuitem').allInnerTexts();
   assert.deepEqual(sheetItems.map((text) => text.trim()),
-    ['Play next', 'Add to queue', 'Add to favorites', 'Download for offline', 'Send to chat', 'Go to artist', 'Go to album'],
+    ['Play next', 'Add to queue', 'Add to favorites', 'Download for offline', 'Send to chat', 'Go to artist', 'Go to album',
+      "Don't like", "Don't like the artist"],
     `порядок пунктов шторки по доске XpMusic: ${sheetItems}`);
   await page.locator('.Modal [data-playlist-chips] [data-playlist-chip-new]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   if (process.env.PARVANE_E2E_SHOT_DIR) {

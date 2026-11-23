@@ -1,8 +1,9 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useEffect } from '../../../lib/teact/teact';
 
 import type { MusicInfo, MusicTrack } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
+import { getIsMusicMixFailed, getMusicMix, loadMusicMix } from './musicMix';
 import {
   callMusic, getCurrentTrack, getMusicPlayer, getMusicRecent, loadMusicInfo, playTracks, setTrackStarred,
 } from './musicPlayer';
@@ -49,6 +50,26 @@ const MusicHomeView = ({ info, isPhone, onSendToChat }: OwnProps) => {
       info.isFetchEnabled ? callMusic('parvaneMusicAdded', { isMine: false }).catch(() => []) : [],
     ]);
     return { albums, added: added.filter((item) => item.track.id) };
+  });
+
+  // «Микс дня»: готов — число треков и когда обновится; нет исполнителей — выбрать; собирается — подождать
+  const mixToday = useDerivedState(getMusicMix);
+  const isMixFailed = useDerivedState(getIsMusicMixFailed);
+  useEffect(() => {
+    void loadMusicMix();
+  }, []);
+  const mixState = mixToday?.needsArtists ? 'pick' : mixToday?.mix && !mixToday.isBuilding ? 'ready'
+    : isMixFailed ? 'failed' : 'building';
+  const mixTracks = mixToday?.mix?.tracks || [];
+  const mixText = mixState === 'pick' ? lang('MusicMixPickArtists')
+    : mixState === 'failed' ? lang('MusicMixFailed')
+      : mixState === 'building' ? lang('MusicMixBuilding')
+        : lang('MusicTracksCount', { count: mixTracks.length }, { pluralValue: mixTracks.length });
+  const handleOpenMix = useLastCallback(() => {
+    openMusicView({ kind: mixState === 'pick' ? 'mixArtists' : 'mix' });
+  });
+  const handlePlayMix = useLastCallback(() => {
+    playTracks(mixTracks.map((row) => row.track).filter(Boolean), 0, { source: { kind: 'home' } });
   });
 
   const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -155,11 +176,22 @@ const MusicHomeView = ({ info, isPhone, onSendToChat }: OwnProps) => {
           )}
         </div>
       )}
-      <section className={styles.mix} data-music-mix>
-        <div className={kit.grow}>
-          <div className={buildClassName(kit.caps, styles.mixCaps)}>{lang('MusicMixTitle')}</div>
-          <div className={styles.mixText}>{lang('MusicMixSoon')}</div>
-        </div>
+      <section className={styles.mix} data-music-mix={mixState}>
+        <button type="button" className={styles.mixOpen} onClick={handleOpenMix}>
+          <span className={buildClassName(kit.caps, styles.mixCaps)}>{lang('MusicMixTitle')}</span>
+          <span className={styles.mixText}>{mixText}</span>
+        </button>
+        {mixState === 'ready' && (
+          <button
+            type="button"
+            className={styles.mixPlay}
+            aria-label={lang('MusicListen')}
+            data-music-mix-play
+            onClick={handlePlayMix}
+          >
+            <ParvaneIcon name="play" />
+          </button>
+        )}
       </section>
       {Boolean(recent.length) && (
         <>

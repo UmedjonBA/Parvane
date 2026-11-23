@@ -15,7 +15,7 @@ import { goToMusic } from './musicGoTo';
 import {
   getOfflineState, isTrackSaving, removeOffline, saveTracksOffline,
 } from './musicOffline';
-import { addToQueue } from './musicPlayer';
+import { addToQueue, callMusic } from './musicPlayer';
 import { addTracksToPlaylist, getPlaylists, refreshPlaylists } from './musicPlaylists';
 import { openNewPlaylist } from './musicView';
 
@@ -125,9 +125,17 @@ const MusicTrackMenu = ({
       up: () => extra?.onMoveUp?.(),
       down: () => extra?.onMoveDown?.(),
       delete: () => (onDelete ? onDelete(track) : void deleteLibraryTrack(track.id)),
+      dislike: () => void dislike({ trackId: track.id, artist: track.artist, title: track.title }),
+      dislikeArtist: () => void dislike({ artist: track.artist }),
     };
     run[key]?.();
   });
+
+  // «Не нравится»: трек либо исполнитель больше не предлагается в «Миксе дня»
+  async function dislike(target: { trackId?: string; artist: string; title?: string }) {
+    const isDone = await callMusic('parvaneMusicDislike', target).then(() => true, () => false);
+    showNotification({ message: lang(isDone ? 'MusicDisliked' : 'MusicPlaylistFailed') });
+  }
 
   const handleNewPlaylist = useLastCallback(() => {
     onClose();
@@ -152,6 +160,8 @@ const MusicTrackMenu = ({
     extra?.onMoveUp && item('up', 'left', lang('MusicMoveUp')),
     extra?.onMoveDown && item('down', 'right', lang('MusicMoveDown')),
     extra?.onRemove && extra.removeLabel && item('remove', 'close', extra.removeLabel),
+    item('dislike', 'close', lang('MusicDislike'), { hasDivider: isDesk }),
+    track.artist && item('dislikeArtist', 'close', lang('MusicDislikeArtist')),
     canDelete && item('delete', 'close', lang('MusicDeleteFromServer'), { isDanger: true, hasDivider: isDesk }),
   ];
   // Порядок пунктов — по доске устройства: у курсора `ZdMusicX`, шторка `XpMusic`

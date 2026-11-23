@@ -78,7 +78,20 @@ http.createServer((req, res) => {
     const tracks = field
       ? CATALOG.filter((track) => track[field[1] === 'track' ? 'title' : field[1]].toLowerCase().includes(field[2]))
       : CATALOG.filter((track) => `${track.artist} ${track.title}`.toLowerCase().includes(query));
-    return reply(res, 200, { tracks });
+    // Ссылка каталога — по месту в CATALOG (как `dz:<id>` у Deezer)
+    return reply(res, 200, { tracks: tracks.map((track) => ({ ...track, ref: `dz:${100 + CATALOG.indexOf(track)}` })) });
+  }
+  // «Микс дня»: исполнители для выбора и похожие на выбранного
+  if (url.pathname === '/catalog/artists') {
+    return reply(res, 200, {
+      artists: [
+        { ref: 'dz:1', name: 'Kora Mesh', picture: '', albums: 2 },
+        { ref: 'dz:2', name: 'Lampa', picture: '', albums: 1 },
+      ],
+    });
+  }
+  if (url.pathname === '/catalog/related') {
+    return reply(res, 200, { artists: [{ ref: 'dz:3', name: 'Тихий порт', picture: '', albums: 1 }] });
   }
   if (url.pathname === '/candidates') {
     const found = CANDIDATES[url.searchParams.get('title')]?.[url.searchParams.get('source')] || [];

@@ -1401,7 +1401,25 @@ export interface LangPair {
   'MusicLoadFailed': undefined;
   'MusicNotConnected': undefined;
   'MusicMixTitle': undefined;
-  'MusicMixSoon': undefined;
+  'MusicMixBuilding': undefined;
+  'MusicMixPickArtists': undefined;
+  'MusicMixPickHint': undefined;
+  'MusicMixAnother': undefined;
+  'MusicMixSettings': undefined;
+  'MusicMixModeNormal': undefined;
+  'MusicMixModeFavorites': undefined;
+  'MusicMixModeDiscover': undefined;
+  'MusicMixHour': undefined;
+  'MusicMixArtistsEdit': undefined;
+  'MusicMixQueued': undefined;
+  'MusicMixFailed': undefined;
+  'MusicMixArtistsTitle': undefined;
+  'MusicMixArtistsSearch': undefined;
+  'MusicMixArtistsDone': undefined;
+  'MusicMixArtistsEmpty': undefined;
+  'MusicDislike': undefined;
+  'MusicDislikeArtist': undefined;
+  'MusicDisliked': undefined;
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicNothingFound': undefined;
@@ -4839,6 +4857,15 @@ export interface LangPairWithVariables<V = LangVariable> {
     'perDay': V;
     'used': V;
     'quota': V;
+  };
+  'MusicMixNext': {
+    'when': V;
+  };
+  'MusicMixBecause': {
+    'name': V;
+  };
+  'MusicMixArtistsChosen': {
+    'count': V;
   };
   'MusicListTime': {
     'hours': V;

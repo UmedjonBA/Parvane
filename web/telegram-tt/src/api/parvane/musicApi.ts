@@ -116,6 +116,58 @@ export type MusicCatalogTrack = {
   year: number;
   // Трек уже есть в библиотеке сервера
   libraryTrackId?: string;
+  // Запись каталога (`dz:<id>`): полные теги и обложка при скачивании
+  ref?: string;
+  coverUrl?: string;
+  albumRef?: string;
+};
+
+export type MusicCatalogArtist = {
+  ref: string;
+  name: string;
+  pictureUrl: string;
+  albumsCount: number;
+};
+
+export type MusicMixMode = 'normal' | 'favorites' | 'discover';
+
+// Строка «Микса дня»: трек библиотеки либо трек каталога (ещё не на сервере)
+export type MusicMixTrack = {
+  track?: MusicTrack;
+  catalog?: MusicCatalogTrack;
+  reason: string;
+  // Каталог: похожий на какого исполнителя
+  becauseOf: string;
+};
+
+export type MusicMix = {
+  day: string;
+  builtMs: number;
+  nextMs: number;
+  mode: MusicMixMode;
+  tracks: MusicMixTrack[];
+};
+
+export type MusicMixSettings = {
+  mode: MusicMixMode;
+  hour: number;
+  artists: MusicCatalogArtist[];
+};
+
+export type MusicMixToday = {
+  mix?: MusicMix;
+  isBuilding: boolean;
+  settings: MusicMixSettings;
+  needsArtists: boolean;
+};
+
+export type MusicDislike = {
+  kind: 'track' | 'artist';
+  trackId: string;
+  ref: string;
+  artist: string;
+  title: string;
+  createdMs: number;
 };
 
 export type MusicFetchCandidate = {
@@ -186,6 +238,11 @@ const QUALITY_NAMES: Record<MusicStreamQuality, string> = {
   opus: 'STREAM_QUALITY_OPUS',
 };
 
+// Смещение местного времени от UTC, минуты (Москва — 180): «Микс дня» обновляется по местным суткам
+function localOffsetMin() {
+  return -new Date().getTimezoneOffset();
+}
+
 function field(source: Json, name: string): unknown {
   if (name in source) return source[name];
   return source[name.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase())];
@@ -251,6 +308,30 @@ function toCatalogTrack(raw: Json): MusicCatalogTrack {
     isExplicit: explicit === EXPLICIT_NAMES.yes ? true : explicit === EXPLICIT_NAMES.no ? false : undefined,
     year: count(raw, 'year'),
     libraryTrackId: text(raw, 'library_track_id') || undefined,
+    ref: text(raw, 'ref') || undefined,
+    coverUrl: text(raw, 'cover_url') || undefined,
+    albumRef: text(raw, 'album_ref') || undefined,
+  };
+}
+
+function toCatalogArtist(raw: Json): MusicCatalogArtist {
+  return {
+    ref: text(raw, 'ref'),
+    name: text(raw, 'name'),
+    pictureUrl: text(raw, 'picture_url'),
+    albumsCount: count(raw, 'albums_count'),
+  };
+}
+
+function toMixMode(value: string): MusicMixMode {
+  return value === 'favorites' || value === 'discover' ? value : 'normal';
+}
+
+function toMixSettings(raw: Json): MusicMixSettings {
+  return {
+    mode: toMixMode(text(raw, 'mode')),
+    hour: count(raw, 'hour'),
+    artists: list(raw, 'artists').map(toCatalogArtist),
   };
 }
 
@@ -262,6 +343,9 @@ function fromCatalogTrack(track: MusicCatalogTrack): Json {
     duration_secs: track.durationSecs,
     explicit: track.isExplicit === undefined ? undefined : track.isExplicit ? EXPLICIT_NAMES.yes : EXPLICIT_NAMES.no,
     year: track.year,
+    ref: track.ref,
+    cover_url: track.coverUrl,
+    album_ref: track.albumRef,
   };
 }
 
@@ -452,6 +536,82 @@ export function createMusicApi(deps: Deps) {
     async parvaneMusicPlaylistsSetActive({ isActive }: { isActive: boolean }) {
       deps.playlists().setActive(isActive);
       return true;
+    },
+
+    /** «Микс дня» на сегодня (по местному времени): готовый, собирается либо нужны любимые исполнители. */
+    async parvaneMusicMixToday(): Promise<MusicMixToday> {
+      const reply = await deps.call('music.mix.today', { tz_offset_min: localOffsetMin() });
+      const mix = field(reply, 'mix') as Json | undefined;
+      return {
+        mix: mix ? {
+          day: text(mix, 'day'),
+          builtMs: count(mix, 'built_ms'),
+          nextMs: count(mix, 'next_ms'),
+          mode: toMixMode(text(mix, 'mode')),
+          tracks: list(mix, 'tracks').map((row) => {
+            const track = field(row, 'track') as Json | undefined;
+            const catalog = field(row, 'catalog') as Json | undefined;
+            return {
+              track: track ? toTrack(track) : undefined,
+              catalog: catalog ? toCatalogTrack(catalog) : undefined,
+              reason: text(row, 'reason'),
+              becauseOf: text(row, 'because_of'),
+            };
+          }),
+        } : undefined,
+        isBuilding: Boolean(field(reply, 'building')),
+        settings: toMixSettings((field(reply, 'settings') as Json | undefined) || {}),
+        needsArtists: Boolean(field(reply, 'needs_artists')),
+      };
+    },
+
+    /** Настройки микса: режим, час обновления, любимые исполнители (`undefined` — не менять). */
+    async parvaneMusicMixSettings({ mode, hour, artists }: {
+      mode?: MusicMixMode; hour?: number; artists?: MusicCatalogArtist[];
+    }) {
+      const reply = await deps.call('music.mix.settings', {
+        mode: mode || '',
+        set_hour: hour !== undefined,
+        hour: hour ?? 0,
+        set_artists: artists !== undefined,
+        artists: (artists || []).map((artist) => ({
+          ref: artist.ref, name: artist.name, picture_url: artist.pictureUrl, albums_count: artist.albumsCount,
+        })),
+        tz_offset_min: localOffsetMin(),
+      });
+      return toMixSettings((field(reply, 'settings') as Json | undefined) || {});
+    },
+
+    /** «Другой микс»: собрать заново. */
+    async parvaneMusicMixRebuild() {
+      await deps.call('music.mix.rebuild', { tz_offset_min: localOffsetMin() });
+    },
+
+    /** Исполнители для выбора: пусто — подсказки, иначе — поиск по каталогу. */
+    async parvaneMusicMixArtists({ query }: { query: string }) {
+      const reply = await deps.call('music.mix.artists', { query });
+      return list(reply, 'artists').map(toCatalogArtist);
+    },
+
+    /** «Не нравится» на трек (библиотеки — `trackId`, каталога — `ref`) либо исполнителя; `isUndo` — снять. */
+    async parvaneMusicDislike({
+      trackId, ref, artist, title, isUndo,
+    }: { trackId?: string; ref?: string; artist?: string; title?: string; isUndo?: boolean }) {
+      await deps.call('music.dislike.set', {
+        track_id: trackId || '', ref: ref || '', artist: artist || '', title: title || '', undo: Boolean(isUndo),
+      });
+    },
+
+    async parvaneMusicDislikes(): Promise<MusicDislike[]> {
+      const reply = await deps.call('music.dislike.list', {});
+      return list(reply, 'items').map((raw) => ({
+        kind: text(raw, 'kind') === 'artist' ? 'artist' as const : 'track' as const,
+        trackId: text(raw, 'track_id'),
+        ref: text(raw, 'ref'),
+        artist: text(raw, 'artist'),
+        title: text(raw, 'title'),
+        createdMs: count(raw, 'created_ms'),
+      }));
     },
 
     /** «Найти в сети»: эталоны треков из каталога по названию или исполнителю. */

@@ -39,6 +39,8 @@ import MusicBrowseView from './MusicBrowseView';
 import MusicHomeView from './MusicHomeView';
 import MusicLibraryView from './MusicLibraryView';
 import MusicMiniPlayer from './MusicMiniPlayer';
+import MusicMixArtistsView from './MusicMixArtistsView';
+import MusicMixView from './MusicMixView';
 import MusicNav from './MusicNav';
 import MusicNewPlaylist from './MusicNewPlaylist';
 import MusicOffline from './MusicOffline';
@@ -162,6 +164,10 @@ const Music = () => {
         return <MusicSharedPage id={current.id} isPhone={isPhone} />;
       case 'uploads':
         return <MusicUploadsView info={info!} isPhone={isPhone} />;
+      case 'mix':
+        return <MusicMixView isPhone={isPhone} onSendToChat={setSentTrack} />;
+      case 'mixArtists':
+        return <MusicMixArtistsView isPhone={isPhone} />;
       case 'playlists':
         return (
           <div className={styles.view}>

@@ -11,7 +11,10 @@ import { createSignal } from '../../../util/signals';
 export type MusicTab = 'home' | 'search' | 'library';
 
 export type MusicView =
-  | { kind: MusicTab | 'starred' | 'artists' | 'albums' | 'offline' | 'added' | 'playlists' | 'uploads' }
+  | {
+    kind: MusicTab | 'starred' | 'artists' | 'albums' | 'offline' | 'added' | 'playlists' | 'uploads'
+      | 'mix' | 'mixArtists';
+  }
   | { kind: 'playlist' | 'album' | 'artist' | 'singles' | 'shared'; id: string };
 
 export type MusicViewKind = MusicView['kind'];
@@ -46,6 +49,8 @@ if (typeof window !== 'undefined') {
 /** Вкладка телефона, к которой относится вид: главная и поиск — свои, остальное — «Библиотека». */
 export function getMusicTab(view: MusicView): MusicTab {
   if (view.kind === 'home' || view.kind === 'search') return view.kind;
+  // «Микс дня» и выбор исполнителей для него открываются с «Главной»
+  if (view.kind === 'mix' || view.kind === 'mixArtists') return 'home';
   // «Загрузки на сервер» открываются из «Поиска» (доска `ZpMusicX`)
   if (view.kind === 'uploads') return 'search';
   return 'library';
