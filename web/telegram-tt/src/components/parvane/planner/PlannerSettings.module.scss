@@ -210,3 +210,13 @@
 .danger {
   color: var(--pv-red);
 }
+
+// Импорт «Здоровья»: поле выбора файла скрыто, его открывает кнопка
+.fileInput {
+  display: none;
+}
+
+.importActions {
+  gap: 0.5rem;
+  justify-content: flex-end;
+}

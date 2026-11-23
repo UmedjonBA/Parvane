@@ -490,6 +490,8 @@ impl HostClient {
             }
             // HEALTH-3 п. 13: разбор строки с подстановкой «моих продуктов» — то, что клиент показывает и пишет
             "healthRecall" => parsed(c.health_recall_json(&a.text("text")?, a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
+            // Импорт «Здоровья» из выгрузки Health Connect: база (base64) → новые записи, известные (и удалённые) — мимо
+            "healthImportHealthConnect" => parsed(c.health_import_health_connect_json(&a.b("db")?, &a.strings("pending").unwrap_or_default())),
             // HEALTH-3: сводка для экранов — считает движок, клиент рисует
             "healthView" => parsed(c.health_view_json(a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
             // HEALTH-3: записи показателя страницами для подробного экрана

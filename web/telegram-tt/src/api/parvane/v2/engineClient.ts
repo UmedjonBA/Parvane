@@ -484,6 +484,13 @@ export class EngineClient {
     return isNil(v) ? undefined : text(v);
   }
 
+  /** Импорт «Здоровья» из выгрузки Health Connect: база (base64) → JSON `{entries, counts, firstDay, lastDay}`
+   * либо `{error}`; записи, которые уже есть (и удалённые), а также `pending` (ещё не отправленные) движок
+   * отсеивает сам. */
+  healthImportHealthConnect(dbB64: string, pending: string[]): string {
+    return text(this.c('healthImportHealthConnect', { db: dbB64, pending }));
+  }
+
   /** Изменения для записи разобранных записей (HEALTH-3): JSON `{changes}` для `prepareLocal`. */
   healthCompose(entries: unknown[], nowMs: number): string {
     return text(this.c('healthCompose', { entries, nowMs }));

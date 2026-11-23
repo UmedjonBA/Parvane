@@ -203,6 +203,26 @@ try {
   assert.equal(await goalsPage.locator('input[data-goal="kcal"]').inputValue(), '2200', 'цель калорий из строки');
   assert.equal(await goalsPage.locator('input[data-goal="protein"]').inputValue(), '150', 'цель белков из строки');
   console.log('OK: «Цели здоровья» — цели строкой, сон с длительностью, «Напоминать об отбое», «Включить блоки»');
+  // Импорт из Health Connect: архив выгрузки (выдуманные данные) → предпросмотр по видам → запись; повторный
+  // импорт того же файла ничего не добавляет
+  const importCard = goalsPage.locator('[data-health-import]');
+  const exportZip = new URL('../backend/protocol/tests/fixtures/health_connect_export.zip', import.meta.url).pathname;
+  await importCard.locator('[data-health-import-file]').setInputFiles(exportZip);
+  await importCard.locator('[data-health-import-kind="weight"]').filter({ hasText: '30' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(async () => assert.fail(`предпросмотр импорта: «${await importCard.innerText().catch(() => '')}»`));
+  await importCard.locator('[data-health-import-kind="sleep"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await importCard.locator('[data-health-import-apply]').filter({ hasText: '65' }).click();
+  await importCard.locator('[data-health-import-note="done"]').filter({ hasText: '65' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await importCard.locator('[data-health-import-file]').setInputFiles(exportZip);
+  await importCard.locator('[data-health-import-empty]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(async () => assert.fail(`повторный импорт: «${await importCard.innerText().catch(() => '')}»`));
+  await importCard.locator('[data-health-import-file]').setInputFiles({
+    name: 'notes.zip', mimeType: 'application/zip', buffer: Buffer.from('not an export'),
+  });
+  await importCard.locator('[data-health-import-error="not_export"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: импорт из Health Connect — предпросмотр, 65 записей, повторный импорт без дублей, чужой файл отклонён');
   assert.deepEqual(errors, [], `ошибки страницы: ${errors.join('; ')}`);
   console.log('e2e_web_planner_sleep: OK');
 } finally {

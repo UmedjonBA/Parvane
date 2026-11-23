@@ -20,6 +20,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import PvSwitch from '../notes/PvSwitch';
+import HealthImportCard from './HealthImportCard';
 
 import styles from '../planner/PlannerSettings.module.scss';
 
@@ -295,6 +296,8 @@ const HealthGoalsScreen = () => {
           {isOn('workouts') && renderNumber('active_min', lang('HealthGoalsActive'), lang('HealthUnitMin'))}
         </div>
       )}
+
+      <HealthImportCard />
 
       {offBlocks.length > 0 && (
         <div className={buildClassName(styles.card, styles.row)} data-health-goals-off>

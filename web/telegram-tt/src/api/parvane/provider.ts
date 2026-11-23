@@ -93,6 +93,7 @@ import {
 } from './gifs';
 import { createGroupController } from './groups';
 import { createHealthApi } from './healthApi';
+import { createHealthImport } from './healthImport';
 import { createHistoryRows, type ModelChat } from './historyRows';
 import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
 import {
@@ -2866,6 +2867,10 @@ const healthMethods = createHealthApi({
   health: () => v2Controller.health,
   log: logDebug,
 });
+const healthImportMethods = createHealthImport({
+  health: () => v2Controller.health,
+  log: logDebug,
+});
 
 // «Музыка» (spec 039): методы раздела — `musicApi.ts`
 const musicMethods = createMusicApi({
@@ -2908,6 +2913,7 @@ const modReports = createModReports({
 
 const methods = {
   ...healthMethods,
+  ...healthImportMethods,
   ...musicMethods,
   ...musicSharedMethods,
 

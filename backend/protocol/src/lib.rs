@@ -23,8 +23,10 @@ pub mod history;
 /// Разбор свободного ввода «Здоровья» (spec 038).
 pub mod health_parse;
 pub mod modules;
+pub mod health_import;
 pub mod music_mix;
 pub mod music_queue;
+pub mod sqlite_read;
 pub mod music_tags;
 /// Списки библиотеки «Музыки» на экранах (spec 041): порядок, буквы, отбор, страницы, «Загруженное».
 pub mod music_library;

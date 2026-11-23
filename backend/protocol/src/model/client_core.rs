@@ -92,6 +92,7 @@ pub const READS: &[&str] = &[
     "healthView",
     "healthCompose",
     "healthRecall",
+    "healthImportHealthConnect",
     "healthEntries",
     "healthDays",
     "healthCheck",

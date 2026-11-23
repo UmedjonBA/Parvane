@@ -16,8 +16,9 @@ const HEALTH_SPEC: PersonalSpec = {
 };
 
 export function createHealthSync(deps: PersonalDeps) {
+  const sync = createPersonalSync(deps, HEALTH_SPEC);
   return {
-    ...createPersonalSync(deps, HEALTH_SPEC),
+    ...sync,
     /** Сводка для экранов на этот момент в этом поясе; контейнера или движка нет — `undefined`. */
     viewJson: (nowMs: number, tzMin: number) => deps.client()?.healthView(nowMs, tzMin),
     /** Изменения для записи разобранных записей (id, «лёг» + «встал» → один сон); движок не поднят — `undefined`. */
@@ -36,6 +37,8 @@ export function createHealthSync(deps: PersonalDeps) {
       const client = deps.client();
       return client ? client.healthCheck(entry, nowMs) : 'form';
     },
+    /** Импорт из выгрузки Health Connect (база, base64); движок не поднят — `undefined`. */
+    importHealthConnect: (dbB64: string) => deps.client()?.healthImportHealthConnect(dbB64, sync.unsentIds()),
     /** Разбор строки ввода с подстановкой чисел еды из прошлых записей; движок не поднят — `undefined`. */
     parseJson: (input: string, nowMs: number, tzMin: number) => deps.client()?.healthRecall(input, nowMs, tzMin),
   };

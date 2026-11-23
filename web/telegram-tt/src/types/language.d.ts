@@ -2079,6 +2079,26 @@ export interface LangPair {
   'HealthGoalsPressure': undefined;
   'HealthGoalsPulse': undefined;
   'HealthGoalsWater': undefined;
+  'HealthImportTitle': undefined;
+  'HealthImportHint': undefined;
+  'HealthImportPick': undefined;
+  'HealthImportReading': undefined;
+  'HealthImportSteps': undefined;
+  'HealthImportSleep': undefined;
+  'HealthImportPulse': undefined;
+  'HealthImportWeight': undefined;
+  'HealthImportPressure': undefined;
+  'HealthImportWorkouts': undefined;
+  'HealthImportWater': undefined;
+  'HealthImportTemperature': undefined;
+  'HealthImportSpo2': undefined;
+  'HealthImportBodyFat': undefined;
+  'HealthImportHeight': undefined;
+  'HealthImportNothingNew': undefined;
+  'HealthImportNotExport': undefined;
+  'HealthImportCorrupt': undefined;
+  'HealthImportTooBig': undefined;
+  'HealthImportFailed': undefined;
   'HealthGoalsActive': undefined;
   'HealthGoalsFood': undefined;
   'HealthGoalsKcal': undefined;
@@ -5289,6 +5309,10 @@ export interface LangPairWithVariables<V = LangVariable> {
     'hours': V;
     'minutes': V;
   };
+  'HealthImportRange': {
+    'from': V;
+    'to': V;
+  };
   'PlannerImportUnderstoodCount': {
     'events': V;
   };
@@ -6506,6 +6530,15 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'days': V;
   };
   'PlannerSettingsLearnedCount': {
+    'count': V;
+  };
+  'HealthImportApply': {
+    'count': V;
+  };
+  'HealthImportWriting': {
+    'count': V;
+  };
+  'HealthImportDone': {
     'count': V;
   };
   'PlannerHoursFull': {

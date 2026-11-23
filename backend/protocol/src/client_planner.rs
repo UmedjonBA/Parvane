@@ -265,6 +265,14 @@ impl PersonalState {
     }
 
     /// Сводка «Здоровья» для экранов (HEALTH-3); у планировщика её нет.
+    /// Номера всех записей «Здоровья», в том числе удалённых (надгробия): импорт их не трогает.
+    fn health_entry_ids(&self) -> Option<std::collections::BTreeSet<String>> {
+        match self {
+            Self::Health(st) => Some(st.entries.keys().cloned().collect()),
+            Self::Planner(_) | Self::Music(_) => None,
+        }
+    }
+
     fn health_view(&self, now_ms: i64, tz_min: i32) -> Option<String> {
         match self {
             Self::Health(st) => Some(crate::domain::health_view::view_json(st, now_ms, tz_min)),
@@ -1023,6 +1031,14 @@ impl Client {
     pub fn health_recall_json(&self, text: &str, now_ms: i64, tz_min: i32) -> String {
         let recalled = self.health.as_ref().and_then(|p| p.state.health_recall(text, now_ms, tz_min));
         recalled.unwrap_or_else(|| crate::health_parse::parse_json(text, now_ms, tz_min))
+    }
+    /// Импорт «Здоровья» из выгрузки Health Connect (`health_connect_export.db`): записи, которых у человека ещё нет
+    /// (удалённые не воскресают) → `{entries, counts, firstDay, lastDay}` либо `{error}`.
+    /// `pending` — номера ещё не отправленных записей устройства (их в состоянии пока нет).
+    pub fn health_import_health_connect_json(&self, db: &[u8], pending: &[String]) -> String {
+        let mut known = self.health.as_ref().and_then(|p| p.state.health_entry_ids()).unwrap_or_default();
+        known.extend(pending.iter().cloned());
+        crate::health_import::import_json(db, &known).to_string()
     }
     /// Контейнера ещё нет (первое открытие) — сводка пустого состояния.
     pub fn health_view_json(&self, now_ms: i64, tz_min: i32) -> String {
