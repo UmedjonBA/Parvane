@@ -354,6 +354,8 @@ message CatalogTrack {
   string cover_url = 9 [(parvane.core.v2.max_len) = 512];
   // Альбом трека в каталоге (`dz:<id>`); пусто — нет.
   string album_ref = 10 [(parvane.core.v2.max_len) = 64];
+  // Отрывок 30 с (MP3 каталога): «послушать до скачивания»; пусто — нет.
+  string preview_url = 11 [(parvane.core.v2.max_len) = 512];
 }
 
 message FetchCatalogRequest {

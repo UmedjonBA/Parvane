@@ -1715,6 +1715,8 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicListenPreview" = "Послушать превью";
+"MusicPreviewOnly" = "Превью — в каталоге только 30 секунд";
 "MusicFavFromCatalog" = "«В Любимое» из каталога";
 "MusicPeopleLimits" = "Люди и лимиты";
 "MusicServerTitle" = "Музыка на сервере";

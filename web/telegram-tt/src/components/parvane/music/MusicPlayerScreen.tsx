@@ -218,6 +218,10 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
               </div>
               <MusicControls isFullScreen />
               {player.hasError && <span className={styles.error} role="alert">{lang('MusicPlayError')}</span>}
+              {/* Доска `MusicPlayer-05`: трек каталога — только отрывок */}
+              {playing.previewUrl && (
+                <span className={styles.previewNote} data-music-preview>{lang('MusicPreviewOnly')}</span>
+              )}
               {renderNext()}
             </div>
           </div>

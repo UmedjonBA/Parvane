@@ -240,6 +240,7 @@ pub fn query_of_json(t: &Value) -> Query {
         explicit: t.get("explicit").and_then(Value::as_bool),
         reference: clip(t, "ref"),
         cover_url: clip(t, "cover"),
+        preview_url: clip(t, "preview"),
         album_ref: clip(t, "album_ref"),
     }
 }

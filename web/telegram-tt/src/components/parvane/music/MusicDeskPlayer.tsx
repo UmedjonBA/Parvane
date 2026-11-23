@@ -57,7 +57,13 @@ const MusicDeskPlayer = () => {
     <div className={styles.root} data-music-desk-player={player.isPlaying ? 'playing' : 'paused'}>
       <div className={styles.track}>
         <button type="button" className={styles.open} aria-label={lang('MusicOpenPlayer')} onClick={openMusicPlayer}>
-          <MusicCover coverId={track.coverId} toneId={track.albumId || track.id} size={50} className={styles.cover} />
+          <MusicCover
+            coverId={track.coverId}
+            coverUrl={track.coverUrl}
+            toneId={track.albumId || track.id}
+            size={50}
+            className={styles.cover}
+          />
           <span className={styles.text}>
             <span className={styles.title}>{track.title}</span>
             <span className={styles.artist}>{track.artist}</span>

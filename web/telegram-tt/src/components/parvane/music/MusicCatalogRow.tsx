@@ -11,7 +11,7 @@ import { copyTextToClipboard } from '../../../util/clipboard';
 import {
   cancelFetchJob, catalogKey, getFetchJobs, getJobPercent, retryFetchJob, startFetch,
 } from './fetch/musicFetch';
-import { callMusic } from './musicPlayer';
+import { callMusic, catalogPreviewTrack, playTracks } from './musicPlayer';
 import { openMusicView } from './musicView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -69,9 +69,14 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     setMenu({ anchor: window.innerWidth <= PHONE_MAX_WIDTH ? undefined : { x: e.clientX, y: e.clientY } });
   });
   const handleCloseMenu = useLastCallback(() => setMenu(undefined));
+  // Нажатие строки — отрывок 30 с (доски `RpMusicA-05`, `MusicPlayer-05`)
+  const handlePreview = useLastCallback(() => {
+    playTracks([catalogPreviewTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
+  });
   const handlePick = useLastCallback((action: string) => {
     setMenu(undefined);
     if (action === 'add') void handleAdd();
+    else if (action === 'preview') handlePreview();
     else if (action === 'cancel' && job) void cancelFetchJob(job.jobId);
     else if (action === 'album' && track.albumRef) openMusicView({ kind: 'catalogAlbum', id: track.albumRef });
     else if (action === 'dislike') {
@@ -88,6 +93,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     state === 'catalog' || state === 'failed'
       ? { key: 'add', title: lang('MusicAddToServer'), glyph: icon('cloudAdd') }
       : { key: 'cancel', title: lang('MusicFetchCancel'), glyph: icon('close'), isDanger: true },
+    ...(track.previewUrl ? [{ key: 'preview', title: lang('MusicListenPreview'), glyph: icon('play') }] : []),
     ...(track.albumRef ? [{ key: 'album', title: lang('MusicGoToAlbum'), glyph: icon('disc') }] : []),
     { key: 'share', title: lang('MusicShare'), glyph: icon('share') },
     { key: 'dislike', title: lang('MusicDislike'), glyph: icon('ban') },
@@ -101,7 +107,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
       data-catalog-state={state}
       onContextMenu={handleContextMenu}
     >
-      <button type="button" className={styles.trackMain} onClick={handleMenu}>
+      <button type="button" className={styles.trackMain} onClick={track.previewUrl ? handlePreview : handleMenu}>
         {rank !== undefined && (
           <span className={styles.trackRank}>{rank}</span>
         )}

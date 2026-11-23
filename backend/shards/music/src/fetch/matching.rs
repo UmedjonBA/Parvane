@@ -27,6 +27,8 @@ pub struct Query {
     pub reference: String,
     pub cover_url: String,
     pub album_ref: String,
+    /// Отрывок 30 с каталога («послушать до скачивания»).
+    pub preview_url: String,
 }
 
 /// Файл, найденный источником.

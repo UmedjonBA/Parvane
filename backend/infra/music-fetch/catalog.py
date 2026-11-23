@@ -89,6 +89,8 @@ def track_out(item, album=None):
         "explicit": explicit_of(item.get("explicit_content_lyrics")),
         "year": year_of(item.get("release_date") or album.get("release_date")),
         "cover": album.get("cover_medium") or "",
+        # Отрывок 30 с (MP3) — «послушать до скачивания»
+        "preview": item.get("preview") or "",
     }
 
 

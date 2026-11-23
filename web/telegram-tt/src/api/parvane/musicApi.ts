@@ -58,6 +58,9 @@ export type MusicTrack = {
   adder?: string;
   // Выравнивание громкости (ReplayGain трека), дБ
   replayGainDb?: number;
+  // Трек каталога, которого нет на сервере: играет отрывок 30 с («послушать до скачивания»)
+  previewUrl?: string;
+  coverUrl?: string;
 };
 
 export type MusicAlbum = {
@@ -128,6 +131,8 @@ export type MusicCatalogTrack = {
   ref?: string;
   coverUrl?: string;
   albumRef?: string;
+  // Отрывок 30 с каталога
+  previewUrl?: string;
 };
 
 export type MusicCatalogArtist = {
@@ -329,6 +334,7 @@ export function toCatalogTrack(raw: Json): MusicCatalogTrack {
     ref: text(raw, 'ref') || undefined,
     coverUrl: text(raw, 'cover_url') || undefined,
     albumRef: text(raw, 'album_ref') || undefined,
+    previewUrl: text(raw, 'preview_url') || undefined,
   };
 }
 

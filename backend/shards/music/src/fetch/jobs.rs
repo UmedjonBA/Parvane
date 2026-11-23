@@ -136,6 +136,7 @@ pub(crate) fn query_of(t: &pb::CatalogTrack) -> Query {
         reference: t.r#ref.trim().to_string(),
         cover_url: t.cover_url.trim().to_string(),
         album_ref: t.album_ref.trim().to_string(),
+        preview_url: String::new(),
     }
 }
 
@@ -150,6 +151,7 @@ pub(crate) fn catalog_pb(q: &Query, year: u32, library_track_id: String) -> pb::
         library_track_id,
         r#ref: q.reference.clone(),
         cover_url: q.cover_url.clone(),
+        preview_url: q.preview_url.clone(),
         album_ref: q.album_ref.clone(),
     }
 }

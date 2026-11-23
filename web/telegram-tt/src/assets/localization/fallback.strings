@@ -1971,6 +1971,8 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicListenPreview" = "Listen to the preview";
+"MusicPreviewOnly" = "Preview — the catalog has only 30 seconds";
 "MusicFavFromCatalog" = "“Favorite” from the catalog";
 "MusicPeopleLimits" = "People and limits";
 "MusicServerTitle" = "Music on the server";

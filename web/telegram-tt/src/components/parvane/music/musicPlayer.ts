@@ -1,5 +1,5 @@
 import type {
-  createMusicApi, MusicInfo, MusicStreamQuality, MusicTrack,
+  createMusicApi, MusicCatalogTrack, MusicInfo, MusicStreamQuality, MusicTrack,
 } from '../../../api/parvane/musicApi';
 import type { createMusicCatalogApi } from '../../../api/parvane/musicCatalogApi';
 import type { createMusicFilesApi } from '../../../api/parvane/musicFilesApi';
@@ -226,6 +226,9 @@ function rememberPlayed(track: MusicTrack) {
 }
 
 async function streamUrlOf(trackId: string) {
+  // Отрывок каталога — ссылкой каталога, без сервера
+  const preview = getMusicPlayer().tracksById[trackId]?.previewUrl;
+  if (preview) return preview;
   // Трек, сохранённый на устройстве, играет без сервера
   const offlineUrl = await loadOfflineUrl(trackId);
   if (offlineUrl) return offlineUrl;
@@ -288,6 +291,25 @@ function applyQueue(
   saveQueue(queue);
   if (source || !nextSource) writeJson(SOURCE_KEY, nextSource);
   void loadCurrent(shouldPlay);
+}
+
+/** Трек каталога как трек плеера: играет отрывок 30 с («послушать до скачивания», доска `MusicPlayer-05`). */
+export function catalogPreviewTrack(track: MusicCatalogTrack): MusicTrack {
+  return {
+    id: track.ref || `preview:${track.artist}:${track.title}`,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    albumId: '',
+    artistId: '',
+    durationSecs: 30,
+    coverId: '',
+    trackNo: 0,
+    year: track.year,
+    isStarred: false,
+    previewUrl: track.previewUrl,
+    coverUrl: track.coverUrl,
+  };
 }
 
 /** Играть список с этого трека: очередь заменяется. `isShuffled` — «Вперемешку» (порядок задаёт движок); без

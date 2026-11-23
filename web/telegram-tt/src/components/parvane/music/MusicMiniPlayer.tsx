@@ -109,7 +109,12 @@ const MusicMiniPlayer = ({ isCompact, isDocked }: OwnProps) => {
         {isPopupShown && (
           <div role="dialog" aria-label={lang('MusicMiniDialog')} className={styles.popup} data-music-popup>
             <div className={styles.popupHead}>
-              <MusicCover coverId={track.coverId} toneId={track.albumId || track.id} size={44} />
+              <MusicCover
+                coverId={track.coverId}
+                coverUrl={track.coverUrl}
+                toneId={track.albumId || track.id}
+                size={44}
+              />
               <span className={styles.barText}>
                 <span className={styles.popupTitle}>{track.title}</span>
                 <span className={buildClassName(styles.barTitle, styles.barArtist)}>{track.artist}</span>
@@ -165,7 +170,13 @@ const MusicMiniPlayer = ({ isCompact, isDocked }: OwnProps) => {
       data-music-mini={player.isPlaying ? 'playing' : 'paused'}
     >
       <button type="button" className={styles.barOpen} aria-label={lang('MusicOpenPlayer')} onClick={openMusicPlayer}>
-        <MusicCover coverId={track.coverId} toneId={track.albumId || track.id} size={40} className={styles.barCover} />
+        <MusicCover
+          coverId={track.coverId}
+          coverUrl={track.coverUrl}
+          toneId={track.albumId || track.id}
+          size={40}
+          className={styles.barCover}
+        />
         <span className={styles.barText}>
           <span className={styles.barTitle}>{track.title}</span>
           <span className={buildClassName(styles.barTitle, styles.barArtist)}>{track.artist}</span>
