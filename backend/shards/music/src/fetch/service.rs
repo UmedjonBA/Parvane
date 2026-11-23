@@ -71,11 +71,11 @@ pub struct Downloaded {
     pub duration_secs: u32,
 }
 
-fn clip(v: &Value, key: &str) -> String {
+pub(crate) fn clip(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").chars().take(TEXT_MAX).collect()
 }
 
-fn num(v: &Value, key: &str) -> u32 {
+pub(crate) fn num(v: &Value, key: &str) -> u32 {
     v.get(key).and_then(|n| n.as_u64().or_else(|| n.as_f64().map(|f| f.max(0.0) as u64))).map_or(0, |n| n.min(u64::from(u32::MAX)) as u32)
 }
 
@@ -122,9 +122,22 @@ impl FetchService {
         let tracks = v.get("tracks").and_then(Value::as_array).ok_or(ServiceError::Unavailable)?;
         Ok(tracks
             .iter()
-            .map(|t| (Query { artist: clip(t, "artist"), title: clip(t, "title"), album: clip(t, "album"), duration_secs: num(t, "duration"), explicit: t.get("explicit").and_then(Value::as_bool) }, num(t, "year")))
+            .map(|t| (query_of_json(t), num(t, "year")))
             .filter(|(q, _)| !q.artist.is_empty() && !q.title.is_empty())
             .collect())
+    }
+
+    /// Эталоны треков по строке как есть (с `ref`, обложкой и альбомом) — для «Микса дня».
+    pub async fn catalog_raw(&self, query: &str, limit: u32) -> Result<Vec<Value>, ServiceError> {
+        let rq = self.http.get(format!("{}/catalog", self.base)).query(&[("q", query.to_string()), ("limit", limit.to_string())]);
+        let v = self.json(rq, SEARCH_TIMEOUT).await?;
+        Ok(v.get("tracks").and_then(Value::as_array).cloned().unwrap_or_default())
+    }
+
+    /// Маршрут каталога сервиса (`/catalog/search`, `/catalog/artist`, …) — ответ как есть.
+    pub async fn catalog_call(&self, path: &str, params: &[(&str, String)]) -> Result<Value, ServiceError> {
+        let rq = self.http.get(format!("{}/catalog/{path}", self.base)).query(params);
+        self.json(rq, SEARCH_TIMEOUT).await
     }
 
     /// Файлы источника, похожие на трек.
@@ -151,7 +164,7 @@ impl FetchService {
     /// Скачать файл в папку библиотеки; `dest` — путь без расширения.
     /// Скачать файл в `dest`; `tags` — эталон каталога: сервис пишет его в теги файла вместо тегов перезаливщика.
     pub async fn download(&self, source: &str, id: &str, dest: &str, tags: &Query) -> Result<Downloaded, ServiceError> {
-        let tags = json!({"artist": tags.artist, "title": tags.title, "album": tags.album});
+        let tags = json!({"artist": tags.artist, "title": tags.title, "album": tags.album, "ref": tags.reference});
         let rq = self.http.post(format!("{}/download", self.base)).json(&json!({"source": source, "id": id, "dest": dest, "tags": tags}));
         let v = self.json(rq, DOWNLOAD_TIMEOUT).await?;
         let path = v.get("path").and_then(Value::as_str).unwrap_or("").to_string();
@@ -188,5 +201,19 @@ mod tests {
         assert_eq!(reason_of(b"not json"), None);
         let long = format!(r#"{{"reason":"{}"}}"#, "я".repeat(300));
         assert!(reason_of(long.as_bytes()).unwrap().len() <= REASON_MAX);
+    }
+}
+
+/// Трек каталога из ответа сервиса (`artist`, `title`, `album`, `duration`, `explicit`, `ref`, `cover`, `album_ref`).
+pub fn query_of_json(t: &Value) -> Query {
+    Query {
+        artist: clip(t, "artist"),
+        title: clip(t, "title"),
+        album: clip(t, "album"),
+        duration_secs: num(t, "duration"),
+        explicit: t.get("explicit").and_then(Value::as_bool),
+        reference: clip(t, "ref"),
+        cover_url: clip(t, "cover"),
+        album_ref: clip(t, "album_ref"),
     }
 }

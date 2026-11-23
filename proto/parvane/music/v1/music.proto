@@ -762,7 +762,8 @@ message MixSettingsSetRequest {
   bool set_hour = 2;
   uint32 hour = 3;
   bool set_artists = 4;
-  repeated string artist_refs = 5 [(parvane.core.v2.max_items) = 20, (parvane.core.v2.max_len) = 64];
+  // Выбранные исполнители, как их вернул `music.mix.artists` (ссылка, имя, фото — для показа).
+  repeated CatalogArtist artists = 5 [(parvane.core.v2.max_items) = 20];
   int32 tz_offset_min = 6;
 }
 message MixSettingsSetResponse {

@@ -191,7 +191,7 @@ async fn store_file(fetch: &Fetch, job: &Job, mut body: Incoming) -> Result<(Str
 }
 
 async fn finish(fetch: &Fetch, sub: &Subsonic, id: &str, user: &str, path: &str, tags: music_tags::FileTags) {
-    let query = Query { artist: tags.tags.artist, title: tags.tags.title, album: tags.tags.album, duration_secs: tags.tags.duration_secs, explicit: None };
+    let query = Query { artist: tags.tags.artist, title: tags.tags.title, album: tags.tags.album, duration_secs: tags.tags.duration_secs, explicit: None, ..Default::default() };
     fetch.update(id, |j| j.query = query.clone());
     match find_uploaded(sub, &nd_user(user), &query, id).await {
         Some(track_id) => {

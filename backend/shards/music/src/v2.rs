@@ -44,15 +44,22 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
     }
     let sub_shared = ctx.sub.as_ref().ok_or(ErrorCode::Unavailable)?;
     let sub: &Subsonic = sub_shared;
+    // «Микс дня», «Не нравится», история поиска
+    if method.starts_with("music.mix.") || method.starts_with("music.dislike.") || method.starts_with("music.search.") {
+        return crate::mix::dispatch(ctx, sub, method, &req).await;
+    }
     // Общие плейлисты (spec 041, MUSIC-3): права проверяет шард
     if method.starts_with("music.shared.") {
         return crate::shared::dispatch(method, &req).await;
     }
     // Этап B: добавление треков — нужна папка библиотеки; «Найти и скачать» — ещё и сервис скачивания
-    if method.starts_with("music.fetch.") || method.starts_with("music.added.") || method.starts_with("music.upload.") {
+    if method.starts_with("music.fetch.") || method.starts_with("music.added.") || method.starts_with("music.upload.") || method.starts_with("music.catalog.") {
         let fetch = ctx.fetch.as_ref().ok_or(ErrorCode::Unavailable)?;
         return match method {
             "music.fetch.catalog" => fetch.catalog(sub, &user, body(&req)?).await,
+            "music.catalog.search" => fetch.catalog_search(sub, &user, body(&req)?).await,
+            "music.catalog.artist" => fetch.catalog_artist(body(&req)?).await,
+            "music.catalog.album" => fetch.catalog_album(sub, &user, body(&req)?).await,
             "music.fetch.start" => fetch.start(sub_shared.clone(), &req.user, body(&req)?).await,
             "music.fetch.status" => fetch.status(&req.user),
             "music.fetch.cancel" => fetch.cancel(&req.user, body(&req)?).await,

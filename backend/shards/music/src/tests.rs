@@ -322,8 +322,8 @@ async fn real_navidrome() {
 
 /// Поддельный сервис скачивания: каталог и кандидаты заданы тестом, «загрузка» пишет файл в папку библиотеки.
 #[derive(Default)]
-struct FakeFetch {
-    catalog: Mutex<Vec<serde_json::Value>>,
+pub(crate) struct FakeFetch {
+    pub(crate) catalog: Mutex<Vec<serde_json::Value>>,
     /// Источник → кандидаты; источника нет в таблице — он «отказал» (503).
     candidates: Mutex<HashMap<String, Vec<serde_json::Value>>>,
     asked_sources: Mutex<Vec<String>>,
@@ -340,6 +340,16 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
     match path.as_str() {
         "/health" => reply(200, json!({"ok": true})),
         "/catalog" => reply(200, json!({"tracks": fake.catalog.lock().unwrap().clone()})),
+        // Каталог (поиск, альбом, похожие, исполнители): «Песня t2» уже в библиотеке, «Новая» — нет
+        "/catalog/search" => reply(200, json!({
+            "artists": [{"ref": "dz:1", "name": "Группа", "picture": "", "albums": 1}],
+            "albums": [{"ref": "dz:10", "title": "Альбом", "artist": "Группа", "artist_ref": "dz:1", "cover": "", "year": 2020, "record_type": "album", "tracks": 2}],
+            "tracks": catalog_album_tracks(), "has_more": true, "next": 2})),
+        "/catalog/album" => reply(200, json!({
+            "album": {"ref": "dz:10", "title": "Альбом", "artist": "Группа", "artist_ref": "dz:1", "cover": "", "year": 2020, "record_type": "album", "tracks": 2},
+            "tracks": catalog_album_tracks()})),
+        "/catalog/related" => reply(200, json!({"artists": [{"ref": "dz:2", "name": "Соседи", "picture": "", "albums": 3}]})),
+        "/catalog/artists" => reply(200, json!({"artists": [{"ref": "dz:1", "name": "Группа", "picture": "", "albums": 1}]})),
         "/candidates" => {
             let source = q.get("source").cloned().unwrap_or_default();
             fake.asked_sources.lock().unwrap().push(source.clone());
@@ -373,7 +383,7 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
 }
 
 /// Шард с поддельными музыкальным сервером и сервисом скачивания; лимит — `per_day` треков в сутки.
-async fn setup_fetch(per_day: u32, quota: u64) -> (Arc<FakeFetch>, Arc<Ctx>, std::path::PathBuf) {
+pub(crate) async fn setup_fetch(per_day: u32, quota: u64) -> (Arc<FakeFetch>, Arc<Ctx>, std::path::PathBuf) {
     let (_, base) = spawn_fake().await;
     let fake = Arc::new(FakeFetch::default());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -402,6 +412,13 @@ async fn setup_fetch(per_day: u32, quota: u64) -> (Arc<FakeFetch>, Arc<Ctx>, std
     let fetch = crate::fetch::jobs::Fetch::new(Some(service), pool, Default::default(), dir.join("library"), per_day, quota, u64::MAX, vec!["admin@local".into()], 2);
     let ctx = Arc::new(Ctx { sub: Some(Arc::new(Subsonic::new(&base).unwrap())), fetch: Some(Arc::new(fetch)), key: [9u8; 32], public_base: String::new() });
     (fake, ctx, dir)
+}
+
+pub(crate) fn catalog_album_tracks() -> serde_json::Value {
+    json!([
+        {"ref": "dz:100", "artist": "Группа", "title": "Песня t2", "album": "Альбом", "album_ref": "dz:10", "duration": 215, "year": 2020, "cover": ""},
+        {"ref": "dz:101", "artist": "Группа", "title": "Новая", "album": "Альбом", "album_ref": "dz:10", "duration": 200, "year": 2020, "cover": ""}
+    ])
 }
 
 fn catalog_track(title: &str) -> pb::CatalogTrack {

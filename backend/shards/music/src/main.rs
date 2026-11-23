@@ -9,6 +9,7 @@
 mod fetch;
 mod http;
 mod library;
+mod mix;
 mod shared;
 mod subsonic;
 mod token;
@@ -19,6 +20,8 @@ mod v2;
 mod tests;
 #[cfg(test)]
 mod tests_spec041;
+#[cfg(test)]
+mod tests_mix;
 
 use std::sync::Arc;
 

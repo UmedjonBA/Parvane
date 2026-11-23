@@ -23,6 +23,10 @@ pub struct Query {
     pub duration_secs: u32,
     /// Пометка каталога «с ненормативной лексикой»: `None` — каталог не знает.
     pub explicit: Option<bool>,
+    /// Запись каталога (`dz:<id>`): по ней сервис скачивания пишет полные теги и обложку; пусто — нет.
+    pub reference: String,
+    pub cover_url: String,
+    pub album_ref: String,
 }
 
 /// Файл, найденный источником.
@@ -432,7 +436,7 @@ mod tests {
     }
 
     fn query(artist: &str, title: &str, secs: u32, explicit: Option<bool>) -> Query {
-        Query { artist: artist.into(), title: title.into(), album: String::new(), duration_secs: secs, explicit }
+        Query { artist: artist.into(), title: title.into(), album: String::new(), duration_secs: secs, explicit, ..Default::default() }
     }
 
     fn cand(id: &str, source: &str, title: &str, uploader: &str, secs: u32, upload_day: Option<i64>) -> Candidate {

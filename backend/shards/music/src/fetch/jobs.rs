@@ -109,17 +109,37 @@ fn explicit_pb(e: Option<bool>) -> i32 {
     }) as i32
 }
 
-fn query_of(t: &pb::CatalogTrack) -> Query {
+pub(crate) fn query_of(t: &pb::CatalogTrack) -> Query {
     let explicit = match pb::Explicit::try_from(t.explicit) {
         Ok(pb::Explicit::Yes) => Some(true),
         Ok(pb::Explicit::No) => Some(false),
         _ => None,
     };
-    Query { artist: t.artist.trim().to_string(), title: t.title.trim().to_string(), album: t.album.trim().to_string(), duration_secs: t.duration_secs, explicit }
+    Query {
+        artist: t.artist.trim().to_string(),
+        title: t.title.trim().to_string(),
+        album: t.album.trim().to_string(),
+        duration_secs: t.duration_secs,
+        explicit,
+        reference: t.r#ref.trim().to_string(),
+        cover_url: t.cover_url.trim().to_string(),
+        album_ref: t.album_ref.trim().to_string(),
+    }
 }
 
-fn catalog_pb(q: &Query, year: u32, library_track_id: String) -> pb::CatalogTrack {
-    pb::CatalogTrack { artist: q.artist.clone(), title: q.title.clone(), album: q.album.clone(), duration_secs: q.duration_secs, explicit: explicit_pb(q.explicit), year, library_track_id, ..Default::default() }
+pub(crate) fn catalog_pb(q: &Query, year: u32, library_track_id: String) -> pb::CatalogTrack {
+    pb::CatalogTrack {
+        artist: q.artist.clone(),
+        title: q.title.clone(),
+        album: q.album.clone(),
+        duration_secs: q.duration_secs,
+        explicit: explicit_pb(q.explicit),
+        year,
+        library_track_id,
+        r#ref: q.reference.clone(),
+        cover_url: q.cover_url.clone(),
+        album_ref: q.album_ref.clone(),
+    }
 }
 
 fn candidate_pb(r: &Ranked) -> pb::FetchCandidate {
@@ -240,7 +260,7 @@ impl Fetch {
         }
     }
 
-    fn service(&self) -> Result<&FetchService, ErrorCode> {
+    pub(crate) fn service(&self) -> Result<&FetchService, ErrorCode> {
         self.service.as_ref().ok_or(ErrorCode::Unavailable)
     }
 
@@ -382,6 +402,9 @@ impl Fetch {
             });
             return self.job_reply(&r.job_id);
         }
+        if !r.album_ref.trim().is_empty() {
+            return self.start_album(sub, address, r.album_ref.trim()).await;
+        }
         let query_text = r.query.trim().to_string();
         let mut job = Job::new(new_id(), address, pb::FetchState::Queued);
         if let Some(track) = r.track.filter(|_| query_text.is_empty()) {
@@ -400,6 +423,37 @@ impl Fetch {
         let (this, id) = (self.clone(), job.id.clone());
         self.spawn(&job.id, async move { this.run(&sub, &id).await });
         self.job_reply(&job.id)
+    }
+
+    /// «Скачать альбом»: по задаче на каждый трек альбома каталога, которого ещё нет в библиотеке. Трек уже качается —
+    /// пропускается; лимит кончился посреди альбома — поставленные остаются, ответ — что успело (ничего — LIMIT).
+    async fn start_album(self: &Arc<Self>, sub: Arc<Subsonic>, address: &str, album_ref: &str) -> Reply {
+        let tracks = self.album_references(&sub, &nd_user(address), album_ref).await?;
+        let mut started: Vec<pb::FetchJob> = Vec::new();
+        for track in tracks.iter().filter(|t| t.library_track_id.is_empty()) {
+            let mut job = Job::new(new_id(), address, pb::FetchState::Queued);
+            job.query = query_of(track);
+            job.year = track.year;
+            if job.query.artist.is_empty() || job.query.title.is_empty() {
+                continue;
+            }
+            let q = job.query.clone();
+            match self.admit(address, job.clone(), |j| j.query.artist == q.artist && j.query.title == q.title).await {
+                Ok(()) => {}
+                Err(ErrorCode::Duplicate) => continue,
+                Err(ErrorCode::Limit) => break,
+                Err(e) => return Err(e),
+            }
+            let (this, id, sub) = (self.clone(), job.id.clone(), sub.clone());
+            self.spawn(&job.id, async move { this.run(&sub, &id).await });
+            if let Some(job) = self.job_pb(&job.id) {
+                started.push(job);
+            }
+        }
+        if started.is_empty() && tracks.iter().any(|t| t.library_track_id.is_empty()) {
+            return Err(ErrorCode::Limit);
+        }
+        Ok(pb::FetchStartResponse { job: started.first().cloned(), jobs: started }.encode_to_vec())
     }
 
     /// Место в очереди сервера: ждём своей очереди; `None` — задачу сняли.

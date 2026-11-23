@@ -32,6 +32,11 @@ pub(crate) struct Stats {
 static STATS: Mutex<Option<(Instant, Arc<Stats>)>> = Mutex::new(None);
 static PLAYS: OnceLock<SqlitePool> = OnceLock::new();
 
+/// База прослушиваний (та же, что у учёта добавленного): микс, «не нравится», история поиска.
+pub(crate) fn plays_pool() -> Option<&'static SqlitePool> {
+    PLAYS.get()
+}
+
 fn stats_ttl() -> Duration {
     let secs = std::env::var("PARVANE_MUSIC_STATS_TTL_SECS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(STATS_TTL_DEFAULT_SECS);
     Duration::from_secs(secs)
