@@ -23,6 +23,8 @@ type OwnProps = {
   canDropOnWindow?: boolean;
   // Строкой-карточкой (пустая библиотека) либо кнопкой
   isCompact?: boolean;
+  // «+ → Загрузить файл»: меняется — сразу открыть выбор файлов
+  openToken?: number;
 };
 
 const DROP_TARGET_ID = 'ParvaneMusic';
@@ -37,7 +39,7 @@ const OUTCOME_KEYS = {
 
 // Parvane (spec 041, доски `RpMusicB`, `ZdMusicX`): «Загрузить свои файлы — или перетащите их в это окно — Выбрать».
 // Файлы уходят по одному; ход и итог — в «Загрузках на сервер», здесь — короткое уведомление об отказах
-const MusicUploadFiles = ({ canDropOnWindow, isCompact }: OwnProps) => {
+const MusicUploadFiles = ({ canDropOnWindow, isCompact, openToken }: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
   const info = useDerivedState(getMusicInfo);
@@ -59,6 +61,10 @@ const MusicUploadFiles = ({ canDropOnWindow, isCompact }: OwnProps) => {
   });
 
   const handlePick = useLastCallback(() => inputRef.current?.click());
+
+  useEffect(() => {
+    if (openToken) inputRef.current?.click();
+  }, [openToken]);
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.currentTarget.files || []);
     e.currentTarget.value = '';

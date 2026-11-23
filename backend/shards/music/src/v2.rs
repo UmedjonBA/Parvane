@@ -115,6 +115,7 @@ async fn info_reply(ctx: &Ctx, address: &str, user: &str) -> Reply {
     }
     if let Some(fetch) = &ctx.fetch {
         info.admin = fetch.admins.iter().any(|a| a == address);
+        info.fetch_parallel = u32::try_from(fetch.parallel).unwrap_or(u32::MAX);
         let (today, used) = fetch.usage(address).await;
         info.fetch_enabled = fetch.service.is_some();
         info.upload_enabled = true;

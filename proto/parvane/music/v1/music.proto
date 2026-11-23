@@ -222,6 +222,8 @@ message InfoResponse {
   uint32 library_albums = 22;
   uint32 starred_count = 23;
   bool admin = 24;
+  // Сколько задач скачивания сервер ведёт разом («Одновременно 3 загрузки»).
+  uint32 fetch_parallel = 25;
 }
 
 message LibrarySearchRequest {

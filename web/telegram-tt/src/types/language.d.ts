@@ -1433,6 +1433,28 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicAddedToFavorites': undefined;
+  'MusicOwnFileShort': undefined;
+  'MusicExistingStarred': undefined;
+  'MusicExistingOnServer': undefined;
+  'MusicToFavoritesShort': undefined;
+  'MusicExistingWhat': undefined;
+  'MusicToFavoritesQuoted': undefined;
+  'MusicAddVersion': undefined;
+  'MusicLinkPlaceholder': undefined;
+  'MusicAddShort': undefined;
+  'MusicLimitReached': undefined;
+  'MusicLimitTracks': undefined;
+  'MusicLimitSpace': undefined;
+  'MusicLimitFile': undefined;
+  'MusicLimitParallel': undefined;
+  'MusicLimitsByAdmin': undefined;
+  'MusicAlsoAddTo': undefined;
+  'MusicNowhere': undefined;
+  'MusicExistingSheetTitle': undefined;
+  'MusicJustToFavorites': undefined;
+  'MusicAddSecondVersion': undefined;
+  'MusicVersionsNote': undefined;
   'MusicFileRights': undefined;
   'MusicEditTags': undefined;
   'MusicFileOrigin': undefined;
@@ -5022,6 +5044,39 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicSortBy': {
     'name': V;
   };
+  'MusicWaitingAhead': {
+    'count': V;
+  };
+  'MusicAgoMinutes': {
+    'count': V;
+  };
+  'MusicExistingTitle': {
+    'name': V;
+  };
+  'MusicTodayOf': {
+    'done': V;
+    'limit': V;
+  };
+  'MusicOwnFilesOf': {
+    'used': V;
+    'quota': V;
+  };
+  'MusicLimitReachedText': {
+    'done': V;
+    'limit': V;
+  };
+  'MusicUploadsNow': {
+    'count': V;
+  };
+  'MusicUploadsFailed': {
+    'count': V;
+  };
+  'MusicUploadsDone': {
+    'count': V;
+  };
+  'MusicUpTo': {
+    'size': V;
+  };
   'MusicFileOf': {
     'name': V;
   };
@@ -6732,6 +6787,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'limit': V;
   };
   'MusicTracksCount': {
+    'count': V;
+  };
+  'MusicParallelValue': {
     'count': V;
   };
   'MusicDeleteTitle': {

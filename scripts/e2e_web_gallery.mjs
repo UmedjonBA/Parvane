@@ -852,6 +852,18 @@ async function galleryMusic() {
   });
   await page.keyboard.press('Escape');
   await musicBack();
+  // «+ → Вставить ссылку» и «Загрузки на сервер» (доски `RpMusicB-01/02`)
+  await step(page, 'RpMusicB-02', async () => {
+    await page.locator('[data-add-for="music"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('.MenuItem').nth(1).click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-music-link]:visible').first().fill('https://soundcloud.com/lampa/utro');
+  });
+  await step(page, 'RpMusicB-01', async () => {
+    await page.locator('[data-music-link-add]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-fetch-job]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1500);
+  });
+  await musicBack();
   await step(page, 'MusicLibrary-10', async () => {
     await music.locator('[data-music-library-more]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('[data-action="trash"]').click({ timeout: STEP_TIMEOUT_MS });

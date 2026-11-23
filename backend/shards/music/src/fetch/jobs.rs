@@ -66,6 +66,8 @@ pub struct Fetch {
     pub upload_max_bytes: u64,
     /// Адреса администраторов: могут удалять чужие добавления.
     pub admins: Vec<String>,
+    /// Сколько задач скачивания идёт разом.
+    pub parallel: usize,
     slots: Arc<Semaphore>,
     /// Очередь сервера по порядку прихода: id задач, ждущих места.
     waiting: Mutex<Vec<String>>,
@@ -270,6 +272,7 @@ impl Fetch {
             quota_bytes,
             upload_max_bytes,
             admins,
+            parallel: parallel.max(1),
             slots: Arc::new(Semaphore::new(parallel.max(1))),
             waiting: Mutex::new(Vec::new()),
             jobs: Mutex::new(HashMap::new()),

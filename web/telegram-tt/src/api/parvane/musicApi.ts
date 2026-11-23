@@ -105,6 +105,8 @@ export type MusicInfo = {
   starredCount: number;
   // Может удалять чужие добавленные треки
   isAdmin: boolean;
+  // Сколько задач скачивания сервер ведёт разом
+  fetchParallel: number;
   // Сервер не ответил: модуль показывает «Нет ответа от сервера» с «Повторить», а не «не подключена»
   isFailed?: boolean;
 };
@@ -433,6 +435,7 @@ export function createMusicApi(deps: Deps) {
           libraryAlbums: count(reply, 'library_albums'),
           starredCount: count(reply, 'starred_count'),
           isAdmin: Boolean(field(reply, 'admin')),
+        fetchParallel: count(reply, 'fetch_parallel'),
         };
       } catch (err) {
         deps.log(`музыка: сведения не получены: ${String(err)}`);
@@ -455,6 +458,7 @@ export function createMusicApi(deps: Deps) {
           libraryAlbums: 0,
           starredCount: 0,
           isAdmin: false,
+          fetchParallel: 0,
         };
       }
     },

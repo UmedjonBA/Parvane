@@ -31,10 +31,19 @@ const [getMusicAddRequest, setMusicAddRequest] = createSignal<MusicAddRequest | 
 const [getNewPlaylist, setNewPlaylist] = createSignal<{ track?: MusicTrack } | undefined>(undefined);
 // Строка поиска по библиотеке: одна на «Главную» (компьютер) и вкладку «Поиск»
 const [getMusicQuery, setMusicQuery] = createSignal('');
+// «+ → Вставить ссылку / Загрузить файл»: что открыть на странице «Загрузки на сервер» (номер — каждый раз новый)
+type UploadsIntent = { kind: 'link' | 'file'; token: number };
+const [getUploadsIntent, setUploadsIntent] = createSignal<UploadsIntent | undefined>(undefined);
 
 export {
-  getMusicAddRequest, getMusicQuery, getMusicView, getNewPlaylist, setMusicQuery,
+  getMusicAddRequest, getMusicQuery, getMusicView, getNewPlaylist, getUploadsIntent, setMusicQuery,
 };
+
+/** Открыть «Загрузки на сервер» со шторкой «Вставить ссылку» либо выбором файлов. */
+export function openUploadsWith(kind: 'link' | 'file') {
+  setUploadsIntent({ kind, token: Date.now() });
+  openMusicView({ kind: 'uploads' });
+}
 
 let history: MusicView[] = [];
 

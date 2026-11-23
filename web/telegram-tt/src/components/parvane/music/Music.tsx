@@ -19,7 +19,7 @@ import { getIsMusicPlayerOpen } from './musicPlayerView';
 import { refreshPlaylists } from './musicPlaylists';
 import {
   consumeMusicAddRequest, getIsMusicPage, getMusicAddRequest, getMusicQuery, getMusicTab, getMusicView, goBackMusic,
-  openMusicView, openNewPlaylist, setMusicQuery,
+  openMusicView, openNewPlaylist, openUploadsWith, setMusicQuery,
 } from './musicView';
 
 import useAppLayout from '../../../hooks/useAppLayout';
@@ -119,7 +119,7 @@ const Music = () => {
     }
     // «Вставить ссылку» и «Загрузить файл» — на странице «Загрузки на сервер» (доски `RpMusicB`, `RdMusic`)
     if (addRequest === 'link' || addRequest === 'file') {
-      openMusicView({ kind: 'uploads' });
+      openUploadsWith(addRequest);
       return;
     }
     openMusicView({ kind: 'search' }, true);
