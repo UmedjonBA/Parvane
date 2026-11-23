@@ -113,3 +113,43 @@ export function buildShareNoteText(title: string, text: string, embeds: string[]
   if (embeds.length) parts.push(embeds.map((name) => `![[${name}]]`).join('\n'));
   return `${parts.join('\n\n')}\n`;
 }
+
+// «Поделиться в Parvane» ссылкой на музыку (макет «Музыки» 23 ноя, доска `MusicChat-04`). Spotify и Яндекс Музыка —
+// ищутся в каталоге по названию из подписи; YouTube, SoundCloud, Bandcamp — скачиваются по ссылке как есть
+export type SharedMusicLink = { kind: 'spotify' | 'yandex' | 'youtube' | 'soundcloud' | 'bandcamp'; url: string };
+
+const MUSIC_HOSTS: [RegExp, SharedMusicLink['kind']][] = [
+  [/^(open|play)\.spotify\.com$/, 'spotify'],
+  [/^music\.yandex\.(ru|com|by|kz)$/, 'yandex'],
+  [/^((www|m|music)\.)?youtube\.com$|^youtu\.be$/, 'youtube'],
+  [/^((www|m)\.)?soundcloud\.com$/, 'soundcloud'],
+  [/^([a-z0-9-]+\.)?bandcamp\.com$/, 'bandcamp'],
+];
+const URL_IN_TEXT = /https:\/\/[^\s]+/;
+// Хвосты подписей сервисов: «… on Spotify», «… — Яндекс Музыка»
+const SERVICE_TAILS = /\s*[—|-]?\s*(on spotify|spotify|яндекс[ .]музыка|yandex music|слушать.*)$/i;
+
+/** Ссылка на музыку в полученном; не музыка — `undefined`. */
+export function findSharedMusicLink(
+  shared: { title?: string; text?: string; url?: string },
+): SharedMusicLink | undefined {
+  const raw = shared.url || shared.text?.match(URL_IN_TEXT)?.[0] || '';
+  let host: string;
+  try {
+    host = new URL(raw).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  const kind = MUSIC_HOSTS.find(([pattern]) => pattern.test(host))?.[1];
+  return kind ? { kind, url: raw } : undefined;
+}
+
+/** Что искать в каталоге по подписи ссылки: название без адреса и хвоста сервиса. */
+export function buildSharedMusicQuery(shared: { title?: string; text?: string }) {
+  const text = [shared.title, shared.text].filter(Boolean).join(' ')
+    .replace(new RegExp(URL_IN_TEXT, 'g'), ' ')
+    .replace(SERVICE_TAILS, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text;
+}

@@ -898,6 +898,29 @@ try {
   await visible(playlistGroup.getByText(/^Playlist · 1 track · /));
   console.log('OK: загруженный плейлист — новый трек докачан, убранный стёрт с устройства, группа плейлиста');
 
+  // ── «Поделиться в Parvane» ссылкой Spotify (доска `MusicChat-04`): трек находится в каталоге ─────
+  // Форма — с пустой страницы (у приложения `form-action 'none'`), как POST от системы
+  const appOrigin = new URL(page.url()).origin;
+  await page.goto('about:blank');
+  await page.evaluate((action) => {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.enctype = 'multipart/form-data';
+    form.action = action;
+    const text = document.createElement('input');
+    text.name = 'text';
+    text.value = 'Ночной автобус https://open.spotify.com/track/abc';
+    form.append(text);
+    document.body.append(form);
+    form.submit();
+  }, `${appOrigin}/share/`);
+  const musicShare = page.locator('[data-music-share]');
+  await visible(musicShare.locator('[data-music-share-track]').getByText('Ночной автобус'), LOGIN_TIMEOUT_MS);
+  await visible(musicShare.getByRole('button', { name: /Add to the server/ }));
+  await page.keyboard.press('Escape');
+  await gone(musicShare);
+  console.log('OK: «Поделиться в Parvane» ссылкой Spotify — трек найден в каталоге');
+
   // ── Длинные списки страницами, исполнитель и его выпуски ─────────────────
   await fetch(`${LIBRARY_URL}?extra=60`);
   await page.waitForTimeout(1500);

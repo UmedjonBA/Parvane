@@ -1430,6 +1430,11 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicShareNotFound': undefined;
+  'MusicShareFoundInCatalog': undefined;
+  'MusicShareToFavorites': undefined;
+  'MusicShareToNote': undefined;
+  'MusicShareHint': undefined;
   'MusicInMusicSearch': undefined;
   'MusicGroupPlaylistOpen': undefined;
   'MusicListenFromWeb': undefined;
@@ -5158,6 +5163,12 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'MusicSortBy': {
     'name': V;
+  };
+  'MusicShareAsIs': {
+    'service': V;
+  };
+  'MusicShareLinkOf': {
+    'service': V;
   };
   'MusicAddAllSize': {
     'gb': V;

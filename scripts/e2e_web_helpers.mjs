@@ -367,6 +367,8 @@ export async function preparePage(context, user, password, options = {}) {
     }
   });
   await page.addInitScript(({ gatewayUrl: url, seed }) => {
+    // Пустая страница (форма «Поделиться» сценария) хранилища не имеет — настройки там не нужны
+    if (window.location.protocol === 'about:') return;
     if (url) localStorage.setItem('parvane:gateway', url);
     else localStorage.removeItem('parvane:gateway');
     // «План» открывается на экране, где пользователь был в последний раз (по умолчанию «Сегодня» — первый

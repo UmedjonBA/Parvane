@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildSharedMeta, buildSharedText, buildShareNoteText, buildShareNoteTitle, getShareDestinations, isSharedAudio,
+  buildSharedMeta, buildSharedMusicQuery, buildSharedText, buildShareNoteText, buildShareNoteTitle, findSharedMusicLink,
+  getShareDestinations, isSharedAudio,
   parseSharedMeta, readShareForm,
 } from './shareTarget';
 
@@ -59,5 +60,22 @@ describe('«Поделиться в Parvane»', () => {
     expect(buildShareNoteTitle({ fileNames: ['отчёт.pdf'] })).toBe('отчёт.pdf');
     expect(buildShareNoteText('Отчёт', 'текст', ['отчёт.pdf'])).toBe('# Отчёт\n\nтекст\n\n![[отчёт.pdf]]\n');
     expect(buildShareNoteText('Отчёт', '', [])).toBe('# Отчёт\n');
+  });
+});
+
+describe('«Поделиться в Parvane» ссылкой на музыку (доска `MusicChat-04`)', () => {
+  it('узнаёт сервис по адресу ссылки либо адресу в тексте', () => {
+    expect(findSharedMusicLink({ url: 'https://open.spotify.com/track/abc' })?.kind).toBe('spotify');
+    expect(findSharedMusicLink({ text: 'Послушай https://music.yandex.ru/album/1/track/2 ' })?.kind).toBe('yandex');
+    expect(findSharedMusicLink({ url: 'https://youtu.be/xyz' })?.kind).toBe('youtube');
+    expect(findSharedMusicLink({ url: 'https://lampa.bandcamp.com/track/utro' })?.kind).toBe('bandcamp');
+    expect(findSharedMusicLink({ url: 'https://example.com/music' })).toBeUndefined();
+    expect(findSharedMusicLink({ text: 'просто текст' })).toBeUndefined();
+  });
+
+  it('берёт для каталога название без адреса и хвоста сервиса', () => {
+    expect(buildSharedMusicQuery({ text: 'Static Bloom — Kora Mesh https://open.spotify.com/track/abc' }))
+      .toBe('Static Bloom — Kora Mesh');
+    expect(buildSharedMusicQuery({ title: 'Утро — Lampa — Яндекс Музыка' })).toBe('Утро — Lampa');
   });
 });

@@ -10,7 +10,7 @@ import buildClassName from '../../../util/buildClassName';
 import { validateFiles } from '../../../util/files';
 import { getIsModuleOn } from '../../../util/parvaneModules';
 import { openNote } from '../../../util/parvaneSection';
-import { buildSharedText, getShareDestinations } from '../../../util/shareTarget';
+import { buildSharedText, findSharedMusicLink, getShareDestinations } from '../../../util/shareTarget';
 import { formatFileSize } from '../../../util/textFormat';
 import { getMusicInfo } from '../music/musicPlayer';
 
@@ -23,6 +23,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Avatar from '../../common/Avatar';
 import PvIcon from '../notes/PvIcon';
 import PvSheet from '../notes/PvSheet';
+import MusicShareSheet from './MusicShareSheet';
 import ShareNotePicker from './ShareNotePicker';
 
 import kit from '../notes/PvKit.module.scss';
@@ -196,6 +197,12 @@ const ShareSheet = ({
   const sendLabel = selectedIds.length === 1
     ? lang('ShareSendTo', { name: getTitle(selectedIds[0]) })
     : lang('ShareSendToCount', { count: selectedIds.length }, { pluralValue: selectedIds.length });
+
+  // Ссылка на музыку (доска `MusicChat-04`) — свой лист: найти в каталоге, на сервер, слушать, в чат, в заметку
+  const musicLink = shared && !files.length && getIsModuleOn('music') ? findSharedMusicLink(shared) : undefined;
+  if (shared && musicLink) {
+    return <MusicShareSheet shared={shared} link={musicLink} currentUserId={currentUserId} onClose={handleClose} />;
+  }
 
   return (
     <PvSheet
