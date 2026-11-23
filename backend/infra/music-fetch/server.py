@@ -31,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import yt_dlp
 
+import catalog
 import sites
 
 LIBRARY_DIR = os.path.realpath(os.environ.get("MUSIC_FETCH_LIBRARY_DIR", "/music"))
@@ -39,11 +40,10 @@ PROXY = os.environ.get("MUSIC_FETCH_PROXY") or None
 COOKIES_FILE = os.environ.get("MUSIC_FETCH_COOKIES_FILE") or None
 # Перезапись тегов скачанного файла (ffmpeg без перекодирования)
 RETAG_TIMEOUT_SECS = 120
-DEEZER_API = "https://api.deezer.com"
-# Чип поиска: `artist:"…"`, `album:"…"`, `track:"…"`
-FIELD_QUERY = re.compile(r'^(artist|album|track):"([^"]*)"$')
-# Сколько результатов обычного поиска перебрать для отбора по полю (у Deezer не больше 100)
-FIELD_SEARCH_LIMIT = 100
+# Обложка вшивается в эти форматы (в Opus/WebM ffmpeg её не вшивает)
+COVER_EXTS = (".mp3", ".m4a")
+COVER_TIMEOUT_SECS = 15
+COVER_MAX_BYTES = 5 * 1024 * 1024
 MAX_LIMIT = 10
 # Запрос источнику: (префикс поиска yt-dlp, добавка к строке)
 SOURCES = {
@@ -97,45 +97,8 @@ def upload_day(info):
     return f"{day[:4]}-{day[4:6]}-{day[6:8]}" if len(day) == 8 else None
 
 
-def deezer(path, **params):
-    url = f"{DEEZER_API}{path}?{urllib.parse.urlencode(params)}"
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "parvane-music-fetch"}), timeout=15) as response:
-        return json.load(response).get("data", [])
-
-
-def catalog(query, limit):
-    """Эталоны треков. Запрос `artist:"…"`, `album:"…"`, `track:"…"` — чипы поиска «Музыки»: поиск Deezer по полю
-    выдаёт постороннее, а популярное исполнителя и треки альбома с сервера приходят урезанными (ограничение по стране),
-    поэтому обычный поиск пошире и только треки с текстом в нужном поле."""
-    match = FIELD_QUERY.match(query.strip())
-    if not match:
-        return {"tracks": to_tracks(deezer("/search", q=query, limit=limit), limit)}
-    field, text = match.group(1), match.group(2).strip()
-    needle = text.casefold()
-    found = [item for item in deezer("/search", q=text, limit=FIELD_SEARCH_LIMIT) if needle in field_value(item, field).casefold()]
-    return {"tracks": to_tracks(found, limit)}
-
-
-def field_value(item, field):
-    if field == "track":
-        return item.get("title", "")
-    return (item.get(field) or {}).get("name" if field == "artist" else "title", "")
-
-
-def to_tracks(items, limit):
-    tracks = []
-    for item in items[:limit]:
-        album = item.get("album") or {}
-        tracks.append({
-            "artist": (item.get("artist") or {}).get("name", ""),
-            "title": item.get("title", ""),
-            "album": album.get("title", ""),
-            "duration": int(item.get("duration") or 0),
-            # Deezer: explicit_content_lyrics 1 — с ненормативной лексикой, 0 и 3 — нет, остальное — неизвестно
-            "explicit": {1: True, 0: False, 3: False}.get(item.get("explicit_content_lyrics")),
-            "year": 0,
-        })
-    return tracks
+def catalog_references(query, limit):
+    return {"tracks": catalog.references(query, limit)}
 
 
 def candidates(source, artist, title, limit):
@@ -240,16 +203,30 @@ def probe_duration(path):
 
 
 def retag(path, tags):
-    """Теги файла — по эталону каталога (исполнитель, название, альбом), в UTF-8. Перезаливы несут свои: «5. Группа -
-    Песня (prod.)», нередко в cp1251, которую музыкальный сервер читает как latin-1. Звук не перекодируется; не вышло —
-    файл остаётся с прежними тегами."""
+    """Теги файла — по эталону каталога, в UTF-8. Перезаливы несут свои: «5. Группа - Песня (prod.)», нередко в cp1251,
+    которую музыкальный сервер читает как latin-1. Есть ссылка каталога (`ref`) — полные теги (исполнитель альбома,
+    номер, диск, год) и обложка (MP3, M4A; в Opus/WebM — только теги). Звук не перекодируется; не вышло — файл
+    остаётся с прежними тегами."""
+    full = dict(tags)
+    if str(tags.get("ref") or "").startswith("dz:"):
+        try:
+            full.update({k: v for k, v in catalog.track_tags(tags["ref"]).items() if v})
+        except (OSError, ValueError, catalog.CatalogError) as error:
+            print(f"retag: каталог: {type(error).__name__}: {error}", flush=True)
     ext = os.path.splitext(path)[1]
     tmp = f"{path}.tags{ext}"
-    command = ["ffmpeg", "-v", "error", "-y", "-i", path, "-map", "0:a", "-c", "copy", "-map_metadata", "-1"]
-    for key in ("artist", "title", "album"):
-        value = str(tags.get(key) or "").strip()
-        if value:
-            command += ["-metadata", f"{key}={value}"]
+    cover = fetch_cover(full.get("cover_url"), path) if ext.lower() in COVER_EXTS else None
+    command = ["ffmpeg", "-v", "error", "-y", "-i", path]
+    if cover:
+        command += ["-i", cover, "-map", "0:a", "-map", "1:v", "-c", "copy", "-disposition:v", "attached_pic"]
+    else:
+        command += ["-map", "0:a", "-c", "copy"]
+    command += ["-map_metadata", "-1"]
+    for key, field in (("artist", "artist"), ("title", "title"), ("album", "album"), ("album_artist", "album_artist"),
+                       ("track", "track"), ("disc", "disc"), ("year", "date")):
+        value = str(full.get(key) or "").strip()
+        if value and value != "0":
+            command += ["-metadata", f"{field}={value}"]
     if ext.lower() == ".mp3":
         command += ["-id3v2_version", "3"]
     command.append(tmp)
@@ -260,6 +237,27 @@ def retag(path, tags):
         print(f"retag: {type(error).__name__}: {error}", flush=True)
         if os.path.exists(tmp):
             os.remove(tmp)
+    finally:
+        if cover and os.path.exists(cover):
+            os.remove(cover)
+
+
+def fetch_cover(url, near):
+    """Обложка из каталога во временный файл рядом с треком; не вышло — `None`."""
+    if not url or not url.startswith("https://"):
+        return None
+    target = f"{near}.cover.jpg"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "parvane-music-fetch"}),
+                                    timeout=COVER_TIMEOUT_SECS) as response:
+            body = response.read(COVER_MAX_BYTES + 1)
+        if not body or len(body) > COVER_MAX_BYTES:
+            return None
+        with open(target, "wb") as out:
+            out.write(body)
+        return target
+    except OSError:
+        return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -291,7 +289,17 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/health":
             self.reply(200, {"ok": True})
         elif url.path == "/catalog":
-            self.handle_request(lambda: catalog(query["q"], limit))
+            self.handle_request(lambda: catalog_references(query["q"], limit))
+        elif url.path == "/catalog/search":
+            self.handle_request(lambda: catalog.search(query["q"], max(0, int(query.get("offset", "0") or 0))))
+        elif url.path == "/catalog/artist":
+            self.handle_request(lambda: catalog.artist_page(query["ref"]))
+        elif url.path == "/catalog/album":
+            self.handle_request(lambda: catalog.album_page(query["ref"]))
+        elif url.path == "/catalog/artists":
+            self.handle_request(lambda: {"artists": catalog.artists(query.get("q", ""))})
+        elif url.path == "/catalog/related":
+            self.handle_request(lambda: {"artists": catalog.related(query["ref"])})
         elif url.path == "/candidates":
             self.handle_request(lambda: candidates(query["source"], query["artist"], query["title"], limit))
         elif url.path == "/progress":

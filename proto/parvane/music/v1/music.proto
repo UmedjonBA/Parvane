@@ -105,6 +105,24 @@ service MusicService {
   rpc SearchForget(SearchForgetRequest) returns (SearchForgetResponse) {
     option (parvane.core.v2.method) = {name: "music.search.forget" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  rpc MixToday(MixTodayRequest) returns (MixTodayResponse) {
+    option (parvane.core.v2.method) = {name: "music.mix.today" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc MixSettingsSet(MixSettingsSetRequest) returns (MixSettingsSetResponse) {
+    option (parvane.core.v2.method) = {name: "music.mix.settings" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc MixRebuild(MixRebuildRequest) returns (MixRebuildResponse) {
+    option (parvane.core.v2.method) = {name: "music.mix.rebuild" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc MixArtists(MixArtistsRequest) returns (MixArtistsResponse) {
+    option (parvane.core.v2.method) = {name: "music.mix.artists" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc DislikeSet(DislikeSetRequest) returns (DislikeSetResponse) {
+    option (parvane.core.v2.method) = {name: "music.dislike.set" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc DislikeList(DislikeListRequest) returns (DislikeListResponse) {
+    option (parvane.core.v2.method) = {name: "music.dislike.list" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
 }
 
 message Track {
@@ -693,3 +711,104 @@ message SearchRememberResponse {}
 // Очистить историю целиком.
 message SearchForgetRequest {}
 message SearchForgetResponse {}
+
+// ── «Микс дня»: ежедневная подборка из библиотеки сервера и похожего из каталога ─────────────────────────────────
+// Собирает сервер (отбор — `parvane_protocol::music_mix`) раз в сутки после часа из настроек, по местному времени.
+
+message MixTrack {
+  // Трек библиотеки сервера либо трек каталога (ещё не на сервере) — одно из двух.
+  Track track = 1;
+  CatalogTrack catalog = 2;
+  // starred, frequent, forgotten, seed_artist, library — у библиотеки; catalog — у каталога.
+  string reason = 3 [(parvane.core.v2.max_len) = 16];
+  // Каталог: похожий на какого исполнителя.
+  string because_of = 4 [(parvane.core.v2.max_len) = 512];
+}
+
+message Mix {
+  // День микса по местному времени, ГГГГ-ММ-ДД.
+  string day = 1 [(parvane.core.v2.max_len) = 10];
+  int64 built_ms = 2;
+  // Когда соберётся следующий.
+  int64 next_ms = 3;
+  // normal, favorites, discover.
+  string mode = 4 [(parvane.core.v2.max_len) = 16];
+  repeated MixTrack tracks = 5 [(parvane.core.v2.max_items) = 50];
+}
+
+message MixSettings {
+  string mode = 1 [(parvane.core.v2.max_len) = 16];
+  // Час обновления по местному времени, 0–23.
+  uint32 hour = 2;
+  // Любимые исполнители (каталог), 1–20; пусто — ещё не выбраны.
+  repeated CatalogArtist artists = 3 [(parvane.core.v2.max_items) = 20];
+}
+
+message MixTodayRequest {
+  // Смещение местного времени от UTC, минуты (Москва — 180).
+  int32 tz_offset_min = 1;
+}
+message MixTodayResponse {
+  // Нет — ещё не собран (`building`) либо не выбраны исполнители (`needs_artists`).
+  Mix mix = 1;
+  bool building = 2;
+  MixSettings settings = 3;
+  bool needs_artists = 4;
+}
+
+message MixSettingsSetRequest {
+  // Пусто — не менять.
+  string mode = 1 [(parvane.core.v2.max_len) = 16];
+  bool set_hour = 2;
+  uint32 hour = 3;
+  bool set_artists = 4;
+  repeated string artist_refs = 5 [(parvane.core.v2.max_items) = 20, (parvane.core.v2.max_len) = 64];
+  int32 tz_offset_min = 6;
+}
+message MixSettingsSetResponse {
+  MixSettings settings = 1;
+}
+
+// «Другой микс»: собрать заново сейчас (сегодняшний заменяется).
+message MixRebuildRequest {
+  int32 tz_offset_min = 1;
+}
+message MixRebuildResponse {
+  bool building = 1;
+}
+
+// Исполнители для выбора: пусто — подсказки (самые частые в библиотеке и чарт каталога), иначе — поиск по каталогу.
+message MixArtistsRequest {
+  string query = 1 [(parvane.core.v2.max_len) = 256];
+}
+message MixArtistsResponse {
+  repeated CatalogArtist artists = 1 [(parvane.core.v2.max_items) = 40];
+}
+
+// ── «Не нравится»: трек (библиотеки либо каталога) или исполнитель — не предлагается в миксах и подборках ─────────
+
+message Dislike {
+  // track, artist.
+  string kind = 1 [(parvane.core.v2.max_len) = 8];
+  string track_id = 2 [(parvane.core.v2.max_len) = 64];
+  string ref = 3 [(parvane.core.v2.max_len) = 64];
+  string artist = 4 [(parvane.core.v2.max_len) = 512];
+  string title = 5 [(parvane.core.v2.max_len) = 512];
+  int64 created_ms = 6;
+}
+
+message DislikeSetRequest {
+  // Трек: `track_id` (библиотека) либо `ref` (каталог), с названием для списка; исполнитель: только `artist`.
+  string track_id = 1 [(parvane.core.v2.max_len) = 64];
+  string ref = 2 [(parvane.core.v2.max_len) = 64];
+  string artist = 3 [(parvane.core.v2.max_len) = 512];
+  string title = 4 [(parvane.core.v2.max_len) = 512];
+  // Снять отметку.
+  bool undo = 5;
+}
+message DislikeSetResponse {}
+
+message DislikeListRequest {}
+message DislikeListResponse {
+  repeated Dislike items = 1 [(parvane.core.v2.max_items) = 500];
+}
