@@ -314,7 +314,8 @@ try {
   await openByKeys();
   await input.fill('harbor');
   await found('music', 'Glass Harbor').click();
-  await visible(page.locator('[data-music-widget]'), 'трек из палитры играет');
+  // В «Музыке» что играет — плеер внизу модуля, в другом разделе — виджет панели
+  await visible(page.locator('[data-music-desk-player]').or(page.locator('[data-music-widget]')).first(), 'трек из палитры играет');
   console.log('OK: треки «Музыки» в выдаче, «Найти и скачать» открывает поиск с запросом, трек играет');
   await sidebar.getByRole('tab', { name: /^Chats/ }).click();
 
