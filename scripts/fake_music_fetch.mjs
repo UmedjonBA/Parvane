@@ -84,6 +84,27 @@ function refName(ref, names) {
   return names[Number(String(ref || '').replace(/^dz:/, '')) % 100] || '';
 }
 
+// «Слушать из сети»: 30 секунд тишины WAV (8 кГц, 8 бит) — звук «из источника»
+function silentWav(seconds) {
+  const rate = 8000;
+  const data = rate * seconds;
+  const head = Buffer.alloc(44);
+  head.write('RIFF', 0);
+  head.writeUInt32LE(36 + data, 4);
+  head.write('WAVEfmt ', 8);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20);
+  head.writeUInt16LE(1, 22);
+  head.writeUInt32LE(rate, 24);
+  head.writeUInt32LE(rate, 28);
+  head.writeUInt16LE(1, 32);
+  head.writeUInt16LE(8, 34);
+  head.write('data', 36);
+  head.writeUInt32LE(data, 40);
+  return Buffer.concat([head, Buffer.alloc(data, 0x80)]);
+}
+const NET_AUDIO = silentWav(30);
+
 function reply(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -155,6 +176,11 @@ http.createServer((req, res) => {
         ref: albumOut(title).ref, title, kind: 'album', tracks: CATALOG.filter((track) => track.album === title).length,
       })),
     });
+  }
+  if (url.pathname === '/stream') {
+    res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': NET_AUDIO.length });
+    res.end(NET_AUDIO);
+    return undefined;
   }
   // «Чарт каталога» (обзор поиска): все эталоны по порядку
   if (url.pathname === '/catalog/chart') {

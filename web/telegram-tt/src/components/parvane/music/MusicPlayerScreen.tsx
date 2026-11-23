@@ -300,9 +300,11 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
               <MusicControls isFullScreen />
               {player.hasError && <span className={styles.error} role="alert">{lang('MusicPlayError')}</span>}
               {/* Доска `MusicPlayer-05`: трек каталога — только отрывок */}
-              {playing.previewUrl && (
+              {(playing.previewUrl || playing.isNetwork) && (
                 <div className={styles.previewRow}>
-                  <span className={styles.previewNote} data-music-preview>{lang('MusicPreviewOnly')}</span>
+                  <span className={styles.previewNote} data-music-preview={playing.isNetwork ? 'network' : 'preview'}>
+                    {lang(playing.isNetwork ? 'MusicNetworkOnly' : 'MusicPreviewOnly')}
+                  </span>
                   {renderPreviewAction()}
                 </div>
               )}

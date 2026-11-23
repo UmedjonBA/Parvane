@@ -64,6 +64,8 @@ export type MusicTrack = {
   replayGainDb?: number;
   // Трек каталога, которого нет на сервере: играет отрывок 30 с («послушать до скачивания»)
   previewUrl?: string;
+  // Трек каталога, который играет потоком из источника («Слушать из сети»)
+  isNetwork?: boolean;
   coverUrl?: string;
 };
 
@@ -376,7 +378,7 @@ function toMixSettings(raw: Json): MusicMixSettings {
   };
 }
 
-function fromCatalogTrack(track: MusicCatalogTrack): Json {
+export function fromCatalogTrack(track: MusicCatalogTrack): Json {
   return {
     artist: track.artist,
     title: track.title,

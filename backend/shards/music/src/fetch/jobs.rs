@@ -32,7 +32,7 @@ type Reply = Result<Vec<u8>, ErrorCode>;
 const CATALOG_MAX: u32 = 10;
 /// Сколько эталонов каталога смотрим, выбирая эталон по строке запроса.
 const REFERENCE_CATALOG: u32 = 5;
-const CANDIDATES_PER_SOURCE: u32 = 5;
+pub(crate) const CANDIDATES_PER_SOURCE: u32 = 5;
 /// Дозаполнение тегов — пачками по столько записей.
 const BACKFILL_BATCH: u32 = 20;
 /// Сколько уверенных файлов одного источника пробовать, если скачать не вышло (у SoundCloud официальные загрузки

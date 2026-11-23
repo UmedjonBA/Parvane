@@ -226,9 +226,22 @@ function rememberPlayed(track: MusicTrack) {
 }
 
 async function streamUrlOf(trackId: string) {
+  const known = getMusicPlayer().tracksById[trackId];
+  // «Слушать из сети»: поток из источника через сервер; уверенного файла нет — отрывок каталога, если есть
+  if (known?.isNetwork) {
+    const cached = streamUrls.get(trackId);
+    if (cached && cached.expiresMs - URL_MARGIN_MS > Date.now()) return cached.url;
+    const catalog = previewCatalog.get(trackId);
+    const reply = catalog && await callMusic('parvaneMusicCatalogStream', { track: catalog }).catch(() => undefined);
+    if (reply?.url) {
+      streamUrls.set(trackId, { url: reply.url, expiresMs: reply.expiresMs });
+      return reply.url;
+    }
+    if (known.previewUrl) return known.previewUrl;
+    throw new Error('no network stream');
+  }
   // Отрывок каталога — ссылкой каталога, без сервера
-  const preview = getMusicPlayer().tracksById[trackId]?.previewUrl;
-  if (preview) return preview;
+  if (known?.previewUrl) return known.previewUrl;
   // Трек, сохранённый на устройстве, играет без сервера
   const offlineUrl = await loadOfflineUrl(trackId);
   if (offlineUrl) return offlineUrl;
@@ -319,6 +332,16 @@ export function catalogPreviewTrack(track: MusicCatalogTrack): MusicTrack {
     isStarred: false,
     previewUrl: track.previewUrl,
     coverUrl: track.coverUrl,
+  };
+}
+
+/** Трек каталога, который играет потоком из источника («Слушать из сети», доска `MusicPlayer-04`). */
+export function catalogNetworkTrack(track: MusicCatalogTrack): MusicTrack {
+  const preview = catalogPreviewTrack(track);
+  const id = `net:${preview.id}`;
+  previewCatalog.set(id, track);
+  return {
+    ...preview, id, isNetwork: true, durationSecs: track.durationSecs,
   };
 }
 

@@ -10,7 +10,7 @@ import buildClassName from '../../../util/buildClassName';
 import { startFetch } from '../../parvane/music/fetch/musicFetch';
 import { formatTrackTime } from '../../parvane/music/musicFormat';
 import {
-  callMusic, catalogPreviewTrack, getMusicInfo, loadMusicInfo, playTracks,
+  callMusic, catalogNetworkTrack, getMusicInfo, loadMusicInfo, playTracks,
 } from '../../parvane/music/musicPlayer';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -94,8 +94,9 @@ const MusicTrackCard = ({ track }: OwnProps) => {
     coverUrl: track.coverUrl,
     previewUrl: track.previewUrl,
   } : undefined), [track]);
+  // «Слушать из сети» (доска `MusicPlayer-04`): поток из источника, уверенного файла нет — отрывок каталога
   const handleListenCatalog = useLastCallback(() => {
-    if (catalogTrack?.previewUrl) playTracks([catalogPreviewTrack(catalogTrack)], 0, { source: { kind: 'chat' } });
+    if (catalogTrack) playTracks([catalogNetworkTrack(catalogTrack)], 0, { source: { kind: 'chat' } });
   });
   const handleAddCatalog = useLastCallback(async () => {
     if (!catalogTrack) return;
@@ -105,7 +106,8 @@ const MusicTrackCard = ({ track }: OwnProps) => {
     showNotification({ message: lang(key) });
   });
   const isCatalog = Boolean(catalogTrack);
-  const canListenCatalog = Boolean(isCatalog && catalogTrack?.previewUrl && info?.isEnabled && isMusicOn);
+  const canListenCatalog = Boolean(isCatalog && (info?.isFetchEnabled || catalogTrack?.previewUrl)
+    && info?.isEnabled && isMusicOn);
   const canAddCatalog = Boolean(isCatalog && info?.isFetchEnabled && isMusicOn);
   const isPlayable = isCatalog ? canListenCatalog : canPlay || gate.canEnable;
 

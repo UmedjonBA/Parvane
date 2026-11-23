@@ -67,9 +67,18 @@ async fn serve(ctx: &Ctx, req: Request<Incoming>) -> Response<Body> {
     if req.method() != Method::GET && req.method() != Method::HEAD {
         return plain(StatusCode::METHOD_NOT_ALLOWED);
     }
-    let Some(sub) = ctx.sub.as_deref() else { return plain(StatusCode::SERVICE_UNAVAILABLE) };
     let path = req.uri().path();
     let range = req.headers().get(hyper::header::RANGE).and_then(|v| v.to_str().ok()).filter(|r| r.len() <= 128);
+    // «Слушать из сети»: звук файла источника через сервис скачивания
+    if let Some(tok) = path.strip_prefix("/_parvane/music/n/") {
+        let Some(token::Claims { grant: Grant::Net { item }, .. }) = token::verify(&ctx.key, tok, now_ms()) else { return plain(StatusCode::FORBIDDEN) };
+        let Some((source, id)) = item.split_once(crate::fetch::stream::NET_SEPARATOR) else { return plain(StatusCode::FORBIDDEN) };
+        let Some(service) = ctx.fetch.as_ref().and_then(|f| f.service.as_ref()) else { return plain(StatusCode::SERVICE_UNAVAILABLE) };
+        let Ok(permit) = STREAMS.try_acquire() else { return plain(StatusCode::SERVICE_UNAVAILABLE) };
+        let Ok(up) = service.stream(source, id, range).await else { return plain(StatusCode::BAD_GATEWAY) };
+        return relay(up, req.method() == Method::HEAD, "private, max-age=600", permit);
+    }
+    let Some(sub) = ctx.sub.as_deref() else { return plain(StatusCode::SERVICE_UNAVAILABLE) };
     let (endpoint, user, params, cache): (&str, String, Vec<(&str, String)>, &str) = if let Some(tok) = path.strip_prefix("/_parvane/music/s/") {
         match token::verify(&ctx.key, tok, now_ms()) {
             Some(token::Claims { user, grant: Grant::Stream { track, opus }, .. }) => {
@@ -108,6 +117,11 @@ async fn serve(ctx: &Ctx, req: Request<Incoming>) -> Response<Body> {
         Ok(r) => r,
         Err(_) => return plain(StatusCode::BAD_GATEWAY),
     };
+    relay(up, req.method() == Method::HEAD, cache, permit)
+}
+
+/// Ответ источника (музыкальный сервер, сервис скачивания) — клиенту кусками; только звук, картинка, видео.
+fn relay(up: reqwest::Response, is_head: bool, cache: &str, permit: tokio::sync::SemaphorePermit<'static>) -> Response<Body> {
     let status = up.status();
     // Отказ музыкального сервера приходит JSON/XML с кодом 200 — это не звук и не картинка
     let ctype = up.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
@@ -125,7 +139,7 @@ async fn serve(ctx: &Ctx, req: Request<Incoming>) -> Response<Body> {
             b = b.header(name, v);
         }
     }
-    if req.method() == Method::HEAD {
+    if is_head {
         return b.body(Full::new(Bytes::new()).map_err(|never| match never {}).boxed()).unwrap_or_else(|_| plain(StatusCode::INTERNAL_SERVER_ERROR));
     }
     // Разрешение живёт, пока идёт тело: поток освобождает место по завершении или обрыве

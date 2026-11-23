@@ -154,3 +154,17 @@ async fn artist_fetch_plans_by_kinds_and_defers_over_limit() {
     assert!(status.jobs.iter().any(|j| j.track.as_ref().is_some_and(|t| t.title == "Новая") && j.star), "{status:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// «Слушать из сети» (доска `MusicPlayer-04`): уверенный файл источника — подписанная ссылка на поток; нет такого —
+/// NOT_FOUND; поток идёт через шард и без лимита.
+#[tokio::test]
+async fn catalog_track_streams_from_the_best_source_file() {
+    let (fake, ctx, dir) = setup_fetch(0, u64::MAX).await;
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("yt-1", "Группа - Песня t1", 215)]);
+    let track = pb::CatalogTrack { artist: "Группа".into(), title: "Песня t1".into(), duration_secs: 215, ..Default::default() };
+    let r: pb::CatalogStreamResponse = call(&ctx, "alice@local", "music.catalog.stream", pb::CatalogStreamRequest { track: Some(track) }).await.unwrap();
+    assert!(r.url.contains("/_parvane/music/n/") && r.source == "youtube", "{r:?}");
+    let other = pb::CatalogTrack { artist: "Никто".into(), title: "Нет такой".into(), duration_secs: 100, ..Default::default() };
+    assert_eq!(call::<pb::CatalogStreamResponse>(&ctx, "alice@local", "music.catalog.stream", pb::CatalogStreamRequest { track: Some(other) }).await.unwrap_err(), ErrorCode::NotFound);
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -432,6 +432,8 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
         // «Вставить ссылку»: за ссылкой — «Песня t2» группы (такой трек уже есть в библиотеке)
         "/resolve" => reply(200, json!({"source": "soundcloud", "id": "https://soundcloud.com/gruppa/t2", "artist": "Группа", "title": "Песня t2", "album": "", "duration": 215})),
         "/catalog/artists" => reply(200, json!({"artists": [{"ref": "dz:1", "name": "Группа", "picture": "", "albums": 1}]})),
+        // «Слушать из сети»: звук как есть
+        "/stream" => Response::builder().header("content-type", "audio/mpeg").body(Full::new(Bytes::from_static(b"ID3-fake-audio"))).unwrap(),
         "/candidates" => {
             let source = q.get("source").cloned().unwrap_or_default();
             fake.asked_sources.lock().unwrap().push(source.clone());

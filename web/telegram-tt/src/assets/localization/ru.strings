@@ -1712,6 +1712,7 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicNetworkOnly" = "Трека нет на сервере · поток из сети";
 "MusicShareAsIs" = "{service} · скачать как есть";
 "MusicShareNotFound" = "В каталоге не нашлось — можно сохранить ссылку в заметку";
 "MusicShareFoundInCatalog" = "нашли в каталоге";

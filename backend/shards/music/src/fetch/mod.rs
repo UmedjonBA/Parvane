@@ -2,6 +2,7 @@
 
 pub mod artist;
 pub mod catalog;
+pub mod stream;
 pub mod jobs;
 pub mod matching;
 pub mod service;

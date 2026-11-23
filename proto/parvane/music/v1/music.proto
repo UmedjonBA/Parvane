@@ -106,6 +106,10 @@ service MusicService {
   rpc CatalogChart(CatalogChartRequest) returns (CatalogChartResponse) {
     option (parvane.core.v2.method) = {name: "music.catalog.chart" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  // «Слушать из сети» (доска `MusicPlayer-04`): трек каталога, которого нет на сервере, — потоком из источника.
+  rpc CatalogStream(CatalogStreamRequest) returns (CatalogStreamResponse) {
+    option (parvane.core.v2.method) = {name: "music.catalog.stream" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
   rpc CatalogArtist(CatalogArtistRequest) returns (CatalogArtistResponse) {
     option (parvane.core.v2.method) = {name: "music.catalog.artist" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
@@ -836,6 +840,17 @@ message CatalogSearchResponse {
 message CatalogChartRequest {}
 message CatalogChartResponse {
   repeated CatalogTrack tracks = 1 [(parvane.core.v2.max_items) = 50];
+}
+
+message CatalogStreamRequest {
+  CatalogTrack track = 1;
+}
+// Уверенного файла нет ни в одном источнике — NOT_FOUND.
+message CatalogStreamResponse {
+  string url = 1 [(parvane.core.v2.max_len) = 2048];
+  int64 expires_ms = 2;
+  // Откуда звук: hitmoz, youtube, soundcloud …
+  string source = 3 [(parvane.core.v2.max_len) = 32];
 }
 
 message CatalogArtistRequest {

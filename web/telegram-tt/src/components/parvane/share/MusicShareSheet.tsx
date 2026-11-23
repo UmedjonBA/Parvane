@@ -7,7 +7,7 @@ import type { SharedMusicLink, SharedPayload } from '../../../util/shareTarget';
 import { openNote } from '../../../util/parvaneSection';
 import { buildSharedMusicQuery, buildSharedText } from '../../../util/shareTarget';
 import { putJob, startFetch } from '../music/fetch/musicFetch';
-import { callMusic, catalogPreviewTrack, playTracks } from '../music/musicPlayer';
+import { callMusic, catalogNetworkTrack, playTracks } from '../music/musicPlayer';
 import { goToMusicView } from '../music/musicView';
 import useMusicData from '../music/useMusicData';
 
@@ -66,9 +66,9 @@ const MusicShareSheet = ({
     showNotification({ message: lang(key) });
   });
   const handleListen = useLastCallback(() => {
-    if (!track?.previewUrl) return;
+    if (!track) return;
     onClose();
-    playTracks([catalogPreviewTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
+    playTracks([catalogNetworkTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
     goToMusicView({ kind: 'search' });
   });
   const handleSend = useLastCallback(() => setIsSending(true));
@@ -145,7 +145,7 @@ const MusicShareSheet = ({
           {renderCard()}
           <div className={styles.actions}>
             {renderAction('cloudAdd', lang('MusicAddToServer'), handleAdd, lang('MusicShareToFavorites'), !canAdd)}
-            {!isDirect && renderAction('play', lang('MusicListenFromWeb'), handleListen, undefined, !track?.previewUrl)}
+            {!isDirect && renderAction('play', lang('MusicListenFromWeb'), handleListen, undefined, !track)}
             {!isDirect && renderAction('send', lang('MusicSendToChat'), handleSend, undefined, !track)}
             {renderAction('note', lang('MusicShareToNote'), handleNote)}
           </div>

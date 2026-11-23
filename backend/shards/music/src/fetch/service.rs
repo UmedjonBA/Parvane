@@ -166,6 +166,15 @@ impl FetchService {
         self.json(rq, SEARCH_TIMEOUT).await
     }
 
+    /// «Слушать из сети»: звук файла источника как есть (`Range` — перемотка), без сохранения.
+    pub async fn stream(&self, source: &str, id: &str, range: Option<&str>) -> Result<reqwest::Response, ServiceError> {
+        let mut rq = self.http.get(format!("{}/stream", self.base)).query(&[("source", source), ("id", id)]);
+        if let Some(r) = range {
+            rq = rq.header(reqwest::header::RANGE, r);
+        }
+        rq.send().await.map_err(|_| ServiceError::Unavailable)
+    }
+
     /// Файлы источника, похожие на трек.
     pub async fn candidates(&self, source: &str, q: &Query, limit: u32) -> Result<Vec<Candidate>, ServiceError> {
         let rq = self.http.get(format!("{}/candidates", self.base)).query(&[("source", source.to_string()), ("artist", q.artist.clone()), ("title", q.title.clone()), ("limit", limit.to_string())]);

@@ -9,6 +9,7 @@
   GET  /health
   GET  /catalog?q=&limit=              эталоны треков из каталога (Deezer)
   GET  /catalog/chart                  «Чарт каталога»: популярные треки
+  GET  /stream?source=&id=             «Слушать из сети»: звук файла источника без сохранения (с Range)
   GET  /catalog/artist_plan?ref=       выпуски исполнителя по типам с числом треков («Добавить на сервер всё»)
   GET  /candidates?source=&artist=&title=&limit=
                                        файлы источника: youtube, youtube_reupload, soundcloud; источник отказал — 503
@@ -387,7 +388,62 @@ def fetch_cover(url, near):
         return None
 
 
+# «Слушать из сети» (макет «Музыки» 23 ноя, доска `MusicPlayer-04`): звук источника без сохранения на сервер.
+# Прямая ссылка на звук (YouTube, SoundCloud, Bandcamp — через yt-dlp) живёт часы и привязана к адресу сервиса —
+# поэтому звук идёт через сервис, с перемоткой (`Range`). Найденные ссылки помнятся полчаса
+STREAM_URL_TTL_SECS = 30 * 60
+STREAM_CHUNK = 64 * 1024
+stream_urls = {}
+stream_lock = threading.Lock()
+
+
+def stream_source(source, item_id):
+    """(ссылка на звук, заголовки запроса к ней) для файла источника."""
+    key = (source, item_id)
+    with stream_lock:
+        known = stream_urls.get(key)
+        if known and known[2] > time.time():
+            return known[0], known[1]
+    if source in SITE_SOURCES:
+        if not sites.allowed_url(source, item_id):
+            raise ValueError("ссылка не на файл источника")
+        url, headers = item_id, {"User-Agent": sites.USER_AGENT, "Referer": f"https://{urllib.parse.urlparse(item_id).hostname}/"}
+    else:
+        def resolve():
+            with yt_dlp.YoutubeDL(ydl_options({"format": "bestaudio/best"})) as ydl:
+                return ydl.extract_info(item_id, download=False)
+        info = guarded(source, resolve)
+        url, headers = info["url"], dict(info.get("http_headers") or {})
+    with stream_lock:
+        stream_urls[key] = (url, headers, time.time() + STREAM_URL_TTL_SECS)
+    return url, headers
+
+
 class Handler(BaseHTTPRequestHandler):
+    def stream(self, source, item_id):
+        """Звук источника кусками, с `Range` — как отдал источник."""
+        url, headers = stream_source(source, item_id)
+        request_headers = dict(headers)
+        if self.headers.get("Range"):
+            request_headers["Range"] = self.headers["Range"]
+        opener = urllib.request.build_opener(*(
+            [urllib.request.ProxyHandler({"http": PROXY, "https": PROXY})] if PROXY and source not in SITE_SOURCES else []
+        ))
+        with opener.open(urllib.request.Request(url, headers=request_headers), timeout=30) as response:
+            kind = response.headers.get("Content-Type", "")
+            if not (kind.startswith("audio/") or kind.startswith("video/") or kind == "application/octet-stream"):
+                raise OSError(f"источник отдал не звук: {kind}")
+            self.send_response(response.status)
+            for name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
+                if response.headers.get(name):
+                    self.send_header(name, response.headers[name])
+            self.end_headers()
+            while True:
+                block = response.read(STREAM_CHUNK)
+                if not block:
+                    break
+                self.wfile.write(block)
+
     def reply(self, status, body):
         data = json.dumps(body, ensure_ascii=False).encode()
         self.send_response(status)
@@ -415,6 +471,18 @@ class Handler(BaseHTTPRequestHandler):
         limit = max(1, min(MAX_LIMIT, int(query.get("limit", "5") or 5)))
         if url.path == "/health":
             self.reply(200, {"ok": True})
+        elif url.path == "/stream":
+            try:
+                self.stream(query["source"], query["id"])
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except SourceRefused:
+                self.reply(503, {"error": "source refused"})
+            except (KeyError, ValueError):
+                self.reply(400, {"error": "bad request"})
+            except Exception as error:  # noqa: BLE001 — сбой источника отдаётся шарду кодом
+                print(f"fetch: поток: {type(error).__name__}: {error}", flush=True)
+                self.reply(502, {"error": "source failed"})
         elif url.path == "/catalog":
             self.handle_request(lambda: catalog_references(query["q"], limit))
         elif url.path == "/catalog/search":

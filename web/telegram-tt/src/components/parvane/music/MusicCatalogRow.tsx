@@ -13,7 +13,9 @@ import {
   addFetchFollowUp, cancelFetchJob, catalogKey, getFetchJobs, getJobPercent, isJobActive, moveFetchFirst,
   retryFetchJob, startFetch,
 } from './fetch/musicFetch';
-import { callMusic, catalogPreviewTrack, playTracks } from './musicPlayer';
+import {
+  callMusic, catalogNetworkTrack, catalogPreviewTrack, getMusicInfo, playTracks,
+} from './musicPlayer';
 import { rememberMusicQuery } from './musicSearchHistory';
 import { openCatalogSend, openMusicView, setMusicQuery } from './musicView';
 
@@ -49,6 +51,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
   const jobs = useDerivedState(getFetchJobs);
+  const info = useDerivedState(getMusicInfo);
   const [menu, setMenu] = useState<{ anchor?: CloudMenuAnchor }>();
   const key = catalogKey(track);
   const job = jobs.find((item) => catalogKey(item.track) === key && item.state !== 'done');
@@ -101,7 +104,9 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     setMenu(undefined);
     if (action === 'add') void handleAdd();
     else if (action === 'preview') handlePreview();
-    else if (action === 'star') void handleFollowUp({ isStar: true });
+    else if (action === 'network') {
+      playTracks([catalogNetworkTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
+    } else if (action === 'star') void handleFollowUp({ isStar: true });
     else if (action === 'queue') void handleFollowUp({ isQueue: true });
     else if (action === 'playlist') setIsPicking(true);
     else if (action === 'chat') openCatalogSend(track);
@@ -139,6 +144,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     { key: 'cancel', title: lang('MusicFetchCancelShort'), glyph: icon('close'), isDanger: true },
   ] : [
     { key: 'add', title: lang('MusicAddToServer'), glyph: icon('cloudAdd') },
+    ...(info?.isFetchEnabled ? [{ key: 'network', title: lang('MusicListenFromWeb'), glyph: icon('play') }] : []),
     ...(track.previewUrl ? [{ key: 'preview', title: lang('MusicListenPreview'), glyph: icon('play') }] : []),
     { key: 'chat', title: lang('MusicSendToChat'), glyph: icon('send') },
     { key: 'artist', title: lang('MusicGoToArtist'), glyph: icon('mic') },

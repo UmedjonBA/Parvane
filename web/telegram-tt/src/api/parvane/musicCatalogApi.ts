@@ -1,7 +1,7 @@
 import type { MusicCatalogArtist, MusicCatalogTrack } from './musicApi';
 
 import {
-  count, field, list, text, toCatalogArtist, toCatalogTrack,
+  count, field, fromCatalogTrack, list, text, toCatalogArtist, toCatalogTrack,
 } from './musicApi';
 
 // Parvane («Музыка», макет 23 ноя): каталог всей музыки (Deezer — только поиск, теги, обложки, превью) — методы
@@ -66,6 +66,12 @@ export function createMusicCatalogApi(deps: Deps) {
         nextOffset: count(reply, 'next_offset'),
         total: count(reply, 'total'),
       };
+    },
+
+    /** «Слушать из сети»: ссылка на поток трека каталога из источника; уверенного файла нет — `ERROR_CODE_NOT_FOUND`. */
+    async parvaneMusicCatalogStream({ track }: { track: MusicCatalogTrack }) {
+      const reply = await deps.call('music.catalog.stream', { track: fromCatalogTrack(track) });
+      return { url: text(reply, 'url'), expiresMs: count(reply, 'expires_ms'), source: text(reply, 'source') };
     },
 
     /** «Чарт каталога» (обзор поиска): популярное в каталоге с пометкой «уже на сервере». */

@@ -767,7 +767,11 @@ try {
   const catalogCard = page.locator(`[data-music-track-card="${CATALOG_SLOW}"][data-music-catalog-card]`);
   await visible(catalogCard.getByText('Медленный берег'));
   await visible(catalogCard.locator('[data-music-card-add]'));
-  console.log('OK: трек каталога отправлен в чат карточкой «каталог» с «Добавить на сервер»');
+  // «Слушать из сети» с карточки (доска `MusicPlayer-04`): трека нет на сервере — поток из источника
+  await catalogCard.getByRole('button', { name: 'Listen from the web' }).click();
+  await waitPlaying(page, 'Медленный берег', 'playing');
+  await pause(page);
+  console.log('OK: трек каталога отправлен в чат карточкой «каталог» с «Добавить на сервер» и «Слушать из сети» (поток)');
 
   // ── Плейлист в чат: карточка, «Открыть», «Сохранить к себе», «Слушать» ────
   const backInMusic = await openMusic(page);

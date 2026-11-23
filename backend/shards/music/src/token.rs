@@ -21,6 +21,8 @@ pub enum Grant {
     Covers,
     /// Приём одного своего файла (spec 041): задача `music.upload.start`.
     Upload { job: String },
+    /// «Слушать из сети»: файл источника без сохранения — «источник\u{1f}id» (`music.catalog.stream`).
+    Net { item: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +46,7 @@ pub fn sign(key: &[u8; 32], c: &Claims) -> Option<String> {
         Grant::Stream { track, opus } => (1u8, u8::from(*opus), track.as_bytes()),
         Grant::Covers => (2u8, 0u8, &[][..]),
         Grant::Upload { job } => (3u8, 0u8, job.as_bytes()),
+        Grant::Net { item } => (4u8, 0u8, item.as_bytes()),
     };
     let mut body = Vec::with_capacity(12 + user.len() + track.len() + MAC_LEN);
     body.extend_from_slice(&[VERSION, kind, flag]);
@@ -80,6 +83,7 @@ pub fn verify(key: &[u8; 32], token: &str, now_ms: i64) -> Option<Claims> {
         (1, flag) if !track.is_empty() => Grant::Stream { track, opus: *flag == 1 },
         (2, _) if track.is_empty() => Grant::Covers,
         (3, _) if !track.is_empty() => Grant::Upload { job: track },
+        (4, _) if !track.is_empty() => Grant::Net { item: track },
         _ => return None,
     };
     Some(Claims { user, exp_ms, grant })
@@ -108,6 +112,8 @@ mod tests {
         assert_eq!(verify(&key, &covers, 1_000).unwrap().grant, Grant::Covers);
         let up = sign(&key, &Claims { user: "bob".into(), exp_ms: 9_000, grant: Grant::Upload { job: "0a1b".into() } }).unwrap();
         assert_eq!(verify(&key, &up, 1_000).unwrap().grant, Grant::Upload { job: "0a1b".into() });
+        let net = sign(&key, &Claims { user: "bob".into(), exp_ms: 9_000, grant: Grant::Net { item: "youtube\u{1f}https://youtu.be/x".into() } }).unwrap();
+        assert_eq!(verify(&key, &net, 1_000).unwrap().grant, Grant::Net { item: "youtube\u{1f}https://youtu.be/x".into() });
         assert_eq!(verify(&key, "", 0), None);
         assert_eq!(verify(&key, "не base64", 0), None);
     }
