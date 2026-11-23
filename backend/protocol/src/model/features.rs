@@ -9,7 +9,7 @@ pub const KNOWN: &[&str] = &["article", "cloud", "cloud_invite", "planner", "sea
 pub const WIRE_ROWS: &str = "wire_rows";
 
 /// Служебные строки ленты: в страницы и последнее сообщение чата не входят, их видят только `rowsAll` хоста.
-pub const WIRE_SERVICE_KINDS: &[&str] = &["poll_close", "poll_vote"];
+pub const WIRE_SERVICE_KINDS: &[&str] = &["mod_report_close", "poll_close", "poll_vote"];
 
 /// Допустимое имя возможности.
 pub fn is_valid(name: &str) -> bool {

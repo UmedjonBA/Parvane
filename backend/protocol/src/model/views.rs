@@ -504,6 +504,16 @@ pub fn content_to_wire(c: &Content) -> Option<Value> {
             o.insert("reported".into(), Value::Array(reported));
             o
         }
+        K::ModReportClose(r) => {
+            let mut o = Map::new();
+            o.insert("kind".into(), json!("mod_report_close"));
+            if let Some(g) = r.group.as_ref().filter(|g| !g.id.is_empty()) {
+                o.insert("report_group".into(), json!({"domain": g.domain, "id": b64(&g.id)}));
+            }
+            let ops: Vec<Value> = r.op_ids.iter().filter(|op| op.len() == 16).map(|op| json!(uuid_of(op))).collect();
+            o.insert("op_ids".into(), Value::Array(ops));
+            o
+        }
         K::TaskResponse(t) => {
             let mut o = Map::new();
             o.insert("kind".into(), json!("task_response"));
@@ -787,6 +797,15 @@ pub fn wire_to_content_json(c: &Map<String, Value>, reply_to: Option<&str>) -> R
                 r.insert("messages".into(), Value::Array(messages));
             }
             ("mod_report", Value::Object(r))
+        }
+        "mod_report_close" => {
+            let mut r = Map::new();
+            set(&mut r, "group", c.get("report_group"));
+            if let Some(Value::Array(list)) = c.get("op_ids") {
+                let ops: Vec<Value> = list.iter().filter_map(Value::as_str).map(|op| json!(b64(&id_of_uuid(op)))).collect();
+                r.insert("op_ids".into(), Value::Array(ops));
+            }
+            ("mod_report_close", Value::Object(r))
         }
         "music_track" => {
             let mut t = Map::new();

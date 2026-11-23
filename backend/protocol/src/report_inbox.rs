@@ -6,6 +6,9 @@
 //! «Скрыть у меня сообщения этого участника» (окно жалобы, `XdChat`; REPORT-3) — объект-признак
 //! `OBJECT_KIND_MEMBER_HIDDEN` личного состояния (ключ — [`hidden_member_key`]): видят только свои устройства,
 //! приёмный фильтр модели (`contentHidden`) не показывает сообщения этого участника в этой группе.
+//! Закрытие общее для админов (REPORT-4): закрывший рассылает остальным модераторам группы служебное личное
+//! сообщение `mod_report_close`; получатель принимает его только от модератора ([`remote_close_json`]) и пишет
+//! те же объекты `REPORT_CLOSED` у себя. Журнал группы для этого не годится — его читают все участники.
 //! Общий образец — `conformance/reports/cases.json`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -214,16 +217,41 @@ pub fn inbox_json(args: &Value) -> Value {
     json!({"items": rows, "open": open, "closed": closed_seen.len()})
 }
 
+/// Закрытие жалоб, присланное другим админом (`mod_report_close`, REPORT-4): `{from, members, opIds}` →
+/// `{accepted: [uuid]}`. Принимается только от модератора группы — тех же, кому уходят жалобы
+/// ([`report_admins`]: владелец и админы с правом удалять сообщения или банить) по журналу группы (`members`);
+/// иначе любой участник закрыл бы у админов жалобы на себя. Годные `op_id` — 32 hex, без повторов, не больше 100.
+pub fn remote_close_json(args: &Value) -> Value {
+    let from = s(args, "from");
+    let moderators = report_admins("", list(args, "members"));
+    if from.is_empty() || !moderators.iter().any(|m| m == from) {
+        return json!({"accepted": []});
+    }
+    let mut seen = BTreeSet::new();
+    let accepted: Vec<String> = list(args, "opIds")
+        .iter()
+        .filter_map(Value::as_str)
+        .map(op_norm)
+        .filter(|op| op.len() == 32 && op.bytes().all(|b| b.is_ascii_hexdigit()) && seen.insert(op.clone()))
+        .take(REMOTE_CLOSE_MAX)
+        .collect();
+    json!({"accepted": accepted})
+}
+
+/// Сообщений в одном закрытии от другого админа — не больше (как `ModReportClose.op_ids`).
+const REMOTE_CLOSE_MAX: usize = 100;
+
 fn op_norm(op: &str) -> String {
     op.replace('-', "").to_ascii_lowercase()
 }
 
 /// Вызов из обвязок: `reportForm`, `reportInbox`, `reportClosedKey` (`{group, uuid}` → ключ либо `null`),
-/// `reportHiddenKey` (`{group, user}` → ключ либо `null`).
+/// `reportHiddenKey` (`{group, user}` → ключ либо `null`), `reportRemoteClose` (закрытие от другого админа).
 pub fn call(name: &str, args: &Value) -> Option<Value> {
     Some(match name {
         "reportForm" => form_json(args),
         "reportInbox" => inbox_json(args),
+        "reportRemoteClose" => remote_close_json(args),
         "reportClosedKey" => closed_key(s(args, "group"), s(args, "uuid")).map_or(Value::Null, Value::from),
         "reportHiddenKey" => hidden_member_key(s(args, "group"), s(args, "user")).map_or(Value::Null, Value::from),
         _ => return None,
@@ -231,11 +259,29 @@ pub fn call(name: &str, args: &Value) -> Option<Value> {
 }
 
 /// Имена вызовов модуля.
-pub const NAMES: [&str; 4] = ["reportForm", "reportInbox", "reportClosedKey", "reportHiddenKey"];
+pub const NAMES: [&str; 5] = ["reportForm", "reportInbox", "reportClosedKey", "reportHiddenKey", "reportRemoteClose"];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_close_is_accepted_only_from_moderators() {
+        let members = json!([
+            {"address": "own@x", "role": "owner"},
+            {"address": "mod@x", "role": "admin", "admin_rights": {"delete_messages": true}},
+            {"address": "pin@x", "role": "admin", "admin_rights": {"pin_messages": true}},
+            {"address": "joe@x", "role": "member"},
+        ]);
+        let op = "0123456789abcdef0123456789ABCDEF";
+        let ask = |from: &str| remote_close_json(&json!({"from": from, "members": members, "opIds": [op, op, "bad", ""]}));
+        assert_eq!(ask("mod@x")["accepted"], json!(["0123456789abcdef0123456789abcdef"]));
+        assert_eq!(ask("own@x")["accepted"], json!(["0123456789abcdef0123456789abcdef"]));
+        // Админ без права модерации, участник и чужой — не могут закрыть жалобы у других админов
+        for from in ["pin@x", "joe@x", "eve@x", ""] {
+            assert_eq!(ask(from)["accepted"], json!([]), "{from}");
+        }
+    }
 
     #[test]
     fn admins_are_owner_and_moderating_admins_without_self() {

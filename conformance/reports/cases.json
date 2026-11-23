@@ -445,7 +445,85 @@
       "call": "reportHiddenKey",
       "expect": null,
       "name": "ключ скрытого участника: не группа"
+    },
+    {
+      "name": "закрытие жалоб от админа-модератора принимается (REPORT-4)",
+      "call": "reportRemoteClose",
+      "args": {
+        "from": "mod@demo.test",
+        "members": [
+          {
+            "address": "owner@demo.test",
+            "role": "owner"
+          },
+          {
+            "address": "mod@demo.test",
+            "admin_rights": {
+              "delete_messages": true
+            },
+            "role": "admin"
+          },
+          {
+            "address": "pin@demo.test",
+            "admin_rights": {
+              "pin_messages": true
+            },
+            "role": "admin"
+          },
+          {
+            "address": "guest@demo.test",
+            "role": "member"
+          }
+        ],
+        "opIds": [
+          "0123456789ABCDEF0123456789ABCDEF",
+          "0123456789abcdef0123456789abcdef",
+          "плохой"
+        ]
+      },
+      "expect": {
+        "accepted": [
+          "0123456789abcdef0123456789abcdef"
+        ]
+      }
+    },
+    {
+      "name": "закрытие жалоб от участника без права модерации отклоняется (REPORT-4)",
+      "call": "reportRemoteClose",
+      "args": {
+        "from": "pin@demo.test",
+        "members": [
+          {
+            "address": "owner@demo.test",
+            "role": "owner"
+          },
+          {
+            "address": "mod@demo.test",
+            "admin_rights": {
+              "delete_messages": true
+            },
+            "role": "admin"
+          },
+          {
+            "address": "pin@demo.test",
+            "admin_rights": {
+              "pin_messages": true
+            },
+            "role": "admin"
+          },
+          {
+            "address": "guest@demo.test",
+            "role": "member"
+          }
+        ],
+        "opIds": [
+          "0123456789abcdef0123456789abcdef"
+        ]
+      },
+      "expect": {
+        "accepted": []
+      }
     }
   ],
-  "rule": "REPORT-2"
+  "rule": "REPORT-2 REPORT-4: закрытие жалоб общее для админов — служебное личное сообщение `mod_report_close` остальным модераторам; принимается только от модератора группы."
 }

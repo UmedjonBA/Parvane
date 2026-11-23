@@ -228,6 +228,12 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
                 "text": "Жалоба на сообщение в группе: спам"}}),
             msg(json!({"kind": "mod_report", "reason": "spam", "text": "Жалоба на сообщение в группе: спам"})),
         ),
+        // Жалобы закрыты (REPORT-4): служебное личное сообщение другим админам, в ленте не показывается.
+        (
+            "mod-report-close",
+            json!({"mod_report_close": {"group": {"domain": "local", "id": OP}, "op_ids": [OP]}}),
+            msg(json!({"kind": "mod_report_close"})),
+        ),
         (
             "poll-options",
             json!({"poll": {"question": "Когда?", "options": [{"text": "утро"}, {"text": "вечер"}], "close_ms": "1767225600000",

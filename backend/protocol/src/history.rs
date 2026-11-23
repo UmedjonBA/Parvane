@@ -92,6 +92,7 @@ pub const MAX_CHAIN_MARKS: usize = 1024;
 /// `MUTATION_KINDS`/`SERVICE_KINDS`).
 pub const NON_COUNTED_KINDS: &[&str] = &[
     "chat_mode",
+    "mod_report_close",
     "poll_vote",
     "poll_close",
     "call",

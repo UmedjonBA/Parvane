@@ -62,6 +62,10 @@ message Content {
     // Плейлист «Музыки» (spec 041 C4, PLAYLIST-1): название и треки общей библиотеки сервера. Клиент без «Музыки»
     // показывает поле `text`.
     MusicPlaylistShare music_playlist = 28;
+    // Жалобы на сообщения группы закрыты (REPORT-4): админ, закрывший жалобы, сообщает остальным админам группы
+    // личным сообщением. Служебное, в ленте не показывается; получатель принимает его только от админа группы с
+    // правом удалять сообщения или банить (как адресатов жалоб) и закрывает жалобы у себя (`REPORT_CLOSED`).
+    ModReportClose mod_report_close = 29;
   }
   // D-09: v1 не бывает содержимым v2-конверта (запись LegacyV1Record удалена, T096).
   reserved 99;
@@ -450,6 +454,12 @@ message ModReport {
   string reason = 3 [(parvane.core.v2.max_len) = 32];
   string comment = 4 [(parvane.core.v2.max_len) = 1024];
   string text = 5 [(parvane.core.v2.max_len) = 600];
+}
+
+message ModReportClose {
+  parvane.core.v2.Ref group = 1;
+  // Сообщения группы, жалобы на которые закрыты (op_id, 16 байт).
+  repeated bytes op_ids = 2 [(parvane.core.v2.max_items) = 100, (parvane.core.v2.max_len) = 16];
 }
 
 message ReportedMessage {

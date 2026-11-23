@@ -1333,6 +1333,33 @@
       "client": {
         "class": "message",
         "v1": {
+          "kind": "mod_report_close"
+        }
+      },
+      "expect": {
+        "content": {
+          "mod_report_close": {
+            "group": {
+              "domain": "local",
+              "id": "AQIDBAUGBwgJCgsMDQ4PEA=="
+            },
+            "op_ids": [
+              "AQIDBAUGBwgJCgsMDQ4PEA=="
+            ]
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "ea012d0a190a056c6f63616c12100102030405060708090a0b0c0d0e0f1012100102030405060708090a0b0c0d0e0f10"
+      },
+      "name": "mod-report-close"
+    },
+    {
+      "client": {
+        "class": "message",
+        "v1": {
           "kind": "poll",
           "question": "Когда?"
         }
