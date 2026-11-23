@@ -33,6 +33,7 @@ import yt_dlp
 
 import catalog
 import sites
+import sponsorblock
 
 LIBRARY_DIR = os.path.realpath(os.environ.get("MUSIC_FETCH_LIBRARY_DIR", "/music"))
 COOLDOWN_SECS = int(os.environ.get("MUSIC_FETCH_COOLDOWN_SECS", "900"))
@@ -53,6 +54,8 @@ SOURCES = {
     "youtube_reupload": ("ytsearch", " без цензуры"),
     "soundcloud": ("scsearch", ""),
 }
+# Файлы этих источников — клипы YouTube: немузыкальные куски вырезаются по SponsorBlock
+YOUTUBE_SOURCES = ("youtube", "youtube_reupload")
 # Источники со своим сайтом (sites.py): MP3 прямой ссылкой, без yt-dlp
 SITE_SOURCES = ("hitmoz", "hitmos_fm")
 # Слова отказа источника («подтвердите, что вы не бот», лимит запросов): после них источник отдыхает
@@ -184,6 +187,9 @@ def download(source, item_id, dest, tags=None):
         with PROGRESS_LOCK:
             PROGRESS.pop(dest, None)
             CANCELLED.discard(dest)
+    # Клип с YouTube: немузыкальные куски, отмеченные зрителями (SponsorBlock), — вырезаются
+    if source in YOUTUBE_SOURCES and sponsorblock.strip(path, str(info.get("id") or ""), probe_duration(path)):
+        info = {**info, "duration": probe_duration(path)}
     if tags:
         path = retag(path, tags)
     return {
