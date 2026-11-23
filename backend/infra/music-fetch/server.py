@@ -40,8 +40,9 @@ PROXY = os.environ.get("MUSIC_FETCH_PROXY") or None
 COOKIES_FILE = os.environ.get("MUSIC_FETCH_COOKIES_FILE") or None
 # Перезапись тегов скачанного файла (ffmpeg без перекодирования)
 RETAG_TIMEOUT_SECS = 120
-# Обложка вшивается в эти форматы (в Opus/WebM ffmpeg её не вшивает)
+# Обложку вшивает ffmpeg; в Opus/Vorbis (и WebM с ними) — `mutagen` после перекладки в Ogg
 COVER_EXTS = (".mp3", ".m4a")
+OGG_EXTS = (".webm", ".opus", ".ogg")
 COVER_TIMEOUT_SECS = 15
 COVER_MAX_BYTES = 5 * 1024 * 1024
 MAX_LIMIT = 10
@@ -184,7 +185,7 @@ def download(source, item_id, dest, tags=None):
             PROGRESS.pop(dest, None)
             CANCELLED.discard(dest)
     if tags:
-        retag(path, tags)
+        path = retag(path, tags)
     return {
         "path": os.path.relpath(path, LIBRARY_DIR),
         "bytes": os.path.getsize(path),
@@ -203,43 +204,101 @@ def probe_duration(path):
 
 
 def retag(path, tags):
-    """Теги файла — по эталону каталога, в UTF-8. Перезаливы несут свои: «5. Группа - Песня (prod.)», нередко в cp1251,
-    которую музыкальный сервер читает как latin-1. Есть ссылка каталога (`ref`) — полные теги (исполнитель альбома,
-    номер, диск, год) и обложка (MP3, M4A; в Opus/WebM — только теги). Звук не перекодируется; не вышло — файл
-    остаётся с прежними тегами."""
+    """Теги файла — по эталону каталога, в UTF-8; возвращает путь файла (Opus из WebM переезжает в `.opus`).
+    Перезаливы несут свои теги («5. Группа - Песня (prod.)», нередко в cp1251, которую музыкальный сервер читает как
+    latin-1). Есть ссылка каталога (`ref`) — полные теги (исполнитель альбома, номер, диск, год) и обложка: в MP3 и
+    M4A — ffmpeg, в Opus/Vorbis — перекладка в Ogg без перекодирования и `mutagen` (ffmpeg обложку в Ogg не пишет).
+    Звук не перекодируется; не вышло — файл остаётся как был."""
     full = dict(tags)
     if str(tags.get("ref") or "").startswith("dz:"):
         try:
             full.update({k: v for k, v in catalog.track_tags(tags["ref"]).items() if v})
         except (OSError, ValueError, catalog.CatalogError) as error:
             print(f"retag: каталог: {type(error).__name__}: {error}", flush=True)
+    ext = os.path.splitext(path)[1].lower()
+    cover = fetch_cover(full.get("cover_url"), path)
+    try:
+        if ext in OGG_EXTS:
+            return retag_ogg(path, full, cover)
+        retag_ffmpeg(path, full, cover if ext in COVER_EXTS else None)
+        return path
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        print(f"retag: {type(error).__name__}: {error}", flush=True)
+        return path
+    finally:
+        if cover and os.path.exists(cover):
+            os.remove(cover)
+
+
+TAG_FIELDS = (("artist", "artist", "ARTIST"), ("title", "title", "TITLE"), ("album", "album", "ALBUM"),
+              ("album_artist", "album_artist", "ALBUMARTIST"), ("track", "track", "TRACKNUMBER"),
+              ("disc", "disc", "DISCNUMBER"), ("year", "date", "DATE"))
+
+
+def tag_values(full):
+    for key, ffmpeg_name, vorbis_name in TAG_FIELDS:
+        value = str(full.get(key) or "").strip()
+        if value and value != "0":
+            yield ffmpeg_name, vorbis_name, value
+
+
+def retag_ffmpeg(path, full, cover):
     ext = os.path.splitext(path)[1]
     tmp = f"{path}.tags{ext}"
-    cover = fetch_cover(full.get("cover_url"), path) if ext.lower() in COVER_EXTS else None
     command = ["ffmpeg", "-v", "error", "-y", "-i", path]
     if cover:
         command += ["-i", cover, "-map", "0:a", "-map", "1:v", "-c", "copy", "-disposition:v", "attached_pic"]
     else:
         command += ["-map", "0:a", "-c", "copy"]
     command += ["-map_metadata", "-1"]
-    for key, field in (("artist", "artist"), ("title", "title"), ("album", "album"), ("album_artist", "album_artist"),
-                       ("track", "track"), ("disc", "disc"), ("year", "date")):
-        value = str(full.get(key) or "").strip()
-        if value and value != "0":
-            command += ["-metadata", f"{field}={value}"]
+    for name, _, value in tag_values(full):
+        command += ["-metadata", f"{name}={value}"]
     if ext.lower() == ".mp3":
         command += ["-id3v2_version", "3"]
     command.append(tmp)
     try:
         subprocess.run(command, check=True, timeout=RETAG_TIMEOUT_SECS, capture_output=True)
         os.replace(tmp, path)
-    except (OSError, subprocess.SubprocessError) as error:
-        print(f"retag: {type(error).__name__}: {error}", flush=True)
+    finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+def retag_ogg(path, full, cover):
+    """Opus/Vorbis (в том числе WebM с YouTube) → Ogg без перекодирования, теги и обложка — `mutagen`."""
+    import base64
+    from mutagen.flac import Picture
+    from mutagen.oggopus import OggOpus
+    from mutagen.oggvorbis import OggVorbis
+
+    codec = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name",
+                            "-of", "csv=p=0", path], check=True, timeout=30, capture_output=True, text=True).stdout.strip()
+    if codec not in ("opus", "vorbis"):
+        raise ValueError(f"звук {codec!r} в Ogg не переложить")
+    target = os.path.splitext(path)[0] + (".opus" if codec == "opus" else ".ogg")
+    tmp = f"{target}.tags"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path, "-map", "0:a", "-c", "copy", "-map_metadata", "-1",
+                    "-f", "ogg", tmp], check=True, timeout=RETAG_TIMEOUT_SECS, capture_output=True)
+    try:
+        audio = (OggOpus if codec == "opus" else OggVorbis)(tmp)
+        audio.delete()
+        for _, name, value in tag_values(full):
+            audio[name] = [value]
+        if cover:
+            picture = Picture()
+            picture.type = 3
+            picture.mime = "image/jpeg"
+            with open(cover, "rb") as image:
+                picture.data = image.read()
+            audio["METADATA_BLOCK_PICTURE"] = [base64.b64encode(picture.write()).decode("ascii")]
+        audio.save()
+        os.replace(tmp, target)
     finally:
-        if cover and os.path.exists(cover):
-            os.remove(cover)
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    if target != path and os.path.exists(path):
+        os.remove(path)
+    return target
 
 
 def fetch_cover(url, near):
