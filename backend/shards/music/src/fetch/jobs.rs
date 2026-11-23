@@ -787,6 +787,8 @@ impl Fetch {
             if let Err(e) = tokio::fs::remove_file(&path).await {
                 warn!("музыка: файл не удалён: {e}");
             }
+            // Текст песни рядом с файлом (`<имя>.lrc`) — вместе с ним
+            let _ = tokio::fs::remove_file(path.with_extension("lrc")).await;
         }
     }
 

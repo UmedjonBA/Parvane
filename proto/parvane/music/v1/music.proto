@@ -123,6 +123,9 @@ service MusicService {
   rpc DislikeList(DislikeListRequest) returns (DislikeListResponse) {
     option (parvane.core.v2.method) = {name: "music.dislike.list" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  rpc Lyrics(LyricsRequest) returns (LyricsResponse) {
+    option (parvane.core.v2.method) = {name: "music.lyrics" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
 }
 
 message Track {
@@ -812,4 +815,20 @@ message DislikeSetResponse {}
 message DislikeListRequest {}
 message DislikeListResponse {
   repeated Dislike items = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+// ── Тексты песен (LRCLIB → файл рядом с треком → музыкальный сервер) ───────────────────────────────────────────
+
+message LyricsRequest {
+  string track_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message LyricsLine {
+  // Начало строки от начала трека, мс; у простого (несинхронного) текста — 0.
+  uint32 start_ms = 1;
+  string text = 2 [(parvane.core.v2.max_len) = 1024];
+}
+// Текста нет — пусто.
+message LyricsResponse {
+  bool synced = 1;
+  repeated LyricsLine lines = 2 [(parvane.core.v2.max_items) = 1000];
 }

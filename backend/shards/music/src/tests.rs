@@ -88,6 +88,11 @@ async fn fake_serve(fake: Arc<Fake>, req: Request<Incoming>) -> Response<Full<By
         "/rest/getAlbumList2" => ok(json!({"albumList2": {"album": [{"id": "al-1", "name": "Альбом", "artist": "Группа", "artistId": "ar-1", "songCount": 3}]}})),
         "/rest/getAlbum" if id == "al-1" => ok(json!({"album": {"id": "al-1", "name": "Альбом", "artist": "Группа", "songCount": 3, "song": known.iter().map(|t| song(t, is_starred(t))).collect::<Vec<_>>()}})),
         "/rest/getArtist" if id == "ar-1" => ok(json!({"artist": {"id": "ar-1", "name": "Группа", "albumCount": 1, "album": [{"id": "al-1", "name": "Альбом"}]}})),
+        // Текст есть только у t1: синхронный и простой — отдаём оба, синхронный — первым
+        "/rest/getLyricsBySongId" if id == "t1" => ok(json!({"lyricsList": {"structuredLyrics": [
+            {"synced": false, "line": [{"value": "Просто текст"}]},
+            {"synced": true, "line": [{"start": 1500, "value": "Первая"}, {"start": 4200, "value": "Вторая"}]}]}})),
+        "/rest/getLyricsBySongId" => ok(json!({"lyricsList": {}})),
         "/rest/getSong" if known.contains(&id.as_str()) => ok(json!({"song": song(&id, is_starred(&id))})),
         "/rest/star" => {
             fake.starred.lock().unwrap().insert((user, id));
@@ -507,6 +512,17 @@ async fn fetch_takes_confident_match_and_tracks_who_added_it() {
     assert_eq!(files("alice@local"), 0);
     assert_eq!(del("alice@local").await.unwrap_err(), ErrorCode::NotFound);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn lyrics_prefer_synced_and_are_empty_when_missing() {
+    let (_, ctx, _) = setup().await;
+    let r: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "t1".into() }).await.unwrap();
+    assert!(r.synced);
+    assert_eq!(r.lines.iter().map(|l| (l.start_ms, l.text.as_str())).collect::<Vec<_>>(), [(1500, "Первая"), (4200, "Вторая")]);
+    let none: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "t2".into() }).await.unwrap();
+    assert!(!none.synced && none.lines.is_empty());
+    assert!(call::<pb::LyricsResponse>(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "../x".into() }).await.is_err());
 }
 
 #[tokio::test]

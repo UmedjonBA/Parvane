@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import yt_dlp
 
 import catalog
+import lyrics
 import sites
 import sponsorblock
 
@@ -192,6 +193,7 @@ def download(source, item_id, dest, tags=None):
         info = {**info, "duration": probe_duration(path)}
     if tags:
         path = retag(path, tags)
+        add_lyrics(path, tags)
     return {
         "path": os.path.relpath(path, LIBRARY_DIR),
         "bytes": os.path.getsize(path),
@@ -324,7 +326,17 @@ def retag_existing(relative, tags):
             return {"path": relative, "matched": False}
         full["ref"] = match["ref"]
     new_path = retag(path, full)
+    add_lyrics(new_path, full)
     return {"path": os.path.relpath(new_path, LIBRARY_DIR), "matched": True}
+
+
+def add_lyrics(path, tags):
+    """Текст песни рядом с файлом (LRCLIB); не нашёлся или сбой — без текста."""
+    try:
+        lyrics.write_sidecar(path, str(tags.get("artist") or ""), str(tags.get("title") or ""),
+                             str(tags.get("album") or ""), probe_duration(path))
+    except OSError as error:
+        print(f"lyrics: {type(error).__name__}: {error}", flush=True)
 
 
 def fetch_cover(url, near):

@@ -78,6 +78,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
         "music.stream.url" => stream_url(ctx, sub, &user, body(&req)?).await,
         "music.star.set" => star_set(sub, &user, body(&req)?).await,
         "music.star.list" => star_list(sub, &user, body(&req)?).await,
+        "music.lyrics" => lyrics(sub, &user, body(&req)?).await,
         _ => Err(ErrorCode::Unavailable),
     }
 }
@@ -244,4 +245,33 @@ async fn star_list(sub: &Subsonic, user: &str, r: pb::StarListRequest) -> Reply 
     let (off, n) = (r.offset as usize, page(r.limit) as usize);
     let more = all.len() > off.saturating_add(n);
     Ok(pb::StarListResponse { tracks: all.into_iter().skip(off).take(n).collect(), more }.encode_to_vec())
+}
+
+/// Текст песни: OpenSubsonic `getLyricsBySongId` (музыкальный сервер берёт его из файла `.lrc` рядом с треком либо из
+/// тегов). Синхронный — первым; текста нет — пусто.
+async fn lyrics(sub: &Subsonic, user: &str, r: pb::LyricsRequest) -> Reply {
+    if !valid_id(&r.track_id, 64) {
+        return Err(ErrorCode::Invalid);
+    }
+    let Ok(v) = sub.call(user, "getLyricsBySongId", &[("id", r.track_id.clone())]).await else {
+        return Ok(pb::LyricsResponse::default().encode_to_vec());
+    };
+    let mut all: Vec<&serde_json::Value> = list(&v, &["lyricsList", "structuredLyrics"]).iter().collect();
+    all.sort_by_key(|l| !l.get("synced").and_then(serde_json::Value::as_bool).unwrap_or(false));
+    let Some(best) = all.first() else {
+        return Ok(pb::LyricsResponse::default().encode_to_vec());
+    };
+    let synced = best.get("synced").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let lines = best
+        .get("line")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(1000)
+        .map(|l| pb::LyricsLine {
+            start_ms: if synced { l.get("start").and_then(serde_json::Value::as_u64).and_then(|s| u32::try_from(s).ok()).unwrap_or(0) } else { 0 },
+            text: l.get("value").and_then(serde_json::Value::as_str).unwrap_or("").chars().take(1024).collect(),
+        })
+        .collect();
+    Ok(pb::LyricsResponse { synced, lines }.encode_to_vec())
 }
