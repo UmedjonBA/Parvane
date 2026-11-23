@@ -48,17 +48,18 @@ const CANDIDATES = {
   },
 };
 
-// Ссылки каталога: исполнитель — `dz:a<номер>`, альбом — `dz:b<номер>` по месту имени в списке, трек — `dz:<100+место>`
+// Ссылки каталога (как у Deezer — числами): исполнитель — `dz:<200+место>`, альбом — `dz:<300+место>` по месту имени в
+// списке, трек — `dz:<100+место>`
 function artistOut(name) {
   const names = [...new Set(CATALOG.map((track) => track.artist))];
-  return { ref: `dz:a${names.indexOf(name)}`, name, picture: '', albums: 1 };
+  return { ref: `dz:${200 + names.indexOf(name)}`, name, picture: '', albums: 1 };
 }
 
 function albumOut(title) {
   const titles = [...new Set(CATALOG.map((track) => track.album))];
   const first = CATALOG.find((track) => track.album === title);
   return {
-    ref: `dz:b${titles.indexOf(title)}`,
+    ref: `dz:${300 + titles.indexOf(title)}`,
     title,
     artist: first?.artist || '',
     artist_ref: first ? artistOut(first.artist).ref : '',
@@ -80,7 +81,7 @@ function trackOut(track) {
 }
 
 function refName(ref, names) {
-  return names[Number(String(ref || '').replace(/^dz:[ab]/, ''))] || '';
+  return names[Number(String(ref || '').replace(/^dz:/, '')) % 100] || '';
 }
 
 function reply(res, status, body) {
@@ -143,6 +144,17 @@ http.createServer((req, res) => {
     const title = refName(url.searchParams.get('ref'), [...new Set(CATALOG.map((track) => track.album))]);
     const tracks = CATALOG.filter((track) => track.album === title);
     return reply(res, 200, { album: albumOut(title), tracks: tracks.map(trackOut) });
+  }
+  // «Добавить на сервер всё»: выпуски исполнителя — его альбомы из CATALOG
+  if (url.pathname === '/catalog/artist_plan') {
+    const name = refName(url.searchParams.get('ref'), [...new Set(CATALOG.map((track) => track.artist))]);
+    const albums = [...new Set(CATALOG.filter((track) => track.artist === name && track.album).map((track) => track.album))];
+    return reply(res, 200, {
+      artist: artistOut(name),
+      releases: albums.map((title) => ({
+        ref: albumOut(title).ref, title, kind: 'album', tracks: CATALOG.filter((track) => track.album === title).length,
+      })),
+    });
   }
   // «Чарт каталога» (обзор поиска): все эталоны по порядку
   if (url.pathname === '/catalog/chart') {

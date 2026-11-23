@@ -35,6 +35,7 @@ use tracing::{error, info, warn};
 /// Сколько ждать музыкальный сервер при старте: 100 попыток раз в 3 с — 5 минут
 const NAVIDROME_WAIT_ATTEMPTS: u32 = 100;
 const BACKFILL_FIRST_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+const DEFERRED_EVERY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 const BACKFILL_EVERY: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
 const NAVIDROME_WAIT_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -179,6 +180,16 @@ async fn main() -> Result<()> {
                 // Корзина старше 30 дней — стирается
                 fetch.purge_expired().await;
                 tokio::time::sleep(BACKFILL_EVERY).await;
+            }
+        });
+    }
+
+    // «Добавить на сервер всё»: отложенные сверх лимита треки ставятся сами, когда лимит снова позволяет
+    if let (Some(sub), Some(fetch)) = (ctx.sub.clone(), ctx.fetch.clone()) {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(DEFERRED_EVERY).await;
+                fetch.run_deferred(sub.clone()).await;
             }
         });
     }

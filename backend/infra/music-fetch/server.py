@@ -9,6 +9,7 @@
   GET  /health
   GET  /catalog?q=&limit=              эталоны треков из каталога (Deezer)
   GET  /catalog/chart                  «Чарт каталога»: популярные треки
+  GET  /catalog/artist_plan?ref=       выпуски исполнителя по типам с числом треков («Добавить на сервер всё»)
   GET  /candidates?source=&artist=&title=&limit=
                                        файлы источника: youtube, youtube_reupload, soundcloud; источник отказал — 503
   POST /download {"source","id","dest"} скачать в папку библиотеки по пути dest + расширение
@@ -424,6 +425,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_request(lambda: catalog.album_page(query["ref"]))
         elif url.path == "/catalog/artists":
             self.handle_request(lambda: {"artists": catalog.artists(query.get("q", ""))})
+        elif url.path == "/catalog/artist_plan":
+            self.handle_request(lambda: catalog.artist_plan(query["ref"]))
         elif url.path == "/catalog/chart":
             self.handle_request(catalog.chart)
         elif url.path == "/catalog/related":

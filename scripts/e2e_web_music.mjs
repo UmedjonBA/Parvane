@@ -292,6 +292,16 @@ try {
   await visible(music.locator(`[data-music-browse="chart"] [data-catalog-track="${CATALOG_BUS}"]`));
   await visible(music.locator('[data-music-browse="chart"] [data-track="t4"]').or(
     music.locator('[data-music-browse="chart"] [data-catalog-track]').filter({ hasText: 'Glass Harbor' })).first());
+  // Исполнитель каталога (доска `XpMusic-02`): «Добавить на сервер всё» — выпуски по типам и итог
+  await nav('search');
+  await deskSearch.fill('lampa');
+  await music.locator('[data-music-artists] [data-kind="catalogArtist"]').filter({ hasText: 'Lampa' }).first().click();
+  await music.locator('[data-music-artist-add-all]').click();
+  const addAll = page.locator('[data-music-add-all]');
+  await visible(addAll.locator('[data-kind="album"][aria-checked="true"]').getByText(/1 release · 2 tracks/));
+  await visible(addAll.locator('[data-music-add-all-start]').getByText('Add 2 tracks'));
+  await page.keyboard.press('Escape');
+  await gone(addAll);
   // Открытый из поиска альбом — в «Недавнем» с типом
   await nav('search');
   await deskSearch.fill('glass');

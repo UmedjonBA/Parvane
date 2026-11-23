@@ -569,7 +569,7 @@ impl Fetch {
         Ok(pb::FetchFirstResponse { job: self.job_pb(&job.id) }.encode_to_vec())
     }
 
-    async fn run(self: &Arc<Self>, sub: &Subsonic, id: &str) {
+    pub(crate) async fn run(self: &Arc<Self>, sub: &Subsonic, id: &str) {
         let Some(_slot) = self.take_slot(id).await else { return };
         self.update(id, |j| j.state = pb::FetchState::Searching);
         let Some(job) = self.job(id) else { return };

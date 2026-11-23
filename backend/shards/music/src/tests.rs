@@ -87,7 +87,7 @@ async fn fake_serve(fake: Arc<Fake>, req: Request<Incoming>) -> Response<Full<By
         }
         "/rest/getAlbumList2" => ok(json!({"albumList2": {"album": [{"id": "al-1", "name": "Альбом", "artist": "Группа", "artistId": "ar-1", "songCount": 3}]}})),
         "/rest/getAlbum" if id == "al-1" => ok(json!({"album": {"id": "al-1", "name": "Альбом", "artist": "Группа", "songCount": 3, "song": known.iter().map(|t| song(t, is_starred(t))).collect::<Vec<_>>()}})),
-        "/rest/getArtist" if id == "ar-1" => ok(json!({"artist": {"id": "ar-1", "name": "Группа", "albumCount": 1, "album": [{"id": "al-1", "name": "Альбом"}]}})),
+        "/rest/getArtist" if id == "ar-1" => ok(json!({"artist": {"id": "ar-1", "name": "Группа", "albumCount": 1, "album": [{"id": "al-1", "name": "Альбом", "songCount": 3}]}})),
         // Текст есть только у t1: синхронный и простой — отдаём оба, синхронный — первым
         "/rest/getLyricsBySongId" if id == "t1" => ok(json!({"lyricsList": {"structuredLyrics": [
             {"synced": false, "line": [{"value": "Просто текст"}]},
@@ -403,6 +403,10 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
             "albums": [{"ref": "dz:10", "title": "Альбом", "artist": "Группа", "artist_ref": "dz:1", "cover": "", "year": 2020, "record_type": "album", "tracks": 2}],
             "top": catalog_album_tracks()})),
         "/catalog/related" => reply(200, json!({"artists": [{"ref": "dz:2", "name": "Соседи", "picture": "", "albums": 3}]})),
+        // «Добавить на сервер всё»: альбом и сингл (у фальшивки треки любого выпуска — одни и те же)
+        "/catalog/artist_plan" => reply(200, json!({
+            "artist": {"ref": "dz:1", "name": "Группа", "picture": "", "albums": 2},
+            "releases": [{"ref": "dz:10", "title": "Альбом", "kind": "album", "tracks": 2}, {"ref": "dz:11", "title": "Сингл", "kind": "single", "tracks": 1}]})),
         // Файлы библиотеки: теги по пути (что записали — то и читается), сведения о файле
         "/tags" if req.method() == hyper::Method::GET => {
             let path = urlencoding_decode(q.get("path").cloned().unwrap_or_default());

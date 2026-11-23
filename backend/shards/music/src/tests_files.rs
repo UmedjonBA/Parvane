@@ -125,3 +125,32 @@ async fn admin_sets_limits_sources_and_personal_limits() {
     assert_eq!(call::<pb::AdminPeopleResponse>(&ctx, "alice@local", "music.admin.people", pb::AdminPeopleRequest {}).await.unwrap_err(), ErrorCode::Forbidden);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// «Добавить на сервер всё» (доска `XpMusic-02`): план по типам, запуск; сверх лимита треки ждут и ставятся сами,
+/// когда лимит позволяет.
+#[tokio::test]
+async fn artist_fetch_plans_by_kinds_and_defers_over_limit() {
+    let (_fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let fetch = ctx.fetch.clone().unwrap();
+    let plan: pb::FetchArtistPlanResponse = call(&ctx, "alice@local", "music.fetch.artist_plan", pb::FetchArtistPlanRequest { artist_ref: "dz:1".into() }).await.unwrap();
+    assert_eq!(plan.groups.iter().map(|g| (g.kind.as_str(), g.releases, g.tracks)).collect::<Vec<_>>(), vec![("album", 1, 2), ("single", 1, 1)]);
+    assert_eq!((plan.on_server, plan.today_left), (3, 30), "в библиотеке у «Группы» три трека");
+    assert_eq!(call::<pb::FetchArtistPlanResponse>(&ctx, "alice@local", "music.fetch.artist_plan", pb::FetchArtistPlanRequest { artist_ref: "abc".into() }).await.unwrap_err(), ErrorCode::Invalid);
+    // Лимит на сегодня исчерпан (личный лимит 0): новый трек откладывается, уже лежащий на сервере — нет
+    let person = pb::AdminPersonSetRequest { address: "alice@local".into(), per_day: 0, no_catalog: false, reset: false };
+    let _: pb::AdminPersonSetResponse = call(&ctx, "admin@local", "music.admin.person_set", person).await.unwrap();
+    let r: pb::FetchArtistResponse = call(&ctx, "alice@local", "music.fetch.artist", pb::FetchArtistRequest { artist_ref: "dz:1".into(), kinds: vec!["album".into(), "single".into()], star: true }).await.unwrap();
+    assert_eq!((r.jobs.len(), r.deferred, r.already), (0, 1, 1), "{r:?}");
+    fetch.run_deferred(ctx.sub.clone().unwrap()).await;
+    let waiting: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM deferred_fetch").fetch_one(&fetch.pool).await.unwrap();
+    assert_eq!(waiting.0, 1, "лимит не позволяет — трек ждёт");
+    // Лимит снова есть — отложенный трек ставится сам и уходит из очереди
+    let person = pb::AdminPersonSetRequest { address: "alice@local".into(), per_day: 0, no_catalog: false, reset: true };
+    let _: pb::AdminPersonSetResponse = call(&ctx, "admin@local", "music.admin.person_set", person).await.unwrap();
+    fetch.run_deferred(ctx.sub.clone().unwrap()).await;
+    let waiting: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM deferred_fetch").fetch_one(&fetch.pool).await.unwrap();
+    assert_eq!(waiting.0, 0);
+    let status: pb::FetchStatusResponse = call(&ctx, "alice@local", "music.fetch.status", pb::FetchStatusRequest {}).await.unwrap();
+    assert!(status.jobs.iter().any(|j| j.track.as_ref().is_some_and(|t| t.title == "Новая") && j.star), "{status:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}

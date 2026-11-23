@@ -1,4 +1,6 @@
-import type { MusicAlbum, MusicCatalogTrack, MusicTrack } from '../../../api/parvane/musicApi';
+import type {
+  MusicAlbum, MusicCatalogArtist, MusicCatalogTrack, MusicTrack,
+} from '../../../api/parvane/musicApi';
 import type { MusicCatalogAlbum } from '../../../api/parvane/musicCatalogApi';
 
 import { callMusic } from './musicPlayer';
@@ -22,6 +24,8 @@ export type MusicArtistData = {
   // Альбомы каталога, которых нет на сервере
   catalogExtraAlbums: number;
   topListener?: string;
+  // Исполнитель в каталоге: «Добавить на сервер всё», «в любимые исполнители» микса
+  catalogArtist?: MusicCatalogArtist;
   catalogTracks: number;
   isInCatalog: boolean;
   popular: MusicArtistRow[];
@@ -52,6 +56,7 @@ export async function loadArtist(id: string | undefined, catalogRef: string | un
     serverAlbums: serverAlbums.length,
     catalogExtraAlbums: catalogAlbums.length,
     topListener: server?.topListener,
+    catalogArtist: catalog?.artist,
     catalogTracks: (catalog?.albums || []).reduce((sum, album) => sum + album.tracksCount, 0),
     isInCatalog: Boolean(catalog),
     popular: [

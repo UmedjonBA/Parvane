@@ -184,6 +184,34 @@ def artist_page(ref):
     return {"artist": artist_out(artist), "albums": [album_out(item, artist) for item in albums], "top": top}
 
 
+LIVE_WORDS = ("live", "concert", "unplugged", "концерт")
+
+
+def release_kind(item):
+    """Тип выпуска для «Добавить на сервер всё»: альбом, сингл и EP, сборник, концертный."""
+    title = (item.get("title") or "").lower()
+    if any(word in title for word in LIVE_WORDS):
+        return "live"
+    return {"single": "single", "ep": "single", "compile": "compile"}.get(item.get("record_type") or "", "album")
+
+
+def artist_plan(ref):
+    """Выпуски исполнителя по типам с числом треков (доска `XpMusic-02`): у списка Deezer число треков бывает
+    не указано — тогда оно берётся из альбома."""
+    artist_id = ref_id(ref)
+    artist = get(f"/artist/{artist_id}")
+    releases = []
+    for item in data(f"/artist/{artist_id}/albums", limit=ARTIST_ALBUMS_LIMIT):
+        tracks = int(item.get("nb_tracks") or 0)
+        if not tracks:
+            try:
+                tracks = int(get(f"/album/{item['id']}").get("nb_tracks") or 0)
+            except (OSError, CatalogError):
+                tracks = 0
+        releases.append({"ref": f"dz:{item['id']}", "title": item.get("title", ""), "kind": release_kind(item), "tracks": tracks})
+    return {"artist": artist_out(artist), "releases": releases}
+
+
 def album_page(ref):
     """Альбом и его треки по порядку (номер и диск — у каждого)."""
     album_id = ref_id(ref)

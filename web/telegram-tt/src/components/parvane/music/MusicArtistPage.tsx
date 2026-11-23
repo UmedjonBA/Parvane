@@ -1,25 +1,32 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import { getActions } from '../../../global';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
 import type { MusicArtistData } from './musicArtistData';
 
 import buildClassName from '../../../util/buildClassName';
+import { copyTextToClipboard } from '../../../util/clipboard';
 import { loadArtist } from './musicArtistData';
 import { openMusicFileSheet } from './musicFiles';
 import { coverTone } from './musicFormat';
-import { getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
+import { getMusicMix, loadMusicMix } from './musicMix';
+import {
+  callMusic, getCurrentTrack, getMusicInfo, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
 import { goBackMusic, openMusicView } from './musicView';
 import useMusicData from './useMusicData';
 
 import useDerivedState from '../../../hooks/useDerivedState';
+import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
 import PvSkeleton from '../notes/PvSkeleton';
+import MusicArtistAddAll from './MusicArtistAddAll';
 import MusicCatalogRow from './MusicCatalogRow';
 import MusicCover from './MusicCover';
+import MusicMenu from './MusicMenu';
 import MusicTrackRow from './MusicTrackRow';
 
 import styles from './MusicPage.module.scss';
@@ -32,12 +39,16 @@ type OwnProps = {
   onSendToChat: (track: MusicTrack) => void;
 };
 
+// Любимых исполнителей «Микса дня» — не больше
+const MIX_ARTISTS_MAX = 20;
+
 // Parvane (макет «Музыки» 23 ноя, доска `XpMusic`): исполнитель — большое имя на цветном фоне, «каталог · на сервере
 // 9 из 75 треков», ▶; «Популярное» — треки сервера по прослушиваниям, дальше самые слушаемые в каталоге, которых на
 // сервере нет; релизы — сервера и каталога одной лентой. Исполнитель сервера ищется и в каталоге по имени
 const MusicArtistPage = ({
   id, catalogRef, isPhone, onSendToChat,
 }: OwnProps) => {
+  const { showNotification } = getActions();
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
   const current = getCurrentTrack(player);
@@ -61,8 +72,38 @@ const MusicArtistPage = ({
     void setTrackStarred(track, isStarred);
   });
   // «Объединить с другим написанием» (доски `ZpMusicX-04`, `ZdMusicX-03`)
-  const handleMerge = useLastCallback(() => {
-    if (id && data) openMusicFileSheet({ kind: 'merge', artistId: id, name: data.name });
+  const info = useDerivedState(getMusicInfo);
+  const mix = useDerivedState(getMusicMix);
+  // ♡ показывает, в любимых ли исполнитель: настройки микса нужны и без главной
+  useEffect(() => {
+    if (!getMusicMix()) void loadMusicMix();
+  }, []);
+  const [isAddAllOpen, openAddAll, closeAddAll] = useFlag();
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | true>();
+  const favoriteRef = data?.catalogArtist?.ref;
+  const isFavorite = Boolean(favoriteRef && mix?.settings.artists.some((artist) => artist.ref === favoriteRef));
+  // ♡: исполнитель — в любимых «Микса дня» (до 20)
+  const handleFavorite = useLastCallback(async () => {
+    const artist = data?.catalogArtist;
+    if (!artist) return;
+    const chosen = getMusicMix()?.settings.artists || [];
+    const artists = isFavorite ? chosen.filter((item) => item.ref !== artist.ref)
+      : [...chosen, artist].slice(-MIX_ARTISTS_MAX);
+    await callMusic('parvaneMusicMixSettings', { artists }).catch(() => undefined);
+    void loadMusicMix();
+  });
+  const handleMenu = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    setMenuAnchor(isPhone ? true : { x: box.left, y: box.bottom });
+  });
+  const closeMenu = useLastCallback(() => setMenuAnchor(undefined));
+  const handleMenuPick = useLastCallback((key: string) => {
+    setMenuAnchor(undefined);
+    if (key === 'merge' && id && data) openMusicFileSheet({ kind: 'merge', artistId: id, name: data.name });
+    else if (key === 'share' && data) {
+      copyTextToClipboard(data.name);
+      showNotification({ message: lang('MusicShareCopied') });
+    }
   });
   const handleOpenRelease = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const { kind, id: releaseId } = e.currentTarget.dataset;
@@ -105,18 +146,40 @@ const MusicArtistPage = ({
           <div className={styles.meta}>{sub}</div>
         </div>
       </div>
+      {/* Доска `XpMusic-01`: ♡ — в любимые исполнители микса, ⊕ — «Добавить на сервер всё», ⋯, большой ▶ */}
       <div className={styles.actions}>
-        {id && (
+        {data.catalogArtist && (
+          <button
+            type="button"
+            className={buildClassName(styles.action, isFavorite && styles.actionOn)}
+            aria-label={lang(isFavorite ? 'MusicArtistUnfavorite' : 'MusicArtistFavorite')}
+            aria-pressed={isFavorite}
+            data-music-artist-favorite
+            onClick={handleFavorite}
+          >
+            <ParvaneIcon name={isFavorite ? 'heart' : 'heartPlus'} />
+          </button>
+        )}
+        {data.catalogArtist && info?.isFetchEnabled && (
           <button
             type="button"
             className={styles.action}
-            aria-label={lang('MusicMergeArtistsAction')}
-            data-music-artist-merge
-            onClick={handleMerge}
+            aria-label={lang('MusicAddAllToServer')}
+            data-music-artist-add-all
+            onClick={openAddAll}
           >
-            <ParvaneIcon name="merge" />
+            <ParvaneIcon name="cloudAdd" />
           </button>
         )}
+        <button
+          type="button"
+          className={styles.action}
+          aria-label={lang('MusicMoreActions')}
+          data-music-artist-menu
+          onClick={handleMenu}
+        >
+          <ParvaneIcon name="dotsH" />
+        </button>
         <span className={styles.actionsGap} />
         <button
           type="button"
@@ -129,6 +192,21 @@ const MusicArtistPage = ({
           <ParvaneIcon name="play" />
         </button>
       </div>
+      {menuAnchor && (
+        <MusicMenu
+          title={data.name}
+          actions={[
+            ...(id ? [{ key: 'merge', title: lang('MusicMergeArtistsAction') }] : []),
+            { key: 'share', title: lang('MusicShare') },
+          ]}
+          anchor={menuAnchor === true ? undefined : menuAnchor}
+          onPick={handleMenuPick}
+          onClose={closeMenu}
+        />
+      )}
+      {isAddAllOpen && data.catalogArtist && (
+        <MusicArtistAddAll artist={data.catalogArtist} onClose={closeAddAll} />
+      )}
       {Boolean(data.popular.length) && (
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>{lang('MusicPopular')}</h2>

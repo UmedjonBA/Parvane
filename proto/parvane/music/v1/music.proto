@@ -57,6 +57,14 @@ service MusicService {
   rpc FetchCancel(FetchCancelRequest) returns (FetchCancelResponse) {
     option (parvane.core.v2.method) = {name: "music.fetch.cancel" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  // «Добавить на сервер всё» исполнителя (доска `XpMusic-02`): что есть по типам выпусков, затем запуск — сверх
+  // суточного лимита треки ждут на сервере и ставятся сами («остальные — завтра сами»).
+  rpc FetchArtistPlan(FetchArtistPlanRequest) returns (FetchArtistPlanResponse) {
+    option (parvane.core.v2.method) = {name: "music.fetch.artist_plan" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc FetchArtist(FetchArtistRequest) returns (FetchArtistResponse) {
+    option (parvane.core.v2.method) = {name: "music.fetch.artist" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
   // «Добавить первым»: своя ждущая задача — перед своими же ждущими.
   rpc FetchFirst(FetchFirstRequest) returns (FetchFirstResponse) {
     option (parvane.core.v2.method) = {name: "music.fetch.first" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
@@ -543,6 +551,36 @@ message FetchCancelRequest {
   string job_id = 1 [(parvane.core.v2.max_len) = 32];
 }
 message FetchCancelResponse {}
+
+message ReleaseGroup {
+  // album, single (синглы и EP), compile (сборники), live (концертные)
+  string kind = 1 [(parvane.core.v2.max_len) = 16];
+  uint32 releases = 2;
+  uint32 tracks = 3;
+}
+message FetchArtistPlanRequest {
+  string artist_ref = 1 [(parvane.core.v2.max_len) = 64];
+}
+message FetchArtistPlanResponse {
+  repeated ReleaseGroup groups = 1 [(parvane.core.v2.max_items) = 8];
+  // Треков исполнителя уже на сервере.
+  uint32 on_server = 2;
+  // Сколько ещё можно добавить сегодня.
+  uint32 today_left = 3;
+}
+message FetchArtistRequest {
+  string artist_ref = 1 [(parvane.core.v2.max_len) = 64];
+  repeated string kinds = 2 [(parvane.core.v2.max_items) = 8, (parvane.core.v2.max_len) = 16];
+  // Готовые — в «Любимое» добавившего.
+  bool star = 3;
+}
+message FetchArtistResponse {
+  repeated FetchJob jobs = 1 [(parvane.core.v2.max_items) = 500];
+  // Сверх лимита: ждут на сервере и поставятся сами.
+  uint32 deferred = 2;
+  // Уже на сервере.
+  uint32 already = 3;
+}
 
 message FetchFirstRequest {
   string job_id = 1 [(parvane.core.v2.max_len) = 32];

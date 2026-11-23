@@ -67,6 +67,8 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
             "music.fetch.status" => fetch.status(&req.user),
             "music.fetch.cancel" => fetch.cancel(&req.user, body(&req)?).await,
             "music.fetch.first" => fetch.first(&req.user, body(&req)?).await,
+            "music.fetch.artist_plan" => fetch.artist_plan(sub, &req.user, body(&req)?).await,
+            "music.fetch.artist" => fetch.artist_fetch(sub_shared.clone(), &req.user, body(&req)?).await,
             "music.upload.start" => crate::upload::start(fetch, ctx, &req.user, body(&req)?).await,
             "music.added.list" => fetch.added_list(sub, &req.user, body(&req)?).await,
             "music.added.delete" => fetch.added_delete(sub, &req.user, body(&req)?).await,

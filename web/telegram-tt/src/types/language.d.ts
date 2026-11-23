@@ -1431,6 +1431,14 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicArtistFavorite': undefined;
+  'MusicArtistUnfavorite': undefined;
+  'MusicReleaseAlbums': undefined;
+  'MusicReleaseSingles': undefined;
+  'MusicReleaseCompiles': undefined;
+  'MusicReleaseLive': undefined;
+  'MusicAlsoNowhere': undefined;
+  'MusicAlsoPlaylist': undefined;
   'MusicOfflineSavedMark': undefined;
   'MusicOfflineNote': undefined;
   'MusicMergeShort': undefined;
@@ -5148,6 +5156,16 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicSortBy': {
     'name': V;
   };
+  'MusicAddAllSize': {
+    'gb': V;
+  };
+  'MusicAddAllLater': {
+    'now': V;
+    'later': V;
+  };
+  'MusicAddAllWhat': {
+    'name': V;
+  };
   'MusicOfflineOnPhoneOf': {
     'used': V;
     'limit': V;
@@ -6962,6 +6980,23 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   };
   'MusicTracksCount': {
     'count': V;
+  };
+  'MusicReleasesCount': {
+    'count': V;
+  };
+  'MusicAddAllOnServer': {
+    'count': V;
+  };
+  'MusicAddAllWillAdd': {
+    'count': V;
+    'size': V;
+  };
+  'MusicAddAllButton': {
+    'count': V;
+  };
+  'MusicAddAllStarted': {
+    'started': V;
+    'deferred': V;
   };
   'MusicVersionsOf': {
     'count': V;

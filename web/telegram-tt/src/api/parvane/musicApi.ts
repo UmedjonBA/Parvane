@@ -139,6 +139,8 @@ export type MusicCatalogTrack = {
   previewUrl?: string;
 };
 
+export type MusicReleaseKind = 'album' | 'single' | 'compile' | 'live';
+
 export type MusicGenre = {
   name: string;
   trackCount: number;
@@ -731,6 +733,32 @@ export function createMusicApi(deps: Deps) {
     async parvaneMusicFetchCancel({ jobId }: { jobId: string }) {
       await deps.call('music.fetch.cancel', { job_id: jobId });
       return true;
+    },
+
+    /** «Добавить на сервер всё» исполнителя: выпуски по типам, уже на сервере, сколько можно сегодня. */
+    async parvaneMusicFetchArtistPlan({ artistRef }: { artistRef: string }) {
+      const reply = await deps.call('music.fetch.artist_plan', { artist_ref: artistRef });
+      return {
+        groups: list(reply, 'groups').map((raw) => ({
+          kind: text(raw, 'kind') as MusicReleaseKind,
+          releases: count(raw, 'releases'),
+          tracks: count(raw, 'tracks'),
+        })),
+        onServer: count(reply, 'on_server'),
+        todayLeft: count(reply, 'today_left'),
+      };
+    },
+
+    /** Запустить «Добавить на сервер всё»: задачи сейчас, сверх лимита — ждут на сервере и поставятся сами. */
+    async parvaneMusicFetchArtist({ artistRef, kinds, isStar }: {
+      artistRef: string; kinds: MusicReleaseKind[]; isStar?: boolean;
+    }) {
+      const reply = await deps.call('music.fetch.artist', { artist_ref: artistRef, kinds, star: isStar || undefined });
+      return {
+        jobs: list(reply, 'jobs').map(toFetchJob),
+        deferred: count(reply, 'deferred'),
+        already: count(reply, 'already'),
+      };
     },
 
     /** «Добавить первым»: своя ждущая задача — перед своими же ждущими. */
