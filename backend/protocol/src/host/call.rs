@@ -685,6 +685,7 @@ fn music_queue_call(name: &str, a: &Args<'_>) -> R {
         "musicQueueRemove" => q.remove(a.n("position")?),
         "musicQueueMove" => q.move_to(a.n("from")?, a.n("to")?),
         "musicQueueClear" => q.clear_rest(),
+        "musicQueueClearAdded" => q.clear_added(),
         _ => return Err(UNKNOWN.to_string()),
     }
     Ok(q.view())

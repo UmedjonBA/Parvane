@@ -1,103 +1,166 @@
 import { memo } from '../../../lib/teact/teact';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicQueueSource } from './musicPlayer';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  clearQueue, getMusicPlayer, moveQueueItem, playQueueItem, removeQueueItem, setTrackStarred,
+  clearAddedToQueue, cycleRepeat, getMusicPlayer, playQueueItem, removeQueueItem, setTrackStarred, toggleShuffle,
 } from './musicPlayer';
-import useDragReorder from './useDragReorder';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicTrackRow from './MusicTrackRow';
 
-import kit from '../notes/PvKit.module.scss';
-import styles from './Music.module.scss';
-import screen from './MusicPlayerScreen.module.scss';
+import styles from './MusicQueue.module.scss';
 
 type OwnProps = {
-  // Телефон, полный плеер: «Далее в очереди» — только треки после играющего (доска `MusicPlayer`)
-  isUpcomingOnly?: boolean;
-  // Полный плеер на телефоне: подпись раскрывает очередь на весь экран
-  isExpanded?: boolean;
-  onToggleExpanded?: NoneToVoidFunction;
+  // Шторка полного плеера телефона: заголовок со стрелкой вниз и кнопки внизу (доска `MusicPlayer-06`);
+  // без неё — страница «Очередь» на компьютере (доска `XdMusic-01`)
+  isSheet?: boolean;
+  onClose?: NoneToVoidFunction;
+  onToPlaylist?: (tracks: MusicTrack[]) => void;
 };
 
-// Parvane (spec 039, 041; доски `DeskMusic`, `XdMusic`, `MusicPlayer`): очередь — треки в порядке проигрывания,
-// «Очистить» ссылкой, перестановка за ручку. На компьютере крестик и ручка — по наведению; на телефоне убрать —
-// пунктом меню строки (долгое нажатие). Порядок ведёт движок (MUSIC-1)
-const MusicQueue = ({ isUpcomingOnly, isExpanded, onToggleExpanded }: OwnProps) => {
+// «Далее из: …» по виду источника: с названием источника и без него
+const SOURCE_NAMED_KEYS = {
+  playlist: 'MusicNextFromPlaylist',
+  album: 'MusicNextFromAlbum',
+  artist: 'MusicNextFromArtist',
+  search: 'MusicNextFromSearch',
+  home: 'MusicNextFromHome',
+} as const;
+const SOURCE_PLAIN_KEYS = {
+  starred: 'MusicNextFromStarred',
+  offline: 'MusicNextFromOffline',
+  chat: 'MusicNextFromChat',
+} as const;
+
+// Parvane (макет «Музыки» 23 ноя, доски `MusicPlayer-06`, `XdMusic-01`): очередь — «Сейчас играет», «Далее в
+// очереди · вы добавили» с «Очистить» (то, что человек поставил сам, играет раньше источника) и «Далее из: …».
+// Сколько добавлено человеком, знает очередь движка (MUSIC-1)
+const MusicQueue = ({ isSheet, onClose, onToPlaylist }: OwnProps) => {
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
-  const { upcoming, index } = player.queue;
-  const tracks = upcoming.map((id) => player.tracksById[id]).filter(Boolean);
-  // Место строки в порядке проигрывания: на телефоне сыгранные и играющий не показываются
-  const first = isUpcomingOnly ? index + 1 : 0;
-  const shown = tracks.slice(first);
-  const handleMove = useLastCallback((from: number, to: number) => moveQueueItem(from + first, to + first));
-  const { handlers: drag, getRowState } = useDragReorder(shown.length, handleMove);
+  const {
+    upcoming, index, added, shuffle, repeat,
+  } = player.queue;
+  const tracks = upcoming.map((id) => player.tracksById[id]);
+  const current = index >= 0 ? tracks[index] : undefined;
+  const addedStart = index + 1;
+  const addedEnd = addedStart + (added || 0);
+  const sourceName = player.source?.name || (player.source?.kind === 'starred' ? lang('MusicStarred') : undefined);
 
-  const handlePlay = useLastCallback((position: number) => playQueueItem(position + first));
-  const handleRemove = useLastCallback((position: number) => removeQueueItem(position + first));
-  // «В любимое» — в меню любой строки трека (доска `XpMusic`)
+  const handlePlay = useLastCallback((position: number) => playQueueItem(position));
+  const handleRemove = useLastCallback((position: number) => removeQueueItem(position));
   const handleStar = useLastCallback((track: MusicTrack) => void setTrackStarred(track, !track.isStarred));
+  const handleToPlaylist = useLastCallback(() => {
+    onToPlaylist?.(tracks.slice(Math.max(0, index)).filter(Boolean));
+  });
 
-  if (!tracks.length) {
-    return (
-      <div className={buildClassName(styles.queue, kit.muted)} data-music-queue="empty">{lang('MusicQueueEmpty')}</div>
-    );
+  function renderRows(from: number, to: number) {
+    const rows = [];
+    for (let position = from; position < to; position++) {
+      const track = tracks[position];
+      if (!track) continue;
+      rows.push(
+        <MusicTrackRow
+          key={`${track.id}:${position}`}
+          track={track}
+          index={position}
+          rank={isSheet ? undefined : position - index}
+          isCurrent={position === index}
+          isPlaying={player.isPlaying}
+          columns={isSheet ? undefined : ['album']}
+          extra={{ removeLabel: lang('MusicQueueRemoveItem'), onRemove: () => handleRemove(position) }}
+          onPlay={handlePlay}
+          onStar={handleStar}
+        />,
+      );
+    }
+    return <ul className={styles.rows}>{rows}</ul>;
   }
 
-  const title = lang(isUpcomingOnly ? 'MusicQueueUpcoming' : 'MusicQueueTitle', { count: shown.length });
+  function renderSourceCaps(kind: MusicQueueSource['kind']) {
+    if (kind in SOURCE_PLAIN_KEYS) return lang(SOURCE_PLAIN_KEYS[kind as keyof typeof SOURCE_PLAIN_KEYS]);
+    return lang(SOURCE_NAMED_KEYS[kind as keyof typeof SOURCE_NAMED_KEYS], { name: sourceName || '' });
+  }
+
+  const hasAdded = addedEnd > addedStart;
+  const hasRest = tracks.length > addedEnd;
+
   return (
-    <div className={styles.queue} data-music-queue={tracks.length}>
-      <div className={styles.queueHead}>
-        {onToggleExpanded ? (
+    <div className={buildClassName(styles.root, isSheet && styles.rootSheet)} data-music-queue={tracks.length}>
+      <div className={styles.head}>
+        <h2 className={styles.title}>{lang('MusicQueue')}</h2>
+        {onClose && (
+          <button type="button" className={styles.close} aria-label={lang('Close')} onClick={onClose}>
+            <ParvaneIcon name="chevronDown" />
+          </button>
+        )}
+      </div>
+      {!current && !hasRest && <div className={styles.empty}>{lang('MusicQueueEmpty')}</div>}
+      {current && (
+        <section className={styles.section}>
+          <div className={styles.caps}>{lang('MusicNowPlayingCaps')}</div>
+          {renderRows(index, index + 1)}
+        </section>
+      )}
+      {hasAdded && (
+        <section className={styles.section} data-music-queue-added={addedEnd - addedStart}>
+          <div className={styles.capsRow}>
+            <span className={styles.caps}>{lang('MusicQueueAddedCaps')}</span>
+            <button
+              type="button"
+              className={styles.link}
+              aria-label={lang('MusicQueueClearLabel')}
+              data-music-queue-clear
+              onClick={clearAddedToQueue}
+            >
+              {lang('MusicQueueClear')}
+            </button>
+          </div>
+          {renderRows(addedStart, addedEnd)}
+        </section>
+      )}
+      {hasRest && (
+        <section className={styles.section}>
+          <div className={styles.caps}>
+            {renderSourceCaps(player.source?.kind || 'home')}
+          </div>
+          {renderRows(addedEnd, tracks.length)}
+        </section>
+      )}
+      {isSheet && (
+        <div className={styles.bottom}>
           <button
             type="button"
-            className={buildClassName(kit.caps, styles.queueToggle)}
-            aria-expanded={isExpanded}
-            onClick={onToggleExpanded}
+            className={buildClassName(styles.pill, shuffle && styles.pillOn)}
+            aria-pressed={shuffle}
+            onClick={toggleShuffle}
           >
-            {title}
+            <ParvaneIcon name="shuffle" isSmall />
+            {lang('MusicShuffleShort')}
           </button>
-        ) : <span className={kit.caps}>{title}</span>}
-        <span className={kit.grow} />
-        <button
-          type="button"
-          className={styles.linkButton}
-          aria-label={lang('MusicQueueClearLabel')}
-          onClick={clearQueue}
-        >
-          {lang('MusicQueueClear')}
-        </button>
-      </div>
-      <ul className={buildClassName(styles.tracks, screen.queueRows, 'custom-scroll')}>
-        {shown.map((item, position) => (
-          <MusicTrackRow
-            key={`${item.id}:${position + first}`}
-            track={item}
-            index={position}
-            isCurrent={position + first === index}
-            isPlaying={player.isPlaying}
-            canRemove={!isUpcomingOnly}
-            isMenuHidden
-            extra={{
-              removeLabel: lang('MusicQueueRemoveItem'),
-              onRemove: () => handleRemove(position),
-            }}
-            dragLabel={lang('MusicQueueDrag', { name: item.title })}
-            dragState={getRowState(position)}
-            drag={drag}
-            onPlay={handlePlay}
-            onRemove={handleRemove}
-            onStar={handleStar}
-          />
-        ))}
-      </ul>
+          <button
+            type="button"
+            className={buildClassName(styles.pill, repeat !== 'off' && styles.pillOn)}
+            aria-pressed={repeat !== 'off'}
+            onClick={cycleRepeat}
+          >
+            <ParvaneIcon name="repeat" isSmall />
+            {lang('MusicRepeatShort')}
+          </button>
+          {onToPlaylist && (
+            <button type="button" className={styles.pill} onClick={handleToPlaylist}>
+              {lang('MusicToPlaylist')}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

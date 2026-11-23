@@ -1,3 +1,4 @@
+// Плеер во весь экран (доски `MusicPlayer-02/03/06`, `XdMusic-02`): фон — цвет обложки, переходящий в панель
 .dialog {
   min-width: 100%;
   height: 100%;
@@ -8,191 +9,115 @@
 }
 
 .content {
-  overflow: auto;
+  overflow: hidden;
+
+  height: 100%;
   max-height: none;
   padding: 0;
+
   color: var(--pv-fg);
 }
 
-.layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(18rem, 30%);
+.screen {
+  position: relative;
+
+  display: flex;
+  flex-direction: column;
+
   height: 100%;
+
+  background:
+ linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--player-tone) 55%, var(--pv-panel)) 0%,
+    var(--pv-panel) 85%
+  );
+}
+
+.top {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+
+  height: 3.5rem;
+  padding: 0 0.5rem;
+}
+
+.topButton {
+  cursor: pointer;
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.75rem;
+
+  color: var(--pv-fg);
+
+  background: none;
+}
+
+.source {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+
+  min-width: 0;
+
+  text-align: center;
+}
+
+.sourceCaps {
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sourceName {
+  overflow: hidden;
+
+  max-width: 100%;
+
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.body {
+  overflow-y: auto;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1rem;
+
+  min-height: 0;
+  padding: 0.5rem 1.25rem 1.5rem;
 }
 
 .stage {
-  position: relative;
-
-  overflow: auto;
-  display: grid;
-  grid-template:
-    "art" auto
-    "info" auto
-    "transport" auto
-    "chips" auto / auto;
-  gap: 0.875rem 0.5rem;
-  align-content: safe center;
-  justify-content: center;
-  justify-items: center;
-
-  padding: 4rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
 }
-
-.collapse {
-  position: absolute;
-  inset-block-start: max(0.75rem, env(safe-area-inset-top));
-  inset-inline-start: 1rem;
-}
-
-.down, .source { display: none; }
 
 .art {
-  grid-area: art;
+  align-self: center;
+
   aspect-ratio: 1;
-  width: min(17.5rem, 36vh);
-  border-radius: 1.25rem;
-}
+  width: min(100%, 22rem);
+  height: auto;
+  border-radius: 0.375rem;
 
-.info {
-  grid-area: info;
-
-  min-width: 0;
-  max-width: 38rem;
-
-  text-align: center;
-  overflow-wrap: anywhere;
-}
-
-.title {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: var(--font-weight-semibold);
-}
-
-// Компьютер: «В любимом · Скачан · В плейлист · Отправить в чат» (доска `XdMusic`)
-.chips {
-  display: flex;
-  grid-area: chips;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  justify-content: center;
-}
-
-.heartFilled {
-  fill: currentColor;
-}
-
-.queueNote {
-  flex: none;
-  padding: 0 0.75rem 0.75rem;
-}
-
-.transport {
-  grid-area: transport;
-  width: min(48vw, 42rem);
-}
-
-.star { grid-area: star; justify-self: end; }
-
-.playlist { grid-area: playlist; }
-
-.send { grid-area: send; justify-self: start; }
-
-.on { color: var(--pv-red); }
-
-.queue {
-  flex-direction: column;
-}
-
-.queue {
-  overflow: hidden;
-  display: flex;
-
-  min-height: 0;
-  border-inline-start: 1px solid var(--pv-line);
-
-  background: var(--pv-bg);
-}
-
-.expanded { grid-template-columns: minmax(0, 1fr) minmax(18rem, 42%); }
-
-@media (max-width: 760px) {
-  .layout {
-    display: flex;
-    flex-direction: column;
-    min-height: min(100%, 32rem);
-  }
-
-  .stage {
-    overflow: visible;
-    grid-template:
-      "collapse source playlist send" auto
-      "art art art art" auto
-      "info info star saved" auto
-      "transport transport transport transport" auto / 2.75rem minmax(0, 1fr) 2.75rem 2.75rem;
-    flex: none;
-    gap: 0.75rem 0;
-    align-items: center;
-    justify-content: stretch;
-
-    padding: max(0.25rem, env(safe-area-inset-top)) 1.25rem 0.875rem;
-  }
-
-  .desktopLabel { display: none; }
-
-  .saved { grid-area: saved; }
-  .chips { grid-column: 1 / -1; }
-
-  .collapse, .send, .star, .playlist {
-    width: 2.75rem;
-    height: 2.75rem;
-    padding: 0;
-    border: 0;
-
-    background: transparent;
-  }
-
-  .collapse { position: static; grid-area: collapse; }
-  .down { transform: rotate(90deg); display: block; }
-  .source {
-    display: flex;
-    grid-area: source;
-    flex-direction: column;
-
-    min-width: 0;
-
-    font-size: 0.8125rem;
-    color: var(--pv-muted);
-    text-align: center;
-  }
-
-  .sourceName {
-    font-weight: var(--font-weight-semibold);
-    color: var(--pv-fg);
-    overflow-wrap: anywhere;
-  }
-
-  .art { width: min(13.5rem, 28dvh); }
-  .info { justify-self: start; text-align: start; }
-  .title { font-size: 1.25rem; }
-  .transport { width: 100%; }
-  .queue {
-    flex: 1;
-
-    min-height: 8rem;
-    padding-bottom: env(safe-area-inset-bottom);
-    border-block-start: 1px solid var(--pv-line);
-    border-inline-start: none;
-    border-radius: 1.125rem 1.125rem 0 0;
-  }
-
-  .expanded {
-    .art, .transport { display: none; }
-    .stage {
-      grid-template-areas: "collapse source playlist send" "info info star saved";
-      grid-template-rows: auto auto;
-    }
-  }
+  box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.25);
 }
 
 .artNote {
@@ -200,54 +125,340 @@
   height: 4.5rem;
 }
 
-.transport {
-  .playButton {
-    width: 4rem;
-    height: 4rem;
-  }
-
-  .seek {
-    height: 1.5rem;
-    margin: 0;
-
-    background-repeat: no-repeat;
-    background-position: center;
-    background-size: 100% 0.25rem;
-  }
-
-  @media (max-width: 760px) {
-    .playback {
-      justify-content: space-between;
-    }
-  }
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
 }
 
-.queue .queueRows {
+.info {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.infoText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.title {
+  overflow: hidden;
+
+  margin: 0;
+
+  font-size: 1.375rem;
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artist {
+  cursor: pointer;
+
+  overflow: hidden;
+
+  padding: 0;
   border: none;
-  border-radius: 0;
-  background: transparent;
+
+  font: inherit;
+  font-size: 0.9375rem;
+  color: var(--pv-muted);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: none;
 }
 
-@media (min-width: 761px) and (max-width: 950px) {
-  .star, .playlist, .send {
-    .desktopLabel { display: none; }
+.star {
+  cursor: pointer;
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+
+  color: var(--pv-fg);
+
+  background: none;
+}
+
+.starOn {
+  color: var(--pv-red);
+}
+
+// Позиция и кнопки (`MusicControls` с `isFullScreen`)
+.progress {
+  width: 100%;
+}
+
+.seek {
+  width: 100%;
+  margin: 0;
+}
+
+.times {
+  display: flex;
+  justify-content: space-between;
+}
+
+.playback {
+  justify-content: space-between;
+  width: 100%;
+}
+
+.playButton {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 50%;
+
+  color: var(--pv-panel);
+
+  background: var(--pv-fg);
+}
+
+.error {
+  font-size: 0.8125rem;
+  color: var(--pv-red);
+}
+
+// «Далее»: карточка с обложкой следующего трека, стрелка открывает очередь
+.next {
+  display: flex;
+  align-items: center;
+
+  margin-top: 0.5rem;
+  border-radius: 0.625rem;
+
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.nextMain {
+  cursor: pointer;
+
+  display: flex;
+  flex: 1;
+  gap: 0.625rem;
+  align-items: center;
+
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: none;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+}
+
+.nextCover {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.25rem;
+}
+
+.nextText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.nextCaps {
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+}
+
+.nextTitle {
+  overflow: hidden;
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nextQueue {
+  cursor: pointer;
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+
+  color: var(--pv-fg);
+
+  background: none;
+}
+
+// Карточки под плеером: текст песни, «Об исполнителе»
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  padding: 1rem;
+  border-radius: 0.75rem;
+
+  background: var(--pv-raised);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.cardName {
+  font-size: 1rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.cardButton {
+  cursor: pointer;
+
+  align-self: flex-start;
+
+  height: 2.25rem;
+  padding: 0 1rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 1.125rem;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
+
+.lyrics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.lyricsLine {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--pv-muted);
+}
+
+.lyricsLineOn {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
+// Очередь шторкой поверх плеера (доска `MusicPlayer-06`)
+.queueSheet {
+  position: absolute;
+  z-index: 2;
+  inset: 4.5rem 0 0;
+
+  overflow-y: auto;
+
+  padding: 0.75rem 1rem 0;
+  border-radius: 1rem 1rem 0 0;
+
+  background: var(--pv-panel);
+  box-shadow: 0 -0.5rem 1.5rem rgba(0, 0, 0, 0.2);
+}
+
+// Компьютер: обложка слева, название крупно справа (доска `XdMusic-02`)
+.screenDesk {
+  .body {
+    padding: 1rem 3rem 2rem;
+  }
+
+  .stage {
+    flex-direction: row;
+    gap: 2.5rem;
+    align-items: center;
+
+    min-height: calc(100% - 2rem);
+    padding: 0 2rem;
+  }
+
+  .art {
+    flex: none;
+    width: 18.75rem;
+  }
+
+  .side {
+    flex: 1;
+    max-width: 28rem;
+  }
+
+  .title {
+    font-size: 3.5rem;
+    line-height: 1.1;
+    white-space: normal;
+  }
+
+  .artist {
+    font-size: 1.125rem;
+  }
+
+  .card {
+    max-width: 48rem;
+  }
+
+  .queueSheet {
+    inset: 3.5rem 0 0 auto;
+    width: 26rem;
+    border-radius: 1rem 0 0;
   }
 }
 
-@media (min-width: 761px) {
-  .transport .progress {
-    position: relative;
-    justify-content: center;
-  }
+// Компьютер: внутри «Музыки» — панель над нижним плеером
+.screenInline {
+  overflow: hidden;
+  flex: 1;
 
-  .transport .seek {
-    align-self: center;
-    width: calc(100% - 6rem);
-  }
+  min-height: 0;
+  margin: 0.5rem 0.5rem 0;
+  border-radius: 0.625rem;
+}
 
-  .times {
-    pointer-events: none;
-    position: absolute;
-    inset-inline: 0;
-  }
+.pills {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.pill {
+  cursor: pointer;
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  height: 2.5rem;
+  padding: 0 1.125rem;
+  border: none;
+  border-radius: 1.25rem;
+
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
+
+.pillOn {
+  color: var(--pv-red);
 }

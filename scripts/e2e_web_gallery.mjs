@@ -750,6 +750,11 @@ async function galleryMusic() {
     await page.locator('[data-module="music"]:visible').first().click();
     await music.locator('[data-music-home]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
+  await step(page, 'XdMusic-02', async () => {
+    await music.locator('[data-music-desk-player] button').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-music-full]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
   await step(page, 'XdMusic-01', async () => {
     await music.locator('[data-music-desk-queue]').click({ timeout: STEP_TIMEOUT_MS });
   });
@@ -825,6 +830,9 @@ async function galleryMusic() {
   await step(page, 'MusicPlayer-02', async () => {
     await page.locator('[data-music-mini]:visible').first().getByRole('button').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
+  });
+  await step(page, 'MusicPlayer-06', async () => {
+    await page.locator('[data-music-open-queue]').click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
   await musicBack();

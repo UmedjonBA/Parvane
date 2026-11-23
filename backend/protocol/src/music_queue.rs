@@ -2,9 +2,11 @@
 //! для всех клиентов — что играет следующим, «вперемешку», повтор, правка очереди. Клиент хранит очередь как
 //! JSON и только воспроизводит трек с номером `index`. Общий образец — `conformance/music-queue/cases.json`.
 //!
-//! Состояние: `{tracks:[id…], index, shuffle, repeat:"off"|"all"|"one", order:[номера tracks], seed}`.
+//! Состояние: `{tracks:[id…], index, shuffle, repeat:"off"|"all"|"one", order:[номера tracks], seed, added}`.
 //! `order` — порядок проигрывания (без «вперемешку» — по порядку списка); `index` — место в `order`;
-//! `-1` — очередь пуста либо доиграна.
+//! `-1` — очередь пуста либо доиграна. `added` — сколько треков сразу после играющего добавил сам человек
+//! («В очередь»): они играют раньше остального источника и показываются отдельно («Далее в очереди · вы добавили»,
+//! доска `MusicPlayer`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -31,12 +33,13 @@ pub struct Queue {
     pub repeat: Repeat,
     pub order: Vec<usize>,
     pub seed: u64,
+    pub added: usize,
 }
 
 impl Default for Queue {
     /// Пустая очередь: ничего не играет.
     fn default() -> Self {
-        Queue { tracks: Vec::new(), index: -1, shuffle: false, repeat: Repeat::Off, order: Vec::new(), seed: 0 }
+        Queue { tracks: Vec::new(), index: -1, shuffle: false, repeat: Repeat::Off, order: Vec::new(), seed: 0, added: 0 }
     }
 }
 
@@ -58,7 +61,13 @@ impl Queue {
         if n == 0 || q.index < -1 || q.index >= n as i64 {
             q.index = -1;
         }
+        q.added = q.added.min(q.after_current());
         q
+    }
+
+    /// Сколько треков в порядке после играющего (ничего не играет — весь порядок).
+    fn after_current(&self) -> usize {
+        self.order.len().saturating_sub(usize::try_from(self.index + 1).unwrap_or(0))
     }
 
     /// Номер играющего трека в `tracks`.
@@ -102,6 +111,7 @@ impl Queue {
         }
         if self.index + 1 < n {
             self.index += 1;
+            self.added = self.added.saturating_sub(1);
         } else if auto && self.repeat == Repeat::Off {
             self.index = -1;
         } else {
@@ -117,11 +127,16 @@ impl Queue {
         } else {
             self.index = if self.index <= 0 { n - 1 } else { self.index - 1 };
         }
+        // Назад — добавленные человеком уже не «сразу после играющего»
+        self.added = 0;
     }
 
     /// Перейти к треку по его месту в порядке проигрывания.
     pub fn jump(&mut self, position: usize) {
         if position < self.order.len() {
+            // Вперёд — пропущенные добавленные сыграны; назад — блок добавленных распадается
+            let skipped = (position as i64 - self.index).max(0) as usize;
+            self.added = if position as i64 > self.index { self.added.saturating_sub(skipped) } else { 0 };
             self.index = position as i64;
         }
     }
@@ -134,6 +149,7 @@ impl Queue {
         self.seed = seed;
         let n = self.tracks.len();
         self.order = (0..n).collect();
+        self.added = 0;
         match (on, current) {
             (true, Some(track)) => {
                 self.order.swap(0, track);
@@ -154,10 +170,12 @@ impl Queue {
         };
     }
 
-    /// Добавить треки: `next` — сразу после играющего, иначе в конец порядка.
+    /// Добавить треки человеком: `next` — сразу после играющего, иначе в конец добавленного им (раньше остального
+    /// источника, как «В очередь» у музыкальных сервисов).
     pub fn add(&mut self, ids: Vec<String>, next: bool) {
         let was_empty = self.order.is_empty();
-        let mut at = if next { usize::try_from(self.index + 1).unwrap_or(0).min(self.order.len()) } else { self.order.len() };
+        let first = usize::try_from(self.index + 1).unwrap_or(0).min(self.order.len());
+        let mut at = if next { first } else { (first + self.added).min(self.order.len()) };
         for id in ids.into_iter().filter(|id| !id.is_empty() && id.len() <= MAX_ID) {
             if self.tracks.len() >= MAX_QUEUE {
                 break;
@@ -165,10 +183,12 @@ impl Queue {
             self.tracks.push(id);
             self.order.insert(at, self.tracks.len() - 1);
             at += 1;
+            self.added += 1;
         }
         // В пустую очередь — играть первый добавленный
         if was_empty && !self.order.is_empty() {
             self.index = 0;
+            self.added = self.added.saturating_sub(1);
         }
     }
 
@@ -176,6 +196,11 @@ impl Queue {
     pub fn remove(&mut self, position: usize) {
         if position >= self.order.len() {
             return;
+        }
+        // Убран добавленный — блок короче; убран играющий — его место занимает первый добавленный
+        let is_in_block = position as i64 > self.index && (position as i64) <= self.index + self.added as i64;
+        if is_in_block || (position as i64 == self.index && self.added > 0) {
+            self.added -= 1;
         }
         let track = self.order.remove(position);
         self.tracks.remove(track);
@@ -202,11 +227,38 @@ impl Queue {
             return;
         }
         let to = to.min(n - 1);
+        // В блок добавленных и из него: переставленный трек становится добавленным либо перестаёт им быть
+        let block = |p: usize| p as i64 > self.index && (p as i64) <= self.index + self.added as i64;
+        match (block(from), block(to)) {
+            (true, false) => self.added -= 1,
+            (false, true) => self.added += 1,
+            _ => {}
+        }
         let playing = self.current();
         let item = self.order.remove(from);
         self.order.insert(to, item);
         if let Some(track) = playing {
             self.index = self.order.iter().position(|i| *i == track).map_or(-1, |p| p as i64);
+        }
+    }
+
+    /// Убрать добавленное человеком («Очистить» у «Далее в очереди · вы добавили»): источник играет дальше.
+    pub fn clear_added(&mut self) {
+        let first = usize::try_from(self.index + 1).unwrap_or(0);
+        for _ in 0..self.added {
+            if first < self.order.len() {
+                let track = self.order.remove(first);
+                self.tracks.remove(track);
+                for i in &mut self.order {
+                    if *i > track {
+                        *i -= 1;
+                    }
+                }
+            }
+        }
+        self.added = 0;
+        if self.order.is_empty() {
+            self.index = -1;
         }
     }
 
@@ -217,6 +269,7 @@ impl Queue {
                 self.tracks = vec![self.tracks[track].clone()];
                 self.order = vec![0];
                 self.index = 0;
+                self.added = 0;
             }
             None => *self = Queue { shuffle: self.shuffle, repeat: self.repeat, seed: self.seed, ..Default::default() },
         }
@@ -308,10 +361,13 @@ mod tests {
         let mut q = Queue::start(ids(4), 1, false, Repeat::Off, 0);
         q.add(vec!["n1".into(), "n2".into()], true);
         assert_eq!(q.view()["upcoming"], json!(["t0", "t1", "n1", "n2", "t2", "t3"]));
+        // «В очередь» — за добавленным раньше, но до остального источника
         q.add(vec!["last".into()], false);
+        assert_eq!(q.view()["upcoming"], json!(["t0", "t1", "n1", "n2", "last", "t2", "t3"]));
+        assert_eq!(q.added, 3);
         q.move_to(5, 0);
         assert_eq!(q.view()["currentId"], "t1");
-        assert_eq!(q.view()["upcoming"], json!(["t3", "t0", "t1", "n1", "n2", "t2", "last"]));
+        assert_eq!(q.view()["upcoming"], json!(["t2", "t0", "t1", "n1", "n2", "last", "t3"]));
         q.remove(0);
         assert_eq!(q.view()["currentId"], "t1");
         q.remove(1);

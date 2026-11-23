@@ -15,6 +15,7 @@ import { startOfflinePlaylistSync } from './musicOfflineSync';
 import {
   callMusic, getMusicInfo, loadMusicInfo, restoreMusicQueue,
 } from './musicPlayer';
+import { getIsMusicPlayerOpen } from './musicPlayerView';
 import { refreshPlaylists } from './musicPlaylists';
 import {
   consumeMusicAddRequest, getIsMusicPage, getMusicAddRequest, getMusicQuery, getMusicTab, getMusicView, goBackMusic,
@@ -48,6 +49,7 @@ import MusicMixArtistsView from './MusicMixArtistsView';
 import MusicMixView from './MusicMixView';
 import MusicNewPlaylist from './MusicNewPlaylist';
 import MusicOffline from './MusicOffline';
+import MusicPlayerScreen from './MusicPlayerScreen';
 import MusicPlaylistList from './MusicPlaylistList';
 import MusicPlaylists from './MusicPlaylists';
 import MusicQueue from './MusicQueue';
@@ -88,6 +90,7 @@ const Music = () => {
   const isOnline = useBrowserOnline();
   const isPage = isPhone && view.kind !== 'home' && view.kind !== 'search' && view.kind !== 'library';
   const query = useDerivedState(getMusicQuery);
+  const isPlayerOpen = useDerivedState(getIsMusicPlayerOpen);
   const isSearchBar = view.kind === 'home' || view.kind === 'search';
   const deskSearchRef = useRef<HTMLInputElement>();
 
@@ -286,62 +289,67 @@ const Music = () => {
     // Доска `DeskMusic`: медиатека слева, вид в середине на своей панели, плеер внизу во всю ширину
     return (
       <div className={styles.desk}>
-        <div className={styles.deskRow}>
-          <aside className={styles.deskLibrary} aria-label={lang('MusicLibrary')} data-music-nav>
-            <div className={styles.deskLibraryHead}>
-              <span className={styles.deskLibraryTitle}>{lang('MusicLibrary')}</span>
-              <button
-                type="button"
-                className={styles.deskLibraryButton}
-                aria-label={lang('MusicSearch')}
-                data-view="search"
-                onClick={handleOpenSearch}
+        {isPlayerOpen ? <MusicPlayerScreen isInline /> : (
+          <div className={styles.deskRow}>
+            <aside className={styles.deskLibrary} aria-label={lang('MusicLibrary')} data-music-nav>
+              <div className={styles.deskLibraryHead}>
+                <span className={styles.deskLibraryTitle}>{lang('MusicLibrary')}</span>
+                <button
+                  type="button"
+                  className={styles.deskLibraryButton}
+                  aria-label={lang('MusicSearch')}
+                  data-view="search"
+                  onClick={handleOpenSearch}
+                >
+                  <ParvaneIcon name="search" isSmall />
+                </button>
+                <button
+                  type="button"
+                  className={styles.deskLibraryButton}
+                  aria-label={lang('MusicLibraryMore')}
+                  data-music-library-more
+                  onClick={handleLibraryMore}
+                >
+                  <ParvaneIcon name="dotsH" isSmall />
+                </button>
+              </div>
+              <div className={buildClassName(styles.deskLibraryList, 'custom-scroll')}>
+                <MusicLibraryItems info={info} view={view} />
+              </div>
+            </aside>
+            <div className={styles.deskCenter}>
+              <div
+                className={buildClassName(styles.deskPanel, styles.main, 'custom-scroll')}
+                data-music-view={view.kind}
               >
-                <ParvaneIcon name="search" isSmall />
-              </button>
-              <button
-                type="button"
-                className={styles.deskLibraryButton}
-                aria-label={lang('MusicLibraryMore')}
-                data-music-library-more
-                onClick={handleLibraryMore}
-              >
-                <ParvaneIcon name="dotsH" isSmall />
-              </button>
-            </div>
-            <div className={buildClassName(styles.deskLibraryList, 'custom-scroll')}>
-              <MusicLibraryItems info={info} view={view} />
-            </div>
-          </aside>
-          <div className={styles.deskCenter}>
-            <div className={buildClassName(styles.deskPanel, styles.main, 'custom-scroll')} data-music-view={view.kind}>
-              {/* Доска `DeskMusic`: на главной и в поиске сверху — поле поиска и «Добавляем N», на остальных — только
+                {/* Доска `DeskMusic`: на главной и в поиске сверху — поле поиска и «Добавляем N», на остальных — только
                   чип в углу */}
-              {isSearchBar ? (
-                <div className={styles.deskTop}>
-                  <div className={styles.deskSearch}>
-                    <ParvaneIcon name="search" isSmall className={styles.deskSearchIcon} />
-                    <input
-                      ref={deskSearchRef}
-                      className={styles.deskSearchInput}
-                      type="search"
-                      value={query}
-                      placeholder={lang('MusicSearchWhat')}
-                      aria-label={lang('MusicSearchWhat')}
-                      data-music-desk-search
-                      onChange={handleDeskQuery}
-                    />
+                {isSearchBar ? (
+                  <div className={styles.deskTop}>
+                    <div className={styles.deskSearch}>
+                      <ParvaneIcon name="search" isSmall className={styles.deskSearchIcon} />
+                      <input
+                        ref={deskSearchRef}
+                        className={styles.deskSearchInput}
+                        type="search"
+                        value={query}
+                        placeholder={lang('MusicSearchWhat')}
+                        aria-label={lang('MusicSearchWhat')}
+                        data-music-desk-search
+                        onChange={handleDeskQuery}
+                      />
+                    </div>
+                    <span className={styles.deskTopGap} />
+                    <MusicUploadStatus />
                   </div>
-                  <span className={styles.deskTopGap} />
-                  <MusicUploadStatus />
-                </div>
-              ) : (
-                <div className={styles.deskCorner}><MusicUploadStatus /></div>
-              )}
-              {renderView(view)}
+                ) : (
+                  <div className={styles.deskCorner}><MusicUploadStatus /></div>
+                )}
+                {renderView(view)}
+              </div>
             </div>
           </div>
-        </div>
+        )}
         <MusicDeskPlayer />
         {libraryMenu && (
           <MusicMenu

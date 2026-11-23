@@ -1433,6 +1433,21 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicNextShort': undefined;
+  'MusicQueueEnd': undefined;
+  'MusicNextFromStarred': undefined;
+  'MusicNextFromOffline': undefined;
+  'MusicNextFromChat': undefined;
+  'MusicNowPlayingCaps': undefined;
+  'MusicQueueAddedCaps': undefined;
+  'MusicShuffleShort': undefined;
+  'MusicRepeatShort': undefined;
+  'MusicLyrics': undefined;
+  'MusicAboutArtist': undefined;
+  'MusicPickerTitle': undefined;
+  'MusicPickerSearch': undefined;
+  'MusicPickerAlready': undefined;
+  'MusicPickerDone': undefined;
   'MusicAlbumCatalog': undefined;
   'MusicAddAllToServer': undefined;
   'MusicMoreActions': undefined;
@@ -4954,6 +4969,21 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicSortBy': {
     'name': V;
   };
+  'MusicNextFromPlaylist': {
+    'name': V;
+  };
+  'MusicNextFromAlbum': {
+    'name': V;
+  };
+  'MusicNextFromArtist': {
+    'name': V;
+  };
+  'MusicNextFromSearch': {
+    'name': V;
+  };
+  'MusicNextFromHome': {
+    'name': V;
+  };
   'MusicOwnedOf': {
     'owned': V;
     'total': V;
@@ -6611,6 +6641,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'limit': V;
   };
   'MusicTracksCount': {
+    'count': V;
+  };
+  'MusicPickerShared': {
     'count': V;
   };
   'MusicAddingToServer': {

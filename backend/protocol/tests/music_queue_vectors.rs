@@ -19,7 +19,7 @@ fn player_queue_follows_the_shared_sample() {
                 args["queue"] = queue.clone();
             }
             let view = call_static(call, &args).unwrap_or_else(|e| panic!("{name}, шаг {i} ({call}): {e}"));
-            for field in ["currentId", "upcoming", "repeat"] {
+            for field in ["currentId", "upcoming", "repeat", "added"] {
                 if let Some(expected) = step.get(field) {
                     assert_eq!(&view[field], expected, "{name}, шаг {i} ({call}): {field}");
                 }

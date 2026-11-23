@@ -39,6 +39,10 @@
   background: none;
 }
 
+.open:focus {
+  outline: none;
+}
+
 .cover {
   flex: none;
   border-radius: 0.3125rem;

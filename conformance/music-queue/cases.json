@@ -5,52 +5,401 @@
     {
       "name": "по порядку: следующий, конец без повтора останавливает, вручную — с начала",
       "steps": [
-        { "call": "musicQueueStart", "args": { "tracks": ["a", "b", "c"], "start": 1 }, "currentId": "b", "upcoming": ["a", "b", "c"] },
-        { "call": "musicQueueNext", "args": { "auto": true }, "currentId": "c" },
-        { "call": "musicQueueNext", "args": { "auto": true }, "currentId": null },
-        { "call": "musicQueueNext", "args": { "auto": false }, "currentId": "a" },
-        { "call": "musicQueuePrev", "args": {}, "currentId": "c" }
+        {
+          "call": "musicQueueStart",
+          "args": {
+            "tracks": [
+              "a",
+              "b",
+              "c"
+            ],
+            "start": 1
+          },
+          "currentId": "b",
+          "upcoming": [
+            "a",
+            "b",
+            "c"
+          ]
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": true
+          },
+          "currentId": "c"
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": true
+          },
+          "currentId": null
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": false
+          },
+          "currentId": "a"
+        },
+        {
+          "call": "musicQueuePrev",
+          "args": {},
+          "currentId": "c"
+        }
       ]
     },
     {
       "name": "повтор: весь список по кругу, один трек держится только когда доигран сам",
       "steps": [
-        { "call": "musicQueueStart", "args": { "tracks": ["a", "b"], "start": 1 }, "currentId": "b" },
-        { "call": "musicQueueRepeat", "args": {}, "repeat": "all" },
-        { "call": "musicQueueNext", "args": { "auto": true }, "currentId": "a" },
-        { "call": "musicQueueRepeat", "args": {}, "repeat": "one" },
-        { "call": "musicQueueNext", "args": { "auto": true }, "currentId": "a" },
-        { "call": "musicQueueNext", "args": { "auto": false }, "currentId": "b" },
-        { "call": "musicQueueRepeat", "args": {}, "repeat": "off" }
+        {
+          "call": "musicQueueStart",
+          "args": {
+            "tracks": [
+              "a",
+              "b"
+            ],
+            "start": 1
+          },
+          "currentId": "b"
+        },
+        {
+          "call": "musicQueueRepeat",
+          "args": {},
+          "repeat": "all"
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": true
+          },
+          "currentId": "a"
+        },
+        {
+          "call": "musicQueueRepeat",
+          "args": {},
+          "repeat": "one"
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": true
+          },
+          "currentId": "a"
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": false
+          },
+          "currentId": "b"
+        },
+        {
+          "call": "musicQueueRepeat",
+          "args": {},
+          "repeat": "off"
+        }
       ]
     },
     {
       "name": "вперемешку: играющий остаётся, порядок задаёт seed и одинаков у всех клиентов",
       "steps": [
-        { "call": "musicQueueStart", "args": { "tracks": ["a", "b", "c", "d", "e", "f"], "start": 2, "shuffle": true, "seed": 42 }, "currentId": "c", "upcoming": ["c", "e", "d", "b", "a", "f"] },
-        { "call": "musicQueueNext", "args": { "auto": true }, "currentId": "e" },
-        { "call": "musicQueueShuffle", "args": { "on": false }, "currentId": "e", "upcoming": ["a", "b", "c", "d", "e", "f"] },
-        { "call": "musicQueueShuffle", "args": { "on": true, "seed": 7 }, "currentId": "e" }
+        {
+          "call": "musicQueueStart",
+          "args": {
+            "tracks": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e",
+              "f"
+            ],
+            "start": 2,
+            "shuffle": true,
+            "seed": 42
+          },
+          "currentId": "c",
+          "upcoming": [
+            "c",
+            "e",
+            "d",
+            "b",
+            "a",
+            "f"
+          ]
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": true
+          },
+          "currentId": "e"
+        },
+        {
+          "call": "musicQueueShuffle",
+          "args": {
+            "on": false
+          },
+          "currentId": "e",
+          "upcoming": [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+            "f"
+          ]
+        },
+        {
+          "call": "musicQueueShuffle",
+          "args": {
+            "on": true,
+            "seed": 7
+          },
+          "currentId": "e"
+        }
       ]
     },
     {
-      "name": "правка очереди: добавить следующим и в конец, переставить, убрать, очистить",
+      "name": "правка очереди: добавленное человеком играет раньше источника, переставить, убрать, очистить",
       "steps": [
-        { "call": "musicQueueStart", "args": { "tracks": ["a", "b", "c"], "start": 0 }, "currentId": "a" },
-        { "call": "musicQueueAdd", "args": { "tracks": ["x"], "next": true }, "currentId": "a", "upcoming": ["a", "x", "b", "c"] },
-        { "call": "musicQueueAdd", "args": { "tracks": ["y"], "next": false }, "upcoming": ["a", "x", "b", "c", "y"] },
-        { "call": "musicQueueMove", "args": { "from": 4, "to": 1 }, "currentId": "a", "upcoming": ["a", "y", "x", "b", "c"] },
-        { "call": "musicQueueRemove", "args": { "position": 0 }, "currentId": "y", "upcoming": ["y", "x", "b", "c"] },
-        { "call": "musicQueueJump", "args": { "position": 2 }, "currentId": "b" },
-        { "call": "musicQueueClear", "args": {}, "currentId": "b", "upcoming": ["b"] }
+        {
+          "call": "musicQueueStart",
+          "args": {
+            "tracks": [
+              "a",
+              "b",
+              "c"
+            ],
+            "start": 0
+          },
+          "currentId": "a"
+        },
+        {
+          "call": "musicQueueAdd",
+          "args": {
+            "tracks": [
+              "x"
+            ],
+            "next": true
+          },
+          "currentId": "a",
+          "upcoming": [
+            "a",
+            "x",
+            "b",
+            "c"
+          ],
+          "added": 1
+        },
+        {
+          "call": "musicQueueAdd",
+          "args": {
+            "tracks": [
+              "y"
+            ],
+            "next": false
+          },
+          "upcoming": [
+            "a",
+            "x",
+            "y",
+            "b",
+            "c"
+          ],
+          "added": 2
+        },
+        {
+          "call": "musicQueueMove",
+          "args": {
+            "from": 2,
+            "to": 1
+          },
+          "currentId": "a",
+          "upcoming": [
+            "a",
+            "y",
+            "x",
+            "b",
+            "c"
+          ],
+          "added": 2
+        },
+        {
+          "call": "musicQueueRemove",
+          "args": {
+            "position": 0
+          },
+          "currentId": "y",
+          "upcoming": [
+            "y",
+            "x",
+            "b",
+            "c"
+          ],
+          "added": 1
+        },
+        {
+          "call": "musicQueueJump",
+          "args": {
+            "position": 2
+          },
+          "currentId": "b",
+          "added": 0
+        },
+        {
+          "call": "musicQueueClear",
+          "args": {},
+          "currentId": "b",
+          "upcoming": [
+            "b"
+          ]
+        }
       ]
     },
     {
       "name": "пустая очередь и негодное сохранённое",
       "steps": [
-        { "call": "musicQueueView", "args": { "queue": { "tracks": ["a", ""], "index": 5, "order": [1, 1] } }, "currentId": null, "upcoming": ["a"] },
-        { "call": "musicQueueAdd", "args": { "tracks": ["b"], "next": true }, "currentId": null, "upcoming": ["b", "a"] },
-        { "call": "musicQueueNext", "args": { "auto": false }, "currentId": "b" }
+        {
+          "call": "musicQueueView",
+          "args": {
+            "queue": {
+              "tracks": [
+                "a",
+                ""
+              ],
+              "index": 5,
+              "order": [
+                1,
+                1
+              ]
+            }
+          },
+          "currentId": null,
+          "upcoming": [
+            "a"
+          ]
+        },
+        {
+          "call": "musicQueueAdd",
+          "args": {
+            "tracks": [
+              "b"
+            ],
+            "next": true
+          },
+          "currentId": null,
+          "upcoming": [
+            "b",
+            "a"
+          ]
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": false
+          },
+          "currentId": "b"
+        }
+      ]
+    },
+    {
+      "name": "«Далее в очереди · вы добавили»: следующий съедает добавленное, «Очистить» убирает только его",
+      "steps": [
+        {
+          "call": "musicQueueStart",
+          "args": {
+            "tracks": [
+              "a",
+              "b",
+              "c"
+            ],
+            "start": 0
+          },
+          "currentId": "a",
+          "added": 0
+        },
+        {
+          "call": "musicQueueAdd",
+          "args": {
+            "tracks": [
+              "x",
+              "y"
+            ],
+            "next": false
+          },
+          "upcoming": [
+            "a",
+            "x",
+            "y",
+            "b",
+            "c"
+          ],
+          "added": 2
+        },
+        {
+          "call": "musicQueueNext",
+          "args": {
+            "auto": true
+          },
+          "currentId": "x",
+          "added": 1
+        },
+        {
+          "call": "musicQueueAdd",
+          "args": {
+            "tracks": [
+              "z"
+            ],
+            "next": false
+          },
+          "upcoming": [
+            "a",
+            "x",
+            "y",
+            "z",
+            "b",
+            "c"
+          ],
+          "added": 2
+        },
+        {
+          "call": "musicQueueClearAdded",
+          "args": {},
+          "currentId": "x",
+          "upcoming": [
+            "a",
+            "x",
+            "b",
+            "c"
+          ],
+          "added": 0
+        },
+        {
+          "call": "musicQueueAdd",
+          "args": {
+            "tracks": [
+              "w"
+            ],
+            "next": true
+          },
+          "upcoming": [
+            "a",
+            "x",
+            "w",
+            "b",
+            "c"
+          ],
+          "added": 1
+        },
+        {
+          "call": "musicQueuePrev",
+          "args": {},
+          "currentId": "a",
+          "added": 0
+        }
       ]
     }
   ]

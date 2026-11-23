@@ -32,6 +32,8 @@ export type MusicQueue = {
   seed: number;
   currentId?: string;
   upcoming: string[];
+  // Сколько треков сразу после играющего добавил сам человек («Далее в очереди · вы добавили»)
+  added: number;
 };
 
 // Откуда играет очередь (доски `MusicPlayer`, `XdMusic`: «Играет из плейлиста · Для работы»)
@@ -63,7 +65,7 @@ const URL_MARGIN_MS = 60 * 1000;
 const RESTART_AFTER_SECS = 3;
 const TRACKS_PER_REQUEST = 100;
 const EMPTY_QUEUE: MusicQueue = {
-  tracks: [], index: -1, shuffle: false, repeat: 'off', order: [], seed: 0, upcoming: [],
+  tracks: [], index: -1, shuffle: false, repeat: 'off', order: [], seed: 0, upcoming: [], added: 0,
 };
 
 const [getMusicPlayer, setMusicPlayer] = createSignal<MusicPlayerState>({
@@ -332,6 +334,11 @@ export function moveQueueItem(from: number, to: number) {
 
 export function clearQueue() {
   applyQueue(queueCall('musicQueueClear'), false);
+}
+
+/** «Очистить» добавленное человеком: источник играет дальше. */
+export function clearAddedToQueue() {
+  applyQueue(queueCall('musicQueueClearAdded'), false);
 }
 
 export function toggleShuffle() {

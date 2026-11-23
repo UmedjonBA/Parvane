@@ -1,0 +1,127 @@
+// Очередь (доски `MusicPlayer-06` — шторка, `XdMusic-01` — страница компьютера)
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+}
+
+.title {
+  flex: 1;
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.close {
+  cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+
+  color: var(--pv-fg);
+
+  background: none;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+}
+
+.caps {
+  font-size: 0.6875rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.capsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.link {
+  cursor: pointer;
+
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: none;
+}
+
+.rows {
+  margin: 0.25rem -1rem 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.empty {
+  font-size: 0.875rem;
+  color: var(--pv-muted);
+}
+
+.bottom {
+  position: sticky;
+  bottom: 0;
+
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+
+  padding: 0.75rem 0;
+
+  background: var(--pv-panel);
+}
+
+.pill {
+  cursor: pointer;
+
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+
+  height: 2.375rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 1.1875rem;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--pv-fg);
+  white-space: nowrap;
+
+  background: var(--pv-panel);
+}
+
+.pillOn {
+  border-color: var(--pv-at);
+  color: var(--pv-at);
+}
+
+.rootSheet {
+  .title {
+    font-size: 1.125rem;
+  }
+
+  .caps {
+    padding-top: 0.25rem;
+  }
+}

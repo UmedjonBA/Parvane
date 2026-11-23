@@ -926,7 +926,8 @@ const Main = ({
       {shouldMountMusic && <Music />}
       {shouldMountCloud && <Cloud isMobile={isMobile} />}
       {shouldMountKnowledge && <Knowledge />}
-      {isMusicPlayerOpen && <MusicPlayerScreen />}
+      {/* Компьютер: плеер — внутри «Музыки» над её нижним плеером (доска `XdMusic-02`) */}
+      {isMusicPlayerOpen && isMobile && <MusicPlayerScreen />}
       {isTabBarShown && (
         <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen || isSettingsModulesOpen} />
       )}

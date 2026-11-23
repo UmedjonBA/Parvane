@@ -1,114 +1,168 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useMemo, useState,
+} from '../../../lib/teact/teact';
+import { getActions } from '../../../global';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  actOnPlaylists, addTracksToPlaylist, getPlaylists, getPlaylistsStatus, refreshPlaylists,
-} from './musicPlaylists';
+  addTracksToShared, canEditTracks, getSharedPlaylists, refreshSharedPlaylists, toTrackInput,
+} from './shared/musicShared';
+import { addTracksToPlaylist, getPlaylists, refreshPlaylists } from './musicPlaylists';
+import { openNewPlaylist } from './musicView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import kit from '../notes/PvKit.module.scss';
-import styles from './Music.module.scss';
+import ParvaneIcon from '../../main/ParvaneIcon';
+import PvSheet from '../notes/PvSheet';
+
+import styles from './MusicPlaylistPicker.module.scss';
 
 type OwnProps = {
-  track: MusicTrack;
+  tracks: MusicTrack[];
   onClose: NoneToVoidFunction;
 };
 
-const DONE_DELAY_MS = 1500;
+type Option = {
+  key: string;
+  id: string;
+  isShared: boolean;
+  name: string;
+  sub: string;
+  // Трек (один) уже есть в этом плейлисте
+  hasTrack: boolean;
+};
 
-// Parvane (spec 039, этап C): «в плейлист» — выбор плейлиста для трека либо новый плейлист сразу с этим треком
-const MusicPlaylistPicker = ({ track, onClose }: OwnProps) => {
+// Parvane (макет «Музыки» 23 ноя, доска `MusicPlaylist-04`): «В плейлист…» — поиск по плейлистам, «Новый плейлист»,
+// свои и общие (где можно добавлять) с флажками, «Готово» добавляет в отмеченные. Где трек уже есть — «уже есть»
+const MusicPlaylistPicker = ({ tracks, onClose }: OwnProps) => {
+  const { showNotification } = getActions();
   const lang = useLang();
   const playlists = useDerivedState(getPlaylists);
-  const status = useDerivedState(getPlaylistsStatus);
-  const [newName, setNewName] = useState('');
-  const [outcome, setOutcome] = useState<'added' | 'present' | 'failed'>();
+  const shared = useDerivedState(getSharedPlaylists);
+  const [query, setQuery] = useState('');
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [isSaving, setIsSaving] = useState(false);
+  const single = tracks.length === 1 ? tracks[0] : undefined;
 
   useEffect(() => {
     void refreshPlaylists();
+    void refreshSharedPlaylists();
   }, []);
 
-  useEffect(() => {
-    if (!outcome || outcome === 'failed') return undefined;
-    const timer = window.setTimeout(onClose, DONE_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [outcome, onClose]);
+  const options = useMemo<Option[]>(() => [
+    ...playlists.map((playlist) => ({
+      key: `p:${playlist.id}`,
+      id: playlist.id,
+      isShared: false,
+      name: playlist.name,
+      sub: lang('MusicTracksCount', { count: playlist.count }, { pluralValue: playlist.count }),
+      hasTrack: Boolean(single && playlist.items.some((item) => item.trackId === single.id)),
+    })),
+    ...shared.filter((playlist) => canEditTracks(playlist.myRole)).map((playlist) => ({
+      key: `s:${playlist.id}`,
+      id: playlist.id,
+      isShared: true,
+      name: playlist.name,
+      sub: lang('MusicPickerShared', { count: playlist.trackCount }, { pluralValue: playlist.trackCount }),
+      hasTrack: false,
+    })),
+  ], [playlists, shared, single, lang]);
+  const text = query.trim().toLowerCase();
+  const shown = text ? options.filter((option) => option.name.toLowerCase().includes(text)) : options;
 
-  const addTo = useLastCallback(async (playlistId: string) => {
-    const result = await addTracksToPlaylist(playlistId, [track]);
-    setOutcome(!result ? 'failed' : result.skipped ? 'present' : 'added');
+  const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.currentTarget.value));
+  const handleToggle = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const key = e.currentTarget.dataset.key!;
+    setPicked((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   });
-
-  const handlePick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    void addTo(e.currentTarget.dataset.playlist!);
+  const handleNew = useLastCallback(() => {
+    onClose();
+    openNewPlaylist(single);
   });
-
-  const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewName(e.currentTarget.value);
-  });
-
-  const handleCreate = useLastCallback(async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const name = newName.trim();
-    if (!name) return;
-    const created = await actOnPlaylists({ action: 'create', name });
-    if (!created?.id) {
-      setOutcome('failed');
+  const handleDone = useLastCallback(async () => {
+    const chosen = options.filter((option) => picked.has(option.key));
+    if (!chosen.length) {
+      onClose();
       return;
     }
-    await addTo(created.id);
+    setIsSaving(true);
+    const results = await Promise.all(chosen.map((option) => (option.isShared
+      ? addTracksToShared(option.id, tracks.map(toTrackInput)).then((skipped) => skipped !== undefined)
+      : addTracksToPlaylist(option.id, tracks).then(Boolean))));
+    setIsSaving(false);
+    const isAllDone = results.every(Boolean);
+    showNotification({
+      message: isAllDone ? lang('MusicAddedTo', { name: chosen.map((option) => option.name).join(', ') })
+        : lang('MusicPlaylistFailed'),
+    });
+    onClose();
   });
 
-  const isUsable = status === 'ready' || status === 'loading';
+  const subtitle = single
+    ? [single.artist ? `${single.title} · ${single.artist}` : single.title].join('')
+    : lang('MusicTracksCount', { count: tracks.length }, { pluralValue: tracks.length });
+
   return (
-    <section className={styles.picker} data-playlist-picker={outcome || 'open'}>
-      <div className={styles.fetchLine}>
-        <span className={kit.grow}>{lang('MusicAddToPlaylistTitle', { name: track.title })}</span>
-        <button type="button" className={kit.btn} onClick={onClose}>{lang('Close')}</button>
-      </div>
-      {!isUsable && <div className={styles.error} role="status">{lang('MusicPlaylistsNeedLinking')}</div>}
-      {outcome && (
-        <div className={outcome === 'failed' ? styles.error : kit.muted} role="status">
-          {lang(outcome === 'added' ? 'MusicPlaylistAdded' : outcome === 'present'
-            ? 'MusicPlaylistAlreadyThere' : 'MusicPlaylistFailed')}
-        </div>
-      )}
-      {isUsable && !outcome && (
-        <>
-          <div className={styles.pickerList}>
-            {playlists.map((playlist) => (
+    <PvSheet isOpen title={lang('MusicPickerTitle')} subtitle={subtitle} onClose={onClose}>
+      <div className={styles.root} data-playlist-picker>
+        <input
+          className={styles.search}
+          type="search"
+          value={query}
+          placeholder={lang('MusicPickerSearch')}
+          aria-label={lang('MusicPickerSearch')}
+          onChange={handleQuery}
+        />
+        <button type="button" className={styles.newRow} data-picker-new onClick={handleNew}>
+          <ParvaneIcon name="plus" isSmall />
+          {lang('MusicPlaylistNew')}
+        </button>
+        <div className={styles.list} role="group">
+          {shown.map((option) => {
+            const isOn = option.hasTrack || picked.has(option.key);
+            return (
               <button
-                key={playlist.id}
+                key={option.key}
                 type="button"
-                className={kit.btn}
-                data-playlist={playlist.id}
-                onClick={handlePick}
+                role="checkbox"
+                aria-checked={isOn}
+                className={styles.row}
+                disabled={option.hasTrack}
+                data-key={option.key}
+                data-playlist={option.id}
+                onClick={handleToggle}
               >
-                {playlist.name}
+                <span className={buildClassName(styles.box, isOn && styles.boxOn)}>
+                  {isOn && <ParvaneIcon name="check" isSmall />}
+                </span>
+                <span className={styles.text}>
+                  <span className={styles.name}>{option.name}</span>
+                  <span className={styles.sub}>{option.hasTrack ? lang('MusicPickerAlready') : option.sub}</span>
+                </span>
               </button>
-            ))}
-          </div>
-          <form className={styles.playlistForm} onSubmit={handleCreate}>
-            <input
-              className={buildClassName(kit.input, kit.grow)}
-              value={newName}
-              maxLength={120}
-              placeholder={lang('MusicPlaylistNewPlaceholder')}
-              aria-label={lang('MusicPlaylistNewPlaceholder')}
-              onChange={handleNameChange}
-            />
-            <button type="submit" className={buildClassName(kit.btn, kit.btnAcc)} disabled={!newName.trim()}>
-              {lang('MusicPlaylistCreateAndAdd')}
-            </button>
-          </form>
-        </>
-      )}
-    </section>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          className={styles.done}
+          disabled={isSaving}
+          data-picker-done
+          onClick={handleDone}
+        >
+          {lang('MusicPickerDone')}
+        </button>
+      </div>
+    </PvSheet>
   );
 };
 

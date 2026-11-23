@@ -199,7 +199,7 @@ const MusicTrackMenu = ({
   ].filter((action): action is MusicMenuAction => Boolean(action));
   const facts = [track.artist, track.album || formatTrackTime(track.durationSecs), note].filter(Boolean).join(' · ');
 
-  if (isPicking) return <MusicPlaylistPicker track={track} onClose={onClose} />;
+  if (isPicking) return <MusicPlaylistPicker tracks={[track]} onClose={onClose} />;
 
   return (
     <MusicMenu
