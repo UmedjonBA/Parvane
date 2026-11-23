@@ -57,6 +57,8 @@ export type MusicTrack = {
   isCopy?: boolean;
   // Свой файл либо добавлен по ссылке
   isOwnFile?: boolean;
+  // Качество файла: «FLAC», «MP3 320» (вкладка «Треки» поиска)
+  quality?: string;
   adder?: string;
   // Выравнивание громкости (ReplayGain трека), дБ
   replayGainDb?: number;
@@ -303,6 +305,7 @@ export function toTrack(raw: Json): MusicTrack {
     version: count(raw, 'version') || undefined,
     isCopy: Boolean(field(raw, 'copy')) || undefined,
     isOwnFile: Boolean(field(raw, 'own_file')) || undefined,
+    quality: qualityOf(text(raw, 'mime'), count(raw, 'bitrate_kbps')),
     adder: text(raw, 'adder') || undefined,
     replayGainDb: Number(field(raw, 'replay_gain_cdb')) / 100 || undefined,
   };
@@ -383,6 +386,19 @@ function fromCatalogTrack(track: MusicCatalogTrack): Json {
     cover_url: track.coverUrl,
     album_ref: track.albumRef,
   };
+}
+
+// «audio/flac» → «FLAC», «audio/mpeg» и 320 → «MP3 320»
+const LOSSLESS = new Set(['FLAC', 'ALAC', 'WAV']);
+const MIME_NAMES: Record<string, string> = {
+  'audio/mpeg': 'MP3', 'audio/flac': 'FLAC', 'audio/x-flac': 'FLAC', 'audio/ogg': 'OGG', 'audio/opus': 'OPUS',
+  'audio/mp4': 'AAC', 'audio/aac': 'AAC', 'audio/x-m4a': 'AAC', 'audio/wav': 'WAV', 'audio/x-wav': 'WAV',
+};
+
+function qualityOf(mime: string, bitrateKbps: number) {
+  const name = MIME_NAMES[mime.toLowerCase()];
+  if (!name) return undefined;
+  return LOSSLESS.has(name) || !bitrateKbps ? name : `${name} ${bitrateKbps}`;
 }
 
 export function toFetchJob(raw: Json): MusicFetchJob {

@@ -438,6 +438,9 @@ try {
   await phoneField.fill('harbor');
   await visible(phone.locator('[data-music-tracks] [data-track="t2"]'));
   await visible(phone.locator('[data-music-tracks] [data-track="t4"]'));
+  // Вкладка «Треки» (доска `MusicSearch-05`): у трека сервера — качество файла
+  await phone.locator('[data-filter="tracks"]').click();
+  await visible(phone.locator('[data-music-tracks] [data-track="t2"]').getByText(/WAV/));
   await phone.locator('[data-filter="albums"]').click();
   await gone(phone.locator('[data-music-tracks]'));
   await phone.locator('[data-filter="all"]').click();

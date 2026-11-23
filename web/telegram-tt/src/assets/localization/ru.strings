@@ -1713,6 +1713,13 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicVersionsOf_one" = "{count} версия {name}";
+"MusicVersionsOf_few" = "{count} версии {name}";
+"MusicVersionsOf_many" = "{count} версий {name}";
+"MusicVersionsOf_other" = "{count} версии {name}";
+"MusicKeepOneTitle" = "Оставить одну версию";
+"MusicKeepOneNote" = "Остальные уйдут в корзину на 30 дней. Чужие файлы убирает добавивший либо администратор.";
+"MusicKeepThis" = "Оставить эту";
 "MusicSourceOwn" = "Свои файлы и ссылки";
 "MusicSourceOwnHint" = "загрузили люди сами";
 "MusicSourceReuploads" = "Перезаливы";

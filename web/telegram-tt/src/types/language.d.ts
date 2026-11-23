@@ -1431,6 +1431,9 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicKeepOneTitle': undefined;
+  'MusicKeepOneNote': undefined;
+  'MusicKeepThis': undefined;
   'MusicSourceOwn': undefined;
   'MusicSourceOwnHint': undefined;
   'MusicSourceReuploads': undefined;
@@ -6944,6 +6947,10 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   };
   'MusicTracksCount': {
     'count': V;
+  };
+  'MusicVersionsOf': {
+    'count': V;
+    'name': V;
   };
   'MusicSourceFound': {
     'count': V;

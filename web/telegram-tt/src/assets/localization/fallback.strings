@@ -1969,6 +1969,11 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicVersionsOf_one" = "{count} version of {name}";
+"MusicVersionsOf_other" = "{count} versions of {name}";
+"MusicKeepOneTitle" = "Keep one version";
+"MusicKeepOneNote" = "The others go to the trash for 30 days. Files of others are removed by whoever added them or an admin.";
+"MusicKeepThis" = "Keep this one";
 "MusicSourceOwn" = "Own files and links";
 "MusicSourceOwnHint" = "uploaded by people";
 "MusicSourceReuploads" = "Re-uploads";

@@ -2,6 +2,7 @@ import type { TeactNode } from '../../../lib/teact/teact';
 import {
   memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
+import { getActions } from '../../../global';
 
 import type { MusicInfo, MusicTrack } from '../../../api/parvane/musicApi';
 import type { MusicRecentItem } from './musicSearchHistory';
@@ -9,7 +10,7 @@ import type { MusicSearchFound } from './musicSearchLists';
 
 import buildClassName from '../../../util/buildClassName';
 import { getSharedPlaylists } from './shared/musicShared';
-import { MUSIC_LIBRARY_CHANGED_EVENT } from './musicAdded';
+import { canDeleteTrack, deleteLibraryTrack, MUSIC_LIBRARY_CHANGED_EVENT } from './musicAdded';
 import { coverTone } from './musicFormat';
 import {
   callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
@@ -95,6 +96,7 @@ const ALL_TRACKS = 4;
 const MusicSearchView = ({
   info, isPhone, focusToken, onSendToChat,
 }: OwnProps) => {
+  const { showNotification } = getActions();
   const lang = useLang();
   const inputRef = useRef<HTMLInputElement>();
   const query = useDerivedState(getMusicQuery);
@@ -260,6 +262,33 @@ const MusicSearchView = ({
       })),
     ];
   }, [effective, playlists, shared]);
+
+  // Версии одного трека (исполнитель и название совпадают) среди найденного на сервере
+  const versionGroups = useMemo(() => {
+    const groups = new Map<string, MusicTrack[]>();
+    allServerTracks.forEach((track) => {
+      const key = `${track.artist}\n${track.title}`.toLowerCase();
+      groups.set(key, [...(groups.get(key) || []), track]);
+    });
+    return [...groups.values()].filter((tracks) => tracks.length > 1);
+  }, [allServerTracks]);
+  const [keepGroup, setKeepGroup] = useState<MusicTrack[]>();
+  const [keepId, setKeepId] = useState<string>();
+  const handleKeepOneOpen = useLastCallback(() => {
+    const group = versionGroups.find((tracks) => tracks.some((track) => canDeleteTrack(track.id)));
+    setKeepGroup(group);
+    setKeepId(group?.[0].id);
+  });
+  const handleKeepClose = useLastCallback(() => setKeepGroup(undefined));
+  const handleKeepPick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setKeepId(e.currentTarget.dataset.id);
+  });
+  const handleKeepConfirm = useLastCallback(async () => {
+    const others = (keepGroup || []).filter((track) => track.id !== keepId);
+    setKeepGroup(undefined);
+    const results = await Promise.all(others.map((track) => deleteLibraryTrack(track.id)));
+    showNotification({ message: lang(results.every(Boolean) ? 'MusicMovedToTrash' : 'MusicPlaylistFailed') });
+  });
 
   const handlePlay = useLastCallback((index: number) => {
     const track = serverTracks[index];
@@ -448,6 +477,8 @@ const MusicSearchView = ({
     const serverShown = limit ? serverTracks.slice(0, limit) : serverTracks;
     const catalogShown = limit ? catalogTracks.slice(0, Math.max(0, limit - serverShown.length)) : catalogTracks;
     if (!serverShown.length && !catalogShown.length) return undefined;
+    // Вкладка «Треки» (доска `MusicSearch-05`): у трека сервера — качество файла и кто добавил
+    const isDetailed = !limit;
     return (
       <ul className={styles.rows} data-music-tracks>
         {serverShown.map((track, index) => (
@@ -457,6 +488,7 @@ const MusicSearchView = ({
             index={index}
             isCurrent={track.id === current?.id}
             isPlaying={player.isPlaying}
+            note={isDetailed ? [track.quality, track.adder].filter(Boolean).join(' · ') || undefined : undefined}
             canQueue
             canSaveOffline
             onPlay={handlePlay}
@@ -468,6 +500,22 @@ const MusicSearchView = ({
           <MusicCatalogRow key={`catalog:${track.ref || `${track.artist}:${track.title}`}`} track={track} />
         ))}
       </ul>
+    );
+  }
+
+  // «Две версии … · Оставить одну» (доска `MusicSearch-05`): несколько файлов одного трека на сервере
+  function renderVersions() {
+    const group = versionGroups.find((tracks) => tracks.some((track) => canDeleteTrack(track.id)));
+    if (!group) return undefined;
+    return (
+      <div className={styles.versions} data-music-versions={group.length}>
+        <span className={styles.versionsText}>
+          {lang('MusicVersionsOf', { count: group.length, name: group[0].title }, { pluralValue: group.length })}
+        </span>
+        <button type="button" className={styles.versionsKeep} data-music-keep-one onClick={handleKeepOneOpen}>
+          {lang('MusicKeepOne')}
+        </button>
+      </div>
     );
   }
 
@@ -635,6 +683,7 @@ const MusicSearchView = ({
           </>
         )}
         {filter === 'tracks' && renderTracks()}
+        {filter === 'tracks' && renderVersions()}
         {filter === 'artists' && renderArtists()}
         {filter === 'albums' && renderAlbums()}
         {filter === 'playlists' && renderPlaylists()}
@@ -731,6 +780,46 @@ const MusicSearchView = ({
           onClick={handleShowSource}
         >
           {lang('MusicSourceShow')}
+        </button>
+      </PvSheet>
+      <PvSheet
+        isOpen={Boolean(keepGroup)}
+        title={lang('MusicKeepOneTitle')}
+        subtitle={keepGroup && `${keepGroup[0].title} · ${keepGroup[0].artist}`}
+        onClose={handleKeepClose}
+      >
+        <div className={styles.list} role="radiogroup" data-music-keep-sheet>
+          {(keepGroup || []).map((track) => (
+            <button
+              key={track.id}
+              type="button"
+              role="radio"
+              aria-checked={keepId === track.id}
+              className={styles.listRow}
+              data-id={track.id}
+              onClick={handleKeepPick}
+            >
+              <span className={buildClassName(styles.radio, keepId === track.id && styles.radioOn)} />
+              <span className={styles.listText}>
+                <span className={styles.listTitle}>
+                  {[track.version && track.version > 1 ? `v${track.version}` : undefined, track.quality]
+                    .filter(Boolean).join(' · ') || track.title}
+                </span>
+                <span className={styles.listSub}>
+                  {[track.album, track.adder].filter(Boolean).join(' · ')}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+        <p className={styles.keepNote}>{lang('MusicKeepOneNote')}</p>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc, styles.sourceShow)}
+          data-music-keep-confirm
+          onClick={handleKeepConfirm}
+        >
+          {lang('MusicKeepThis')}
         </button>
       </PvSheet>
     </div>
