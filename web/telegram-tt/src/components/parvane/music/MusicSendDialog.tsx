@@ -110,6 +110,11 @@ const MusicSendDialog = ({
     <SendRecipientScreen
       isOpen={Boolean(track || catalog || playlist)}
       preview={preview}
+      sheet={preview && {
+        title: lang('MusicSendToChat'),
+        subtitle: [preview.title, (track || catalog)?.artist].filter(Boolean).join(' · '),
+        note: lang('MusicSendNote'),
+      }}
       onSend={handleSend}
       onClose={onClose}
     />

@@ -103,3 +103,24 @@
 
   accent-color: var(--pv-at);
 }
+
+// Листом (доска `MusicChat-02`): поле «Кому», список в рамке, сноска и подпись с кнопкой
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.listSheet {
+  overflow-y: auto;
+  max-height: 16rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.625rem;
+}
+
+.sheetNote {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--pv-muted);
+}

@@ -22,6 +22,7 @@ import useOldLang from '../../hooks/useOldLang';
 
 import Avatar from '../common/Avatar';
 import ChatScreen from '../parvane/chatScreen/ChatScreen';
+import PvSheet from '../parvane/notes/PvSheet';
 
 import screen from '../parvane/chatScreen/ChatScreen.module.scss';
 import styles from './SendRecipientScreen.module.scss';
@@ -37,6 +38,8 @@ type OwnProps = {
   preview?: SendPreview;
   // Строки над подписью: дополнительные настройки отправки
   options?: TeactNode;
+  // Листом снизу (доска `MusicChat-02`): «Отправить в чат» с подписью «что · откуда» и сноской над подписью
+  sheet?: { title: string; subtitle?: string; note?: string };
   onSend: (chatIds: string[], caption: string) => void;
   onClose: NoneToVoidFunction;
 };
@@ -52,7 +55,7 @@ type StateProps = {
 // Выбор получателей с подписью (доска `RpPick`, «Кому отправить»): что отправляется, поиск, чаты с галочками,
 // внизу «Подпись, по желанию» и «Отправить в N чатов». Общий для пересылки и «Отправить в чат» из «Файлов»
 const SendRecipientScreen = ({
-  isOpen, preview, options, currentUserId, activeListIds, contactIds, onSend, onClose,
+  isOpen, preview, options, sheet, currentUserId, activeListIds, contactIds, onSend, onClose,
 }: OwnProps & StateProps) => {
   const lang = useLang();
   const oldLang = useOldLang();
@@ -143,6 +146,38 @@ const SendRecipientScreen = ({
     </>
   );
 
+  const searchField = (
+    <input
+      className={screen.inp}
+      type="search"
+      aria-label={lang(sheet ? 'SendPickerWhom' : 'SendPickerSearch')}
+      placeholder={lang(sheet ? 'SendPickerWhom' : 'SendPickerSearch')}
+      value={search}
+      data-send-search
+      onChange={handleSearchChange}
+    />
+  );
+  const listBlock = (
+    <div className={buildClassName(styles.list, sheet && styles.listSheet)} role="list">
+      {ids.map((id) => renderRow(id))}
+      {!ids.length && <div className={screen.hint}>{lang('SendPickerNothing')}</div>}
+    </div>
+  );
+
+  if (sheet) {
+    return (
+      <PvSheet isOpen={isOpen} title={sheet.title} subtitle={sheet.subtitle} onClose={onClose}>
+        <div className={styles.sheet} data-send-picker>
+          {searchField}
+          {options}
+          {listBlock}
+          {sheet.note && <p className={styles.sheetNote}>{sheet.note}</p>}
+          {footer}
+        </div>
+      </PvSheet>
+    );
+  }
+
   return (
     <ChatScreen
       isOpen={isOpen}
@@ -158,21 +193,10 @@ const SendRecipientScreen = ({
             {preview.subtitle && <span className={styles.previewSub} dir="auto">{preview.subtitle}</span>}
           </div>
         )}
-        <input
-          className={screen.inp}
-          type="search"
-          aria-label={lang('SendPickerSearch')}
-          placeholder={lang('SendPickerSearch')}
-          value={search}
-          data-send-search
-          onChange={handleSearchChange}
-        />
+        {searchField}
       </div>
       {options}
-      <div className={styles.list} role="list">
-        {ids.map((id) => renderRow(id))}
-        {!ids.length && <div className={screen.hint}>{lang('SendPickerNothing')}</div>}
-      </div>
+      {listBlock}
     </ChatScreen>
   );
 

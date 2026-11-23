@@ -373,7 +373,7 @@ try {
   await page.getByRole('menuitem', { name: 'Send to chat…', exact: true }).click();
   // «Кому отправить» (доска `RpPick`): карточка «название · исполнитель · трек», чаты с галочками
   const sendScreen = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
-  await visible(sendScreen.locator('[data-send-preview]').getByText('Соль'));
+  await visible(sendScreen.getByText(/Соль · Тихий порт/).first());
   await visible(sendScreen.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first());
   await page.keyboard.press('Escape');
   await sendScreen.waitFor({ state: 'hidden' });
