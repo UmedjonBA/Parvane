@@ -341,6 +341,10 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
         "/candidates" => {
             let source = q.get("source").cloned().unwrap_or_default();
             fake.asked_sources.lock().unwrap().push(source.clone());
+            // Источник «broken» — сбой поиска (502), а не отказ
+            if source == "soundcloud" && fake.candidates.lock().unwrap().contains_key("broken") {
+                return reply(502, json!({"error": "source failed"}));
+            }
             match fake.candidates.lock().unwrap().get(&source) {
                 Some(list) => reply(200, json!({"candidates": list})),
                 None => reply(503, json!({})),
@@ -492,6 +496,15 @@ async fn fetch_skips_files_the_source_will_not_give() {
     let done = settled(&ctx, "alice@local", &job.job_id).await;
     assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
     assert_eq!(fake.asked_sources.lock().unwrap()[..], ["soundcloud", "youtube_reupload", "youtube"]);
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Поиск в SoundCloud сломался — задача не закрывается, ищет в следующем источнике
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    fake.candidates.lock().unwrap().insert("broken".into(), vec![]);
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("yt-1", "Группа - Песня t2", 215)]);
+    let job = start(&ctx, "alice@local", "Песня t2").await.unwrap();
+    let done = settled(&ctx, "alice@local", &job.job_id).await;
+    assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
     let _ = std::fs::remove_dir_all(dir);
 
     // Ни один источник не отдал файл — отказ «источник», а не «не найдено»

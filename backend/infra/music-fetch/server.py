@@ -136,7 +136,9 @@ def candidates(source, artist, title, limit):
     request = f"{prefix}{limit}:{artist} {title}{suffix}"
 
     def search():
-        with yt_dlp.YoutubeDL(ydl_options({"skip_download": True})) as ydl:
+        # Запись, которую не разобрать (у SoundCloud — официальные загрузки под DRM), пропускается: без этого одна
+        # такая роняла весь поиск источника, а скачать её всё равно нельзя
+        with yt_dlp.YoutubeDL(ydl_options({"skip_download": True, "ignoreerrors": True})) as ydl:
             return ydl.extract_info(request, download=False)
 
     found = guarded(source, search) or {}

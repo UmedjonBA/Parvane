@@ -552,9 +552,11 @@ impl Fetch {
                     warn!("музыка: источник {source} отказал — пробуем следующий");
                     continue;
                 }
+                // Сбой одного источника не закрывает задачу: следующий может найти; причина — если не найдёт никто
                 Err(e) => {
-                    self.fail_with(id, pb::FetchFailure::Source, detail_of(&e));
-                    return;
+                    warn!("музыка: поиск в {source} не удался: {e:?} — пробуем следующий");
+                    last_error = Some(e);
+                    continue;
                 }
             }
             all.retain(|c| !tried.contains(&c.id));

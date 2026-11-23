@@ -18,8 +18,16 @@ COPY backend/shards ./backend/shards
 COPY backend/protocol ./backend/protocol
 COPY backend/tests ./backend/tests
 WORKDIR /src/backend
-RUN cargo build --release --locked \
-    -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway -p federation -p music
+# Кэш сборки между выкладками (каталог target и реестр cargo): правка одного шарда пересобирает только его и то, что
+# от него зависит, а не все зависимости с нуля. Кэш не попадает в слой — бинарники копируются в /out тем же шагом
+RUN --mount=type=cache,id=parvane-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=parvane-shards-target,target=/src/backend/target,sharing=locked \
+    cargo build --release --locked \
+    -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway -p federation -p music \
+    && mkdir -p /out \
+    && cp target/release/identity target/release/messenger target/release/cloud target/release/call \
+    target/release/preview target/release/push target/release/domains target/release/gateway \
+    target/release/federation target/release/music target/release/federation_admin /out/
 
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 RUN apt-get update \
@@ -29,15 +37,15 @@ RUN apt-get update \
     # именованным томом при первом создании)
     && groupadd -r -g 10001 parvane && useradd -r -u 10001 -g parvane -d /nonexistent -s /usr/sbin/nologin parvane \
     && mkdir -p /data /well-known && chown parvane:parvane /data /well-known
-COPY --from=builder /src/backend/target/release/identity /usr/local/bin/identity
-COPY --from=builder /src/backend/target/release/messenger /usr/local/bin/messenger
-COPY --from=builder /src/backend/target/release/cloud /usr/local/bin/cloud
-COPY --from=builder /src/backend/target/release/call /usr/local/bin/call
-COPY --from=builder /src/backend/target/release/preview /usr/local/bin/preview
-COPY --from=builder /src/backend/target/release/push /usr/local/bin/push
-COPY --from=builder /src/backend/target/release/domains /usr/local/bin/domains
-COPY --from=builder /src/backend/target/release/gateway /usr/local/bin/gateway
-COPY --from=builder /src/backend/target/release/federation /usr/local/bin/federation
-COPY --from=builder /src/backend/target/release/music /usr/local/bin/music
-COPY --from=builder /src/backend/target/release/federation_admin /usr/local/bin/federation_admin
+COPY --from=builder /out/identity /usr/local/bin/identity
+COPY --from=builder /out/messenger /usr/local/bin/messenger
+COPY --from=builder /out/cloud /usr/local/bin/cloud
+COPY --from=builder /out/call /usr/local/bin/call
+COPY --from=builder /out/preview /usr/local/bin/preview
+COPY --from=builder /out/push /usr/local/bin/push
+COPY --from=builder /out/domains /usr/local/bin/domains
+COPY --from=builder /out/gateway /usr/local/bin/gateway
+COPY --from=builder /out/federation /usr/local/bin/federation
+COPY --from=builder /out/music /usr/local/bin/music
+COPY --from=builder /out/federation_admin /usr/local/bin/federation_admin
 USER parvane
