@@ -53,7 +53,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
         return crate::shared::dispatch(method, &req).await;
     }
     // Этап B: добавление треков — нужна папка библиотеки; «Найти и скачать» — ещё и сервис скачивания
-    if method.starts_with("music.fetch.") || method.starts_with("music.added.") || method.starts_with("music.upload.") || method.starts_with("music.catalog.") {
+    if method.starts_with("music.fetch.") || method.starts_with("music.added.") || method.starts_with("music.upload.") || method.starts_with("music.catalog.") || method.starts_with("music.file.") || method.starts_with("music.trash.") {
         let fetch = ctx.fetch.as_ref().ok_or(ErrorCode::Unavailable)?;
         return match method {
             "music.fetch.catalog" => fetch.catalog(sub, &user, body(&req)?).await,
@@ -66,6 +66,12 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
             "music.upload.start" => crate::upload::start(fetch, ctx, &req.user, body(&req)?).await,
             "music.added.list" => fetch.added_list(sub, &req.user, body(&req)?).await,
             "music.added.delete" => fetch.added_delete(sub, &req.user, body(&req)?).await,
+            "music.file.info" => fetch.file_info(sub, &req.user, body(&req)?).await,
+            "music.file.tags" => fetch.file_tags(sub, &req.user, body(&req)?).await,
+            "music.file.restore_tags" => fetch.restore_tags(sub, &req.user, body(&req)?).await,
+            "music.trash.list" => fetch.trash_list(&req.user).await,
+            "music.trash.restore" => fetch.trash_restore(sub, &req.user, body(&req)?).await,
+            "music.trash.purge" => fetch.trash_purge(&req.user, body(&req)?).await,
             _ => Err(ErrorCode::Unavailable),
         };
     }
@@ -147,8 +153,10 @@ async fn search(sub: &Subsonic, user: &str, r: pb::LibrarySearchRequest) -> Repl
             }
         }
     }
+    let mut tracks: Vec<pb::Track> = list(&v, &["searchResult3", "song"]).iter().filter_map(track_of).take(cap).collect();
+    crate::files::annotate_tracks(&mut tracks).await;
     Ok(pb::LibrarySearchResponse {
-        tracks: list(&v, &["searchResult3", "song"]).iter().filter_map(track_of).take(cap).collect(),
+        tracks,
         albums: list(&v, &["searchResult3", "album"]).iter().filter_map(album_of).take(cap).collect(),
         artists,
     }
@@ -186,6 +194,12 @@ async fn home(sub: &Subsonic, user: &str) -> Reply {
         Ok(v) => list(&v, &["albumList2", "album"]).iter().filter_map(album_of).take(HOME_FRESH as usize).collect(),
         Err(_) => vec![],
     };
+    let mut popular = popular;
+    let mut tracks: Vec<pb::Track> = popular.iter_mut().filter_map(|p| p.track.take()).collect();
+    crate::files::annotate_tracks(&mut tracks).await;
+    for (p, t) in popular.iter_mut().zip(tracks) {
+        p.track = Some(t);
+    }
     Ok(pb::LibraryHomeResponse { popular, frequent_artists, fresh }.encode_to_vec())
 }
 
@@ -195,7 +209,9 @@ async fn album(sub: &Subsonic, user: &str, r: pb::LibraryAlbumRequest) -> Reply 
     }
     let v = sub.call(user, "getAlbum", &[("id", r.album_id)]).await?;
     let a = v.get("album").ok_or(ErrorCode::NotFound)?;
-    Ok(pb::LibraryAlbumResponse { album: album_of(a), tracks: list(a, &["song"]).iter().filter_map(track_of).take(ALBUM_TRACKS_MAX).collect() }.encode_to_vec())
+    let mut tracks: Vec<pb::Track> = list(a, &["song"]).iter().filter_map(track_of).take(ALBUM_TRACKS_MAX).collect();
+    crate::files::annotate_tracks(&mut tracks).await;
+    Ok(pb::LibraryAlbumResponse { album: album_of(a), tracks }.encode_to_vec())
 }
 
 async fn artist(sub: &Subsonic, user: &str, r: pb::LibraryArtistRequest) -> Reply {
@@ -209,7 +225,8 @@ async fn artist(sub: &Subsonic, user: &str, r: pb::LibraryArtistRequest) -> Repl
         x.track_count = albums.iter().fold(0u32, |n, al| n.saturating_add(al.track_count));
         x
     });
-    let popular = crate::library::popular(sub, user, &r.artist_id).await;
+    let mut popular = crate::library::popular(sub, user, &r.artist_id).await;
+    crate::files::annotate_tracks(&mut popular).await;
     Ok(pb::LibraryArtistResponse { artist, albums, popular }.encode_to_vec())
 }
 
@@ -236,6 +253,7 @@ async fn track_get(sub: &Subsonic, user: &str, r: pb::TrackGetRequest) -> Reply 
             Err(e) => return Err(e),
         }
     }
+    crate::files::annotate_tracks(&mut tracks).await;
     Ok(pb::TrackGetResponse { tracks }.encode_to_vec())
 }
 
@@ -274,7 +292,9 @@ async fn star_list(sub: &Subsonic, user: &str, r: pb::StarListRequest) -> Reply 
     let all: Vec<pb::Track> = list(&v, &["starred2", "song"]).iter().filter_map(track_of).take(STARRED_MAX).collect();
     let (off, n) = (r.offset as usize, page(r.limit) as usize);
     let more = all.len() > off.saturating_add(n);
-    Ok(pb::StarListResponse { tracks: all.into_iter().skip(off).take(n).collect(), more }.encode_to_vec())
+    let mut tracks: Vec<pb::Track> = all.into_iter().skip(off).take(n).collect();
+    crate::files::annotate_tracks(&mut tracks).await;
+    Ok(pb::StarListResponse { tracks, more }.encode_to_vec())
 }
 
 /// Текст песни: OpenSubsonic `getLyricsBySongId` (музыкальный сервер берёт его из файла `.lrc` рядом с треком либо из

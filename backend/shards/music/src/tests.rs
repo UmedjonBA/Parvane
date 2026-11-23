@@ -330,11 +330,13 @@ async fn real_navidrome() {
 pub(crate) struct FakeFetch {
     pub(crate) catalog: Mutex<Vec<serde_json::Value>>,
     /// Источник → кандидаты; источника нет в таблице — он «отказал» (503).
-    candidates: Mutex<HashMap<String, Vec<serde_json::Value>>>,
+    pub(crate) candidates: Mutex<HashMap<String, Vec<serde_json::Value>>>,
     asked_sources: Mutex<Vec<String>>,
     library_dir: Mutex<std::path::PathBuf>,
     /// Теги, которые шард попросил записать в скачанные файлы (эталон каталога)
     download_tags: Mutex<Vec<serde_json::Value>>,
+    /// Теги файлов библиотеки по пути («Теги файла», правка человеком)
+    pub(crate) file_tags: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Response<Full<Bytes>> {
@@ -358,6 +360,30 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
             "albums": [{"ref": "dz:10", "title": "Альбом", "artist": "Группа", "artist_ref": "dz:1", "cover": "", "year": 2020, "record_type": "album", "tracks": 2}],
             "top": catalog_album_tracks()})),
         "/catalog/related" => reply(200, json!({"artists": [{"ref": "dz:2", "name": "Соседи", "picture": "", "albums": 3}]})),
+        // Файлы библиотеки: теги по пути (что записали — то и читается), сведения о файле
+        "/tags" if req.method() == hyper::Method::GET => {
+            let path = urlencoding_decode(q.get("path").cloned().unwrap_or_default());
+            let tags = fake.file_tags.lock().unwrap().get(&path).cloned().unwrap_or_else(|| json!({"artist": "Группа", "title": "Песня"}));
+            reply(200, json!({"tags": tags, "file": {"codec": "flac", "bitrate": 900_000, "sample_rate": 44100, "bits": 16, "duration": 215, "bytes": 4000}, "has_cover": true}))
+        }
+        "/tags" => {
+            let body = req.into_body().collect().await.unwrap().to_bytes();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let path = v["path"].as_str().unwrap().to_string();
+            let mut map = fake.file_tags.lock().unwrap();
+            let mut tags = map.get(&path).cloned().unwrap_or_else(|| json!({"artist": "Группа", "title": "Песня"}));
+            for (k, val) in v["tags"].as_object().unwrap() {
+                if val.as_str() == Some("") {
+                    tags.as_object_mut().unwrap().remove(k);
+                } else {
+                    tags[k] = val.clone();
+                }
+            }
+            map.insert(path, tags.clone());
+            reply(200, json!({"tags": tags, "file": {"codec": "flac", "bytes": 4000}, "has_cover": true}))
+        }
+        // «Вставить ссылку»: за ссылкой — «Песня t2» группы (такой трек уже есть в библиотеке)
+        "/resolve" => reply(200, json!({"source": "soundcloud", "id": "https://soundcloud.com/gruppa/t2", "artist": "Группа", "title": "Песня t2", "album": "", "duration": 215})),
         "/catalog/artists" => reply(200, json!({"artists": [{"ref": "dz:1", "name": "Группа", "picture": "", "albums": 1}]})),
         "/candidates" => {
             let source = q.get("source").cloned().unwrap_or_default();
@@ -442,12 +468,30 @@ fn catalog_track(title: &str) -> pb::CatalogTrack {
     pb::CatalogTrack { artist: "Группа".into(), title: title.into(), duration_secs: 215, ..Default::default() }
 }
 
-fn found(id: &str, title: &str, duration: u32) -> serde_json::Value {
+fn urlencoding_decode(text: String) -> String {
+    let bytes = text.replace('+', " ").into_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+pub(crate) fn found(id: &str, title: &str, duration: u32) -> serde_json::Value {
     json!({"id": id, "title": title, "uploader": "Группа", "duration": duration, "uploaded": "2025-01-10", "bitrate": 128})
 }
 
 /// Дождаться конца задачи пользователя (не «ищем» и не «качаем»).
-async fn settled(ctx: &Ctx, user: &str, job_id: &str) -> pb::FetchJob {
+pub(crate) async fn settled(ctx: &Ctx, user: &str, job_id: &str) -> pb::FetchJob {
     for _ in 0..200 {
         let jobs = call::<pb::FetchStatusResponse>(ctx, user, "music.fetch.status", pb::FetchStatusRequest {}).await.unwrap().jobs;
         let job = jobs.into_iter().find(|j| j.job_id == job_id).expect("задача в списке");
@@ -459,7 +503,7 @@ async fn settled(ctx: &Ctx, user: &str, job_id: &str) -> pb::FetchJob {
     panic!("задача не закончилась");
 }
 
-async fn start(ctx: &Ctx, user: &str, title: &str) -> Result<pb::FetchJob, ErrorCode> {
+pub(crate) async fn start(ctx: &Ctx, user: &str, title: &str) -> Result<pb::FetchJob, ErrorCode> {
     call::<pb::FetchStartResponse>(ctx, user, "music.fetch.start", pb::FetchStartRequest { track: Some(catalog_track(title)), ..Default::default() }).await.map(|r| r.job.unwrap())
 }
 

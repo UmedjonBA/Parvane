@@ -175,6 +175,8 @@ pub fn track_of(v: &Value) -> Option<Track> {
         year: num32(v, "year"),
         bitrate_kbps: num32(v, "bitRate"),
         starred: v.get("starred").is_some_and(|s| !s.is_null()),
+        // Пометки «кто добавил», «[v2]», «копия» — из учёта шарда (`files::annotate`)
+        ..Default::default()
     })
 }
 

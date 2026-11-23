@@ -56,18 +56,18 @@ pub async fn set_track_id(pool: &SqlitePool, path: &str, track_id: &str) -> sqlx
 pub async fn list(pool: &SqlitePool, adder: Option<&str>, offset: u32, limit: u32) -> sqlx::Result<Vec<Added>> {
     let base = "SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks";
     match adder {
-        Some(a) => sqlx::query_as(&format!("{base} WHERE adder = ? ORDER BY added_ms DESC, path LIMIT ? OFFSET ?")).bind(a).bind(limit).bind(offset).fetch_all(pool).await,
-        None => sqlx::query_as(&format!("{base} WHERE track_id != '' ORDER BY added_ms DESC, path LIMIT ? OFFSET ?")).bind(limit).bind(offset).fetch_all(pool).await,
+        Some(a) => sqlx::query_as(&format!("{base} WHERE adder = ? AND deleted_ms = 0 ORDER BY added_ms DESC, path LIMIT ? OFFSET ?")).bind(a).bind(limit).bind(offset).fetch_all(pool).await,
+        None => sqlx::query_as(&format!("{base} WHERE track_id != '' AND deleted_ms = 0 ORDER BY added_ms DESC, path LIMIT ? OFFSET ?")).bind(limit).bind(offset).fetch_all(pool).await,
     }
 }
 
 pub async fn by_track(pool: &SqlitePool, track_id: &str) -> sqlx::Result<Option<Added>> {
-    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE track_id = ?").bind(track_id).fetch_optional(pool).await
+    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE track_id = ? AND deleted_ms = 0").bind(track_id).fetch_optional(pool).await
 }
 
 /// Скачанное, чьи теги ещё не переписаны по каталогу (свои загруженные файлы не в счёт).
 pub async fn untagged(pool: &SqlitePool, limit: u32) -> sqlx::Result<Vec<Added>> {
-    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE tagged = 0 AND sha256 = '' ORDER BY added_ms LIMIT ?")
+    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE tagged = 0 AND sha256 = '' AND deleted_ms = 0 ORDER BY added_ms LIMIT ?")
         .bind(limit)
         .fetch_all(pool)
         .await
@@ -92,5 +92,46 @@ pub async fn delete(pool: &SqlitePool, path: &str) -> sqlx::Result<()> {
 
 /// Свой файл с такой же SHA-256 уже в библиотеке (дедупликация загрузок).
 pub async fn by_sha256(pool: &SqlitePool, sha256: &str) -> sqlx::Result<Option<Added>> {
-    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE sha256 = ? AND sha256 != '' LIMIT 1").bind(sha256).fetch_optional(pool).await
+    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE sha256 = ? AND sha256 != '' AND deleted_ms = 0 LIMIT 1").bind(sha256).fetch_optional(pool).await
+}
+
+/// Ключ «тот же трек»: исполнитель и название в нижнем регистре.
+pub fn name_key(artist: &str, title: &str) -> String {
+    format!("{}\n{}", artist.trim().to_lowercase(), title.trim().to_lowercase())
+}
+
+/// Откуда файл и какая это версия трека (после записи строки).
+pub async fn set_origin(pool: &SqlitePool, path: &str, source: &str, source_ref: &str, version: i64) -> sqlx::Result<()> {
+    sqlx::query("UPDATE added_tracks SET source = ?, source_ref = ?, version = ?, name_key = ? WHERE path = ?")
+        .bind(source)
+        .bind(source_ref)
+        .bind(version)
+        .bind(name_key_of(pool, path).await?)
+        .bind(path)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+async fn name_key_of(pool: &SqlitePool, path: &str) -> sqlx::Result<String> {
+    let row: Option<(String, String)> = sqlx::query_as("SELECT artist, title FROM added_tracks WHERE path = ?").bind(path).fetch_optional(pool).await?;
+    Ok(row.map(|(a, t)| name_key(&a, &t)).unwrap_or_default())
+}
+
+/// Строки, записанные до ключа «тот же трек», — получают ключ (раз при старте).
+pub async fn fill_name_keys(pool: &SqlitePool) -> sqlx::Result<()> {
+    let rows: Vec<(String, String, String)> = sqlx::query_as("SELECT path, artist, title FROM added_tracks WHERE name_key = ''").fetch_all(pool).await?;
+    for (path, artist, title) in rows {
+        sqlx::query("UPDATE added_tracks SET name_key = ? WHERE path = ?").bind(name_key(&artist, &title)).bind(&path).execute(pool).await?;
+    }
+    Ok(())
+}
+
+/// Следующий номер версии трека с этими исполнителем и названием.
+pub async fn next_version(pool: &SqlitePool, artist: &str, title: &str) -> sqlx::Result<i64> {
+    let (v,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(version), 0) FROM added_tracks WHERE name_key = ? AND deleted_ms = 0")
+        .bind(name_key(artist, title))
+        .fetch_one(pool)
+        .await?;
+    Ok(v + 1)
 }

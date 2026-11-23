@@ -177,6 +177,11 @@ async fn store_file(fetch: &Fetch, job: &Job, mut body: Incoming) -> Result<(Str
             let _ = tokio::fs::remove_file(&target).await;
             return Err((StatusCode::SERVICE_UNAVAILABLE, pb::FetchFailure::Library));
         }
+        // «Откуда файл»: свой файл с его исходным именем; тот же трек уже есть — копия той же версии
+        let version = (store::next_version(&fetch.pool, &row.artist, &row.title).await.unwrap_or(1) - 1).max(1);
+        if let Err(e) = store::set_origin(&fetch.pool, &relative, "upload", &job.upload_name, version).await {
+            warn!("музыка: источник своего файла не записан: {e}");
+        }
         Ok((relative, tags))
     }
     .await;

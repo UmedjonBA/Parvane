@@ -94,6 +94,14 @@ pub(crate) struct Job {
     /// Свой файл: ожидаемая SHA-256 (hex).
     pub sha256: String,
     pub updated_ms: i64,
+    /// «Вставить ссылку»: трек YouTube, SoundCloud, Bandcamp.
+    pub url: String,
+    /// Вторая версия трека, который уже на сервере («[v2]»).
+    pub as_version: bool,
+    /// Готовый трек — в «Любимое» добавившего.
+    pub star: bool,
+    /// Трек уже был на сервере: задача готова без скачивания.
+    pub existing: bool,
 }
 
 fn day_text(day: Option<i64>) -> String {
@@ -189,6 +197,10 @@ impl Job {
             upload_name: String::new(),
             sha256: String::new(),
             updated_ms: now_ms(),
+            url: String::new(),
+            as_version: false,
+            star: false,
+            existing: false,
         }
     }
 
@@ -209,6 +221,9 @@ impl Job {
             query: clip_bytes(&self.query_text, 256),
             updated_ms: self.updated_ms,
             upload_name: clip_bytes(&self.upload_name, 255),
+            existing: self.existing,
+            url: clip_bytes(&self.url, 512),
+            star: self.star,
         }
     }
 
@@ -408,7 +423,20 @@ impl Fetch {
             return self.start_album(sub, address, r.album_ref.trim()).await;
         }
         let query_text = r.query.trim().to_string();
+        let url = r.url.trim().to_string();
         let mut job = Job::new(new_id(), address, pb::FetchState::Queued);
+        job.as_version = r.as_version;
+        job.star = r.star;
+        if !url.is_empty() {
+            if !url.starts_with("https://") || url.len() > 512 {
+                return Err(ErrorCode::Invalid);
+            }
+            job.url = url.clone();
+            self.admit(address, job.clone(), |j| j.url == url).await?;
+            let (this, id) = (self.clone(), job.id.clone());
+            self.spawn(&job.id, async move { this.run(&sub, &id).await });
+            return self.job_reply(&job.id);
+        }
         if let Some(track) = r.track.filter(|_| query_text.is_empty()) {
             job.query = query_of(&track);
             job.year = track.year;
@@ -474,10 +502,71 @@ impl Fetch {
         let Some(_slot) = self.take_slot(id).await else { return };
         self.update(id, |j| j.state = pb::FetchState::Searching);
         let Some(job) = self.job(id) else { return };
+        if !job.url.is_empty() {
+            self.fetch_link(sub, &job).await;
+            return;
+        }
         if !job.query_text.is_empty() && !self.resolve_reference(sub, &job).await {
             return;
         }
         self.search(sub, id).await;
+    }
+
+    /// «Вставить ссылку»: что за ссылкой — у сервиса; трек нашёлся в каталоге — теги оттуда; уже на сервере (и не
+    /// просили вторую версию) — задача готова с тем треком; иначе файл качается прямо по ссылке.
+    async fn fetch_link(self: &Arc<Self>, sub: &Subsonic, job: &Job) {
+        let Ok(service) = self.service() else { return };
+        let info = match service.resolve(&job.url).await {
+            Ok(v) => v,
+            Err(e) => {
+                self.fail_with(&job.id, pb::FetchFailure::Source, detail_of(&e));
+                return;
+            }
+        };
+        let text = |k: &str| info.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+        let mut query = Query { artist: text("artist"), title: text("title"), album: text("album"), duration_secs: info.get("duration").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32, ..Default::default() };
+        let mut year = 0;
+        // Эталон каталога — теги и обложка; не нашёлся — как назвал источник
+        if let Ok(found) = service.catalog(&format!("{} {}", query.artist, query.title), REFERENCE_CATALOG).await {
+            let queries: Vec<Query> = found.iter().map(|(q, _)| q.clone()).collect();
+            if let Some(i) = matching::pick_reference(&format!("{} {}", query.artist, query.title), &queries) {
+                (query, year) = found[i].clone();
+            }
+        }
+        if query.title.is_empty() {
+            self.fail(&job.id, pb::FetchFailure::NotFound);
+            return;
+        }
+        if !job.as_version {
+            if let Some(track) = self.in_library(sub, &nd_user(&job.user), &query).await {
+                self.finish_existing(sub, &job.id, &job.user, query, year, &track.id).await;
+                return;
+            }
+        }
+        self.update(&job.id, |j| {
+            j.query = query;
+            j.year = year;
+            j.state = pb::FetchState::Downloading;
+        });
+        let candidate = Candidate { id: job.url.clone(), source: text("source"), ..Default::default() };
+        if let Err(e) = self.download(sub, &job.id, candidate).await {
+            self.fail_with(&job.id, pb::FetchFailure::Source, detail_of(&e));
+        }
+    }
+
+    /// Трек уже на сервере: задача готова с ним (`existing`); просили «Любимое» — отмечается.
+    async fn finish_existing(&self, sub: &Subsonic, id: &str, user: &str, query: Query, year: u32, track_id: &str) {
+        let star = self.job(id).is_some_and(|j| j.star);
+        if star {
+            let _ = sub.call(&nd_user(user), "star", &[("id", track_id.to_string())]).await;
+        }
+        self.update(id, |j| {
+            j.query = query;
+            j.year = year;
+            j.track_id = track_id.to_string();
+            j.existing = true;
+            j.state = pb::FetchState::Done;
+        });
     }
 
     /// Эталон по строке запроса: лучшее совпадение каталога. Трек уже в библиотеке — задача сразу готова.
@@ -496,14 +585,11 @@ impl Fetch {
             return false;
         };
         let (q, year) = found[i].clone();
-        if let Some(track) = self.in_library(sub, &nd_user(&job.user), &q).await {
-            self.update(&job.id, |j| {
-                j.query = q;
-                j.year = year;
-                j.track_id = track.id;
-                j.state = pb::FetchState::Done;
-            });
-            return false;
+        if !job.as_version {
+            if let Some(track) = self.in_library(sub, &nd_user(&job.user), &q).await {
+                self.finish_existing(sub, &job.id, &job.user, q, year, &track.id).await;
+                return false;
+            }
         }
         self.update(&job.id, |j| {
             j.query = q;
@@ -725,6 +811,13 @@ impl Fetch {
         }
         // Теги и обложку сервис уже переписал при скачивании
         let _ = store::mark_tagged(&self.pool, &file.path, &file.path, 1).await;
+        // Откуда файл и какая версия: вторая версия — следующий номер, иначе та же, что у уже лежащего (копия)
+        let as_version = self.job(id).is_some_and(|j| j.as_version);
+        let next = store::next_version(&self.pool, &query.artist, &query.title).await.unwrap_or(1);
+        let version = if as_version { next } else { (next - 1).max(1) };
+        if let Err(e) = store::set_origin(&self.pool, &file.path, &candidate.source, &candidate.id, version).await {
+            warn!("музыка: источник файла не записан: {e}");
+        }
         info!("музыка: трек скачан ({} байт, источник {})", file.bytes, candidate.source);
         self.finish_in_library(sub, id, &user, &file.path, &query).await;
         Ok(())
@@ -735,6 +828,9 @@ impl Fetch {
         match self.await_in_library(sub, user, query, path).await {
             Some(track_id) => {
                 let _ = store::set_track_id(&self.pool, path, &track_id).await;
+                if self.job(id).is_some_and(|j| j.star) {
+                    let _ = sub.call(&nd_user(user), "star", &[("id", track_id.clone())]).await;
+                }
                 self.update(id, |j| {
                     j.track_id = track_id;
                     j.state = pb::FetchState::Done;
@@ -854,6 +950,11 @@ impl Fetch {
             let track = known.unwrap_or_else(|| pb::Track { title: row.title.clone(), artist: row.artist.clone(), duration_secs: row.duration_secs.max(0) as u32, ..Default::default() });
             tracks.push(pb::AddedTrack { track: Some(track), added_ms: row.added_ms, bytes: row.bytes.max(0) as u64, adder: nick(&row.adder) });
         }
+        let mut plain: Vec<pb::Track> = tracks.iter_mut().filter_map(|t| t.track.take()).collect();
+        crate::files::annotate(&self.pool, &mut plain).await;
+        for (t, track) in tracks.iter_mut().zip(plain) {
+            t.track = Some(track);
+        }
         Ok(pb::AddedListResponse { tracks }.encode_to_vec())
     }
 
@@ -862,10 +963,9 @@ impl Fetch {
         if row.adder != address && !self.admins.iter().any(|a| a == address) {
             return Err(ErrorCode::Forbidden);
         }
-        self.remove_file(&row.path).await;
-        store::delete(&self.pool, &row.path).await.map_err(|_| ErrorCode::Unavailable)?;
-        let _ = sub.call(SERVICE_USER, "startScan", &[]).await;
-        info!("музыка: добавленный трек удалён");
+        // В корзину на 30 дней (макет 23 ноя): вернуть может добавивший, удаливший и администратор
+        self.trash(sub, address, &row).await?;
+        info!("музыка: добавленный трек — в корзине");
         Ok(pb::AddedDeleteResponse {}.encode_to_vec())
     }
 }

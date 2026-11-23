@@ -141,6 +141,25 @@ impl FetchService {
         Ok((clip(&v, "path"), v.get("matched").and_then(Value::as_bool).unwrap_or(false)))
     }
 
+    /// Теги и сведения файла библиотеки: `{tags, file: {codec, bitrate, sample_rate, bits, duration, bytes}, has_cover}`.
+    pub async fn read_tags(&self, path: &str) -> Result<Value, ServiceError> {
+        let rq = self.http.get(format!("{}/tags", self.base)).query(&[("path", path)]);
+        self.json(rq, SEARCH_TIMEOUT).await
+    }
+
+    /// Переписать переданные поля тегов (обложка — ссылкой каталога либо картинкой base64); ответ — как `read_tags`.
+    pub async fn write_tags(&self, path: &str, tags: &Value, cover_url: &str, cover_b64: &str) -> Result<Value, ServiceError> {
+        let body = json!({"path": path, "tags": tags, "cover_url": cover_url, "cover_b64": cover_b64});
+        let rq = self.http.post(format!("{}/tags", self.base)).json(&body);
+        self.json(rq, DOWNLOAD_TIMEOUT).await
+    }
+
+    /// Что за ссылкой (YouTube, SoundCloud, Bandcamp): `{source, id, artist, title, album, duration}`.
+    pub async fn resolve(&self, url: &str) -> Result<Value, ServiceError> {
+        let rq = self.http.post(format!("{}/resolve", self.base)).json(&json!({"url": url}));
+        self.json(rq, SEARCH_TIMEOUT).await
+    }
+
     /// Маршрут каталога сервиса (`/catalog/search`, `/catalog/artist`, …) — ответ как есть.
     pub async fn catalog_call(&self, path: &str, params: &[(&str, String)]) -> Result<Value, ServiceError> {
         let rq = self.http.get(format!("{}/catalog/{path}", self.base)).query(params);

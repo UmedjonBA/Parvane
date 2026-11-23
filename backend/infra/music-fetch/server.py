@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import yt_dlp
 
 import catalog
+import files
 import lyrics
 import sites
 import sponsorblock
@@ -54,6 +55,8 @@ SOURCES = {
     # Перезаливы: тот же YouTube, но ищем копии с пометкой «без цензуры»
     "youtube_reupload": ("ytsearch", " без цензуры"),
     "soundcloud": ("scsearch", ""),
+    # Только по ссылке («Вставить ссылку»): поиска нет
+    "bandcamp": ("", ""),
 }
 # Файлы этих источников — клипы YouTube: немузыкальные куски вырезаются по SponsorBlock
 YOUTUBE_SOURCES = ("youtube", "youtube_reupload")
@@ -330,6 +333,31 @@ def retag_existing(relative, tags):
     return {"path": os.path.relpath(new_path, LIBRARY_DIR), "matched": True}
 
 
+def ydl_for(extra):
+    return yt_dlp.YoutubeDL(ydl_options(extra))
+
+
+def existing(relative):
+    path = safe_dest(relative)
+    if not os.path.isfile(path):
+        raise ValueError("нет файла")
+    return path
+
+
+def edit_tags(relative, body):
+    """Правка тегов человеком: только переданные поля; обложка — ссылкой каталога либо картинкой (base64)."""
+    path = existing(relative)
+    changes = body.get("tags") if isinstance(body.get("tags"), dict) else {}
+    cover = files.cover_bytes(body.get("cover_url"), body.get("cover_b64"), cover_opener)
+    files.write_tags(path, changes, cover)
+    return files.read_tags(path)
+
+
+def cover_opener(request, timeout):
+    request.add_header("User-Agent", "parvane-music-fetch")
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
 def add_lyrics(path, tags):
     """Текст песни рядом с файлом (LRCLIB); не нашёлся или сбой — без текста."""
     try:
@@ -397,6 +425,9 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_request(lambda: {"artists": catalog.artists(query.get("q", ""))})
         elif url.path == "/catalog/related":
             self.handle_request(lambda: {"artists": catalog.related(query["ref"])})
+        elif url.path == "/tags":
+            # Теги и сведения файла библиотеки («Теги файла», «Откуда файл»)
+            self.handle_request(lambda: files.read_tags(existing(query["path"])))
         elif url.path == "/candidates":
             self.handle_request(lambda: candidates(query["source"], query["artist"], query["title"], limit))
         elif url.path == "/progress":
@@ -410,10 +441,16 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
-        if self.path not in ("/download", "/cancel", "/retag"):
+        if self.path not in ("/download", "/cancel", "/retag", "/tags", "/resolve"):
             self.reply(404, {"error": "not found"})
             return
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0") or 0)) or b"{}")
+        if self.path == "/tags":
+            self.handle_request(lambda: edit_tags(str(body["path"]), body))
+            return
+        if self.path == "/resolve":
+            self.handle_request(lambda: files.resolve(str(body["url"]), ydl_for))
+            return
         if self.path == "/retag":
             self.handle_request(lambda: retag_existing(str(body["path"]), body.get("tags") or {}))
             return

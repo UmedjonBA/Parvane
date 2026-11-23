@@ -129,6 +129,24 @@ service MusicService {
   rpc LibraryHome(LibraryHomeRequest) returns (LibraryHomeResponse) {
     option (parvane.core.v2.method) = {name: "music.library.home" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  rpc FileInfo(FileInfoRequest) returns (FileInfoResponse) {
+    option (parvane.core.v2.method) = {name: "music.file.info" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc FileTags(FileTagsRequest) returns (FileTagsResponse) {
+    option (parvane.core.v2.method) = {name: "music.file.tags" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc FileRestoreTags(FileRestoreTagsRequest) returns (FileRestoreTagsResponse) {
+    option (parvane.core.v2.method) = {name: "music.file.restore_tags" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc TrashList(TrashListRequest) returns (TrashListResponse) {
+    option (parvane.core.v2.method) = {name: "music.trash.list" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc TrashRestore(TrashRestoreRequest) returns (TrashRestoreResponse) {
+    option (parvane.core.v2.method) = {name: "music.trash.restore" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc TrashPurge(TrashPurgeRequest) returns (TrashPurgeResponse) {
+    option (parvane.core.v2.method) = {name: "music.trash.purge" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
 }
 
 message Track {
@@ -149,6 +167,12 @@ message Track {
   uint32 bitrate_kbps = 13;
   // «Любимое» у вызывающего.
   bool starred = 14;
+  // Вторая и следующие версии того же трека («[v2]», макет 23 ноя); 0 и 1 — первая.
+  uint32 version = 15;
+  // Тот же трек скачан ещё раз той же версией («копия»): лишнее можно убрать «Оставить один».
+  bool copy = 16;
+  // Кто добавил на сервер (ник); пусто — файл лежал в библиотеке до учёта.
+  string adder = 17 [(parvane.core.v2.max_len) = 64];
 }
 
 message Album {
@@ -389,6 +413,13 @@ message FetchJob {
   int64 updated_ms = 12;
   // Свой файл (`music.upload.start`): имя файла; пусто — «Найти и скачать».
   string upload_name = 13 [(parvane.core.v2.max_len) = 255];
+  // Трек уже был на сервере (задача DONE без скачивания): `track_id` — тот трек; человек решает, добавить ли вторую
+  // версию («Этот трек уже на сервере», доски `RpMusicB`, `RdMusic`).
+  bool existing = 14;
+  // Задача по ссылке: сама ссылка.
+  string url = 15 [(parvane.core.v2.max_len) = 512];
+  // Готовый трек отмечается «Любимым» добавившего.
+  bool star = 16;
 }
 
 message FetchStartRequest {
@@ -401,6 +432,12 @@ message FetchStartRequest {
   string query = 4 [(parvane.core.v2.max_len) = 256];
   // «Скачать альбом»: все треки альбома каталога (`dz:<id>`), которых ещё нет в библиотеке, — по задаче на трек.
   string album_ref = 5 [(parvane.core.v2.max_len) = 64];
+  // «Вставить ссылку»: трек YouTube, SoundCloud либо Bandcamp; теги — из каталога, если трек там нашёлся.
+  string url = 6 [(parvane.core.v2.max_len) = 512];
+  // Трек уже на сервере, а человек хочет ещё одну версию (другой источник, качество, ремастер) — «[v2]».
+  bool as_version = 7;
+  // Готовый трек — сразу в «Любимое» добавившего («Ещё добавить в: Любимое»).
+  bool star = 8;
 }
 // Отказы: LIMIT — исчерпан суточный лимит либо место; DUPLICATE — трек уже качается.
 message FetchStartResponse {
@@ -854,3 +891,94 @@ message LibraryHomeResponse {
   // Недавно добавленные альбомы.
   repeated Album fresh = 3 [(parvane.core.v2.max_items) = 12];
 }
+
+// ── Файлы библиотеки (макет 23 ноя, доски `RpMusicA`, `ZpMusicX`, `ZdMusicX`): «Откуда файл», правка тегов, корзина ──
+// Своё правит и удаляет добавивший, чужое — администратор сервера (иначе FORBIDDEN). Теги пишет сервис скачивания,
+// звук не трогается; после правки музыкальный сервер пересканирует библиотеку.
+
+message TagSet {
+  string title = 1 [(parvane.core.v2.max_len) = 512];
+  string artist = 2 [(parvane.core.v2.max_len) = 512];
+  string album = 3 [(parvane.core.v2.max_len) = 512];
+  string album_artist = 4 [(parvane.core.v2.max_len) = 512];
+  uint32 year = 5;
+  string genre = 6 [(parvane.core.v2.max_len) = 128];
+  uint32 track_no = 7;
+}
+
+message FileInfoRequest {
+  string track_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message FileInfoResponse {
+  // hitmoz, hitmos_fm, youtube, youtube_reupload, soundcloud, bandcamp, upload; пусто — неизвестно.
+  string source = 1 [(parvane.core.v2.max_len) = 32];
+  // Ссылка либо запись источника, имя своего файла.
+  string source_ref = 2 [(parvane.core.v2.max_len) = 512];
+  string adder = 3 [(parvane.core.v2.max_len) = 64];
+  int64 added_ms = 4;
+  string codec = 5 [(parvane.core.v2.max_len) = 32];
+  uint32 bitrate_kbps = 6;
+  uint32 sample_rate = 7;
+  uint32 bits = 8;
+  uint64 bytes = 9;
+  // Путь в папке библиотеки.
+  string path = 10 [(parvane.core.v2.max_len) = 1024];
+  TagSet tags = 11;
+  // Теги правил человек: кто и когда; есть исходные — можно вернуть.
+  int64 edited_ms = 12;
+  string edited_by = 13 [(parvane.core.v2.max_len) = 64];
+  bool has_original_tags = 14;
+  // Другие версии того же трека на сервере.
+  repeated Track versions = 15 [(parvane.core.v2.max_items) = 20];
+  bool can_edit = 16;
+  bool has_cover = 17;
+}
+
+// Меняются только поля из `fields` (title, artist, album, album_artist, year, genre, track_no) — у всех треков разом
+// («Изменить 3 трека», «Объединить исполнителей», «Перенести треки»). Обложка — ссылкой каталога либо картинкой.
+message FileTagsRequest {
+  repeated string track_ids = 1 [(parvane.core.v2.max_items) = 500, (parvane.core.v2.max_len) = 64];
+  TagSet tags = 2;
+  repeated string fields = 3 [(parvane.core.v2.max_items) = 7, (parvane.core.v2.max_len) = 16];
+  string cover_url = 4 [(parvane.core.v2.max_len) = 512];
+  bytes cover = 5 [(parvane.core.v2.max_len) = 524288];
+}
+message FileTagsResponse {
+  uint32 changed = 1;
+  uint32 failed = 2;
+}
+
+message FileRestoreTagsRequest {
+  string track_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message FileRestoreTagsResponse {}
+
+// Корзина: удалённое лежит 30 дней, потом стирается само. Человек видит своё (добавленное либо удалённое им),
+// администратор — всю корзину сервера.
+message TrashItem {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  string title = 2 [(parvane.core.v2.max_len) = 512];
+  string artist = 3 [(parvane.core.v2.max_len) = 512];
+  string adder = 4 [(parvane.core.v2.max_len) = 64];
+  string deleted_by = 5 [(parvane.core.v2.max_len) = 64];
+  int64 deleted_ms = 6;
+  uint32 days_left = 7;
+  // Вторая версия либо копия — пометка в строке.
+  uint32 version = 8;
+}
+message TrashListRequest {}
+message TrashListResponse {
+  repeated TrashItem items = 1 [(parvane.core.v2.max_items) = 500];
+  // Вызывающий — администратор: видит всё и может стирать раньше срока.
+  bool admin = 2;
+}
+message TrashRestoreRequest {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message TrashRestoreResponse {}
+// Стереть навсегда раньше срока — только администратор; `all` — очистить корзину.
+message TrashPurgeRequest {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  bool all = 2;
+}
+message TrashPurgeResponse {}

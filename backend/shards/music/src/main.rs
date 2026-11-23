@@ -7,6 +7,7 @@
 //! `0.0.0.0:9340`), `PARVANE_MUSIC_URL_KEY_FILE` (ключ подписи ссылок, создаётся при первом старте).
 
 mod fetch;
+mod files;
 mod http;
 mod library;
 mod mix;
@@ -22,6 +23,8 @@ mod tests;
 mod tests_spec041;
 #[cfg(test)]
 mod tests_mix;
+#[cfg(test)]
+mod tests_files;
 
 use std::sync::Arc;
 
@@ -167,8 +170,13 @@ async fn main() -> Result<()> {
     if let (Some(sub), Some(fetch)) = (ctx.sub.clone(), ctx.fetch.clone()) {
         tokio::spawn(async move {
             tokio::time::sleep(BACKFILL_FIRST_DELAY).await;
+            if let Err(e) = fetch::store::fill_name_keys(&fetch.pool).await {
+                tracing::warn!("музыка: ключи треков не заполнены: {e}");
+            }
             loop {
                 fetch.backfill_tags(&sub).await;
+                // Корзина старше 30 дней — стирается
+                fetch.purge_expired().await;
                 tokio::time::sleep(BACKFILL_EVERY).await;
             }
         });
