@@ -160,6 +160,7 @@ def search(query, offset):
         "tracks": unique([track_out(item) for item in raw]),
         "has_more": bool(page.get("next")) and bool(raw),
         "next": offset + len(raw),
+        "total": page.get("total") or 0,
         "artists": [],
         "albums": [],
     }

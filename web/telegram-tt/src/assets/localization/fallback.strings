@@ -1969,6 +1969,13 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicSourceOwn" = "Own files and links";
+"MusicSourceOwnHint" = "uploaded by people";
+"MusicSourceReuploads" = "Re-uploads";
+"MusicSourceReuploadHint" = "second versions, v2";
+"MusicSourceShow" = "Show";
+"MusicSourceFound_one" = "{count} found";
+"MusicSourceFound_other" = "{count} found";
 "MusicRecentItems" = "Recent";
 "MusicKindPlaylist" = "Playlist";
 "MusicOnServerCount_one" = "{count} on the server";
@@ -2254,7 +2261,6 @@
 "MusicSourceEverywhere" = "Everywhere";
 "MusicSourceEverywhereHint" = "server and catalog in one list";
 "MusicSourceServer" = "Server only";
-"MusicSourceServerHint" = "what you can already play";
 "MusicSourceCatalog" = "Catalog only";
 "MusicSourceCatalogHint" = "what is not on the server yet";
 "MusicAddToServer" = "Add to the server";

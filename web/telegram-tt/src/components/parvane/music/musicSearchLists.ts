@@ -14,6 +14,7 @@ export type MusicSearchFound = {
     artists: MusicCatalogArtist[];
     hasMore: boolean;
     nextOffset: number;
+    total?: number;
   };
   isServerFailed?: boolean;
   isCatalogFailed?: boolean;

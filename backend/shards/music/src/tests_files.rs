@@ -85,6 +85,10 @@ async fn link_of_track_on_server_asks_and_second_version_is_marked() {
     assert_eq!(rows.len(), 1);
     let (source, version): (String, i64) = sqlx::query_as("SELECT source, version FROM added_tracks").fetch_one(&ctx.fetch.as_ref().unwrap().pool).await.unwrap();
     assert_eq!((source.as_str(), version), ("soundcloud", 1), "первая учтённая версия этого трека на сервере");
+    // Добавленный по ссылке — «Свои файлы и ссылки» в листе «Источник» поиска
+    let mut marked = vec![pb::Track { id: v2.track_id.clone(), ..Default::default() }];
+    crate::files::annotate(&ctx.fetch.as_ref().unwrap().pool, &mut marked).await;
+    assert!(marked[0].own_file, "{:?}", marked[0]);
     let _ = std::fs::remove_dir_all(dir);
 }
 

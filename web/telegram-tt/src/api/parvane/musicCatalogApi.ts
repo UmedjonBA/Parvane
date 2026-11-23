@@ -36,6 +36,8 @@ export type MusicCatalogSearch = {
   tracks: MusicCatalogTrack[];
   hasMore: boolean;
   nextOffset: number;
+  // Треков в каталоге всего; 0 — неизвестно
+  total: number;
 };
 
 export type MusicLyrics = {
@@ -62,6 +64,7 @@ export function createMusicCatalogApi(deps: Deps) {
         tracks: list(reply, 'tracks').map(toCatalogTrack),
         hasMore: Boolean(field(reply, 'has_more')),
         nextOffset: count(reply, 'next_offset'),
+        total: count(reply, 'total'),
       };
     },
 

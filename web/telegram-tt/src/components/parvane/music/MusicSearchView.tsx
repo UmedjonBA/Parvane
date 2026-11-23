@@ -35,6 +35,7 @@ import MusicCover from './MusicCover';
 import MusicLoadMore from './MusicLoadMore';
 import MusicTrackRow from './MusicTrackRow';
 
+import kit from '../notes/PvKit.module.scss';
 import styles from './MusicSearch.module.scss';
 
 type OwnProps = {
@@ -46,7 +47,7 @@ type OwnProps = {
 };
 
 type Filter = 'all' | 'tracks' | 'artists' | 'albums' | 'playlists';
-type Source = 'everywhere' | 'server' | 'catalog';
+type Source = 'everywhere' | 'server' | 'catalog' | 'own' | 'reupload';
 
 // Плиток жанров в «Обзоре» (доска `MusicSearch-01`) без каталога; с каталогом — на одну меньше
 const GENRE_TILES = 4;
@@ -68,12 +69,22 @@ const FILTER_KEYS = {
   albums: 'MusicAlbums',
   playlists: 'MusicPlaylists',
 } as const;
-const SOURCES: Source[] = ['everywhere', 'server', 'catalog'];
+// Лист «Источник» (доска `MusicSearch-04`): «Свои файлы и ссылки», «Перезаливы» — файлы сервера по происхождению
+const SOURCES: Source[] = ['everywhere', 'server', 'catalog', 'own', 'reupload'];
 const SOURCE_KEYS = {
-  everywhere: ['MusicSourceEverywhere', 'MusicSourceEverywhereHint'],
-  server: ['MusicSourceServer', 'MusicSourceServerHint'],
-  catalog: ['MusicSourceCatalog', 'MusicSourceCatalogHint'],
+  everywhere: 'MusicSourceEverywhere',
+  server: 'MusicSourceServer',
+  catalog: 'MusicSourceCatalog',
+  own: 'MusicSourceOwn',
+  reupload: 'MusicSourceReuploads',
 } as const;
+const SOURCE_FILTERS: Record<Source, (track: MusicTrack) => boolean> = {
+  everywhere: () => true,
+  server: () => true,
+  catalog: () => false,
+  own: (track) => Boolean(track.isOwnFile),
+  reupload: (track) => Boolean((track.version && track.version > 1) || track.isCopy),
+};
 // Треков в «Всё» (доска `MusicSearch-02`)
 const ALL_TRACKS = 4;
 
@@ -171,10 +182,18 @@ const MusicSearchView = ({
   const handleFilter = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setFilter(e.currentTarget.dataset.filter as Filter);
   });
-  const handleOpenSource = useLastCallback(() => setIsSourceOpen(true));
+  // Выбор в листе применяется «Показать»
+  const [pickedSource, setPickedSource] = useState<Source>('everywhere');
+  const handleOpenSource = useLastCallback(() => {
+    setPickedSource(source);
+    setIsSourceOpen(true);
+  });
   const handleCloseSource = useLastCallback(() => setIsSourceOpen(false));
   const handleSource = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    setSource(e.currentTarget.dataset.source as Source);
+    setPickedSource(e.currentTarget.dataset.source as Source);
+  });
+  const handleShowSource = useLastCallback(() => {
+    setSource(pickedSource);
     setIsSourceOpen(false);
   });
   const handlePickHistory = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -223,8 +242,11 @@ const MusicSearchView = ({
 
   const shown = found?.query === effective ? found : undefined;
   const withServer = source !== 'catalog';
-  const withCatalog = source !== 'server' && hasCatalog;
-  const serverTracks = (withServer && shown?.server?.tracks) || [];
+  const withCatalog = (source === 'everywhere' || source === 'catalog') && hasCatalog;
+  const allServerTracks = useMemo(() => shown?.server?.tracks || [], [shown]);
+  const serverTracks = useMemo(() => (withServer ? allServerTracks.filter(SOURCE_FILTERS[source]) : []), [
+    withServer, allServerTracks, source,
+  ]);
   const lists = useMemo(() => buildSearchLists(shown, withServer, withCatalog), [shown, withServer, withCatalog]);
   const matchedPlaylists = useMemo(() => {
     const text = effective.toLowerCase();
@@ -297,6 +319,18 @@ const MusicSearchView = ({
         </button>
       </div>
     );
+  }
+
+  // Сколько в источнике (доска `MusicSearch-04`): «3 найдено», «312», «3 · загрузили люди сами»
+  function renderSourceCount(value: Source) {
+    if (value === 'everywhere') return lang('MusicSourceEverywhereHint');
+    if (value === 'catalog') {
+      const total = shown?.catalog?.total || shown?.catalog?.tracks.length || 0;
+      return total ? lang.number(total) : lang('MusicSourceCatalogHint');
+    }
+    const count = allServerTracks.filter(SOURCE_FILTERS[value]).length;
+    if (value === 'server') return lang('MusicSourceFound', { count }, { pluralValue: count });
+    return `${lang.number(count)} · ${lang(value === 'own' ? 'MusicSourceOwnHint' : 'MusicSourceReuploadHint')}`;
   }
 
   function renderStart() {
@@ -677,19 +711,27 @@ const MusicSearchView = ({
               key={value}
               type="button"
               role="radio"
-              aria-checked={source === value}
+              aria-checked={pickedSource === value}
               className={styles.listRow}
               data-source={value}
               onClick={handleSource}
             >
-              <span className={buildClassName(styles.radio, source === value && styles.radioOn)} />
+              <span className={buildClassName(styles.radio, pickedSource === value && styles.radioOn)} />
               <span className={styles.listText}>
-                <span className={styles.listTitle}>{lang(SOURCE_KEYS[value][0])}</span>
-                <span className={styles.listSub}>{lang(SOURCE_KEYS[value][1])}</span>
+                <span className={styles.listTitle}>{lang(SOURCE_KEYS[value])}</span>
+                <span className={styles.listSub}>{renderSourceCount(value)}</span>
               </span>
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc, styles.sourceShow)}
+          data-music-source-show
+          onClick={handleShowSource}
+        >
+          {lang('MusicSourceShow')}
+        </button>
       </PvSheet>
     </div>
   );

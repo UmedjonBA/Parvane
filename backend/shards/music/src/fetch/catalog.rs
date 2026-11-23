@@ -31,6 +31,7 @@ impl Fetch {
             tracks,
             has_more: v.get("has_more").and_then(Value::as_bool).unwrap_or(false),
             next_offset: num(&v, "next"),
+            total: num(&v, "total"),
         }
         .encode_to_vec())
     }

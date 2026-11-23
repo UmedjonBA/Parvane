@@ -115,6 +115,7 @@ pub(crate) async fn annotate(pool: &SqlitePool, tracks: &mut [pb::Track]) {
             t.adder = nick(&r.adder);
             t.version = u32::try_from(r.version.max(1)).unwrap_or(1);
             t.copy = !r.name_key.is_empty() && earlier.get(&(r.name_key.clone(), r.version)).is_some_and(|first| *first < r.added_ms);
+            t.own_file = r.source == "upload" || r.source_ref.starts_with("https://");
         }
     }
 }

@@ -127,7 +127,7 @@ http.createServer((req, res) => {
     const artists = [...new Set(tracks.map((track) => track.artist))].map(artistOut);
     const albums = [...new Set(tracks.filter((track) => track.album).map((track) => track.album))].map(albumOut);
     return reply(res, 200, {
-      artists, albums, tracks: tracks.map(trackOut), has_more: false, next: 0,
+      artists, albums, tracks: tracks.map(trackOut), has_more: false, next: 0, total: tracks.length,
     });
   }
   if (url.pathname === '/catalog/artist') {

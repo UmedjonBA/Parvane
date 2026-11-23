@@ -1713,6 +1713,15 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicSourceOwn" = "Свои файлы и ссылки";
+"MusicSourceOwnHint" = "загрузили люди сами";
+"MusicSourceReuploads" = "Перезаливы";
+"MusicSourceReuploadHint" = "вторые версии, v2";
+"MusicSourceShow" = "Показать";
+"MusicSourceFound_one" = "{count} найден";
+"MusicSourceFound_few" = "{count} найдено";
+"MusicSourceFound_many" = "{count} найдено";
+"MusicSourceFound_other" = "{count} найдено";
 "MusicRecentItems" = "Недавнее";
 "MusicKindPlaylist" = "Плейлист";
 "MusicOnServerCount_one" = "{count} на сервере";
@@ -2024,7 +2033,6 @@
 "MusicSourceEverywhere" = "Везде";
 "MusicSourceEverywhereHint" = "сервер и каталог одним списком";
 "MusicSourceServer" = "Только на сервере";
-"MusicSourceServerHint" = "то, что уже можно слушать";
 "MusicSourceCatalog" = "Только каталог";
 "MusicSourceCatalogHint" = "чего ещё нет на сервере";
 "MusicAddToServer" = "Добавить на сервер";

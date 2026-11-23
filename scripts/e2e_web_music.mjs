@@ -599,6 +599,17 @@ try {
     `меню трека каталога: ${catalogItems}`);
   await catalogMenu.getByRole('menuitem', { name: 'To favorites', exact: true }).click();
   await visible(wide.locator('[data-music-tracks] [data-track]').filter({ hasText: 'Утро' }), STEP_TIMEOUT_MS * 2);
+  // Лист «Источник» (доска `MusicSearch-04`): «Перезаливы» — ни одного; «Везде» — снова всё
+  await wide.locator('[data-music-source-open]').click();
+  const sources = page.locator('[data-music-sources]');
+  await visible(sources.locator('[data-source="reupload"]').getByText(/^0 · second versions/));
+  await sources.locator('[data-source="reupload"]').click();
+  await page.locator('[data-music-source-show]').click();
+  await gone(wide.locator('[data-music-tracks] [data-track]').filter({ hasText: 'Утро' }));
+  await wide.locator('[data-music-source-open]').click();
+  await sources.locator('[data-source="everywhere"]').click();
+  await page.locator('[data-music-source-show]').click();
+  await visible(wide.locator('[data-music-tracks] [data-track]').filter({ hasText: 'Утро' }));
   await wide.locator('[data-music-desk-search]').fill('');
   await wideNav('starred');
   await visible(wide.locator('[data-music-view="starred"] [data-track]').filter({ hasText: 'Утро' }));

@@ -55,6 +55,8 @@ export type MusicTrack = {
   // Макет 23 ноя: вторая и следующие версии («v2»), копия той же версии, кто добавил (ник)
   version?: number;
   isCopy?: boolean;
+  // Свой файл либо добавлен по ссылке
+  isOwnFile?: boolean;
   adder?: string;
   // Выравнивание громкости (ReplayGain трека), дБ
   replayGainDb?: number;
@@ -300,6 +302,7 @@ export function toTrack(raw: Json): MusicTrack {
     isStarred: Boolean(field(raw, 'starred')),
     version: count(raw, 'version') || undefined,
     isCopy: Boolean(field(raw, 'copy')) || undefined,
+    isOwnFile: Boolean(field(raw, 'own_file')) || undefined,
     adder: text(raw, 'adder') || undefined,
     replayGainDb: Number(field(raw, 'replay_gain_cdb')) / 100 || undefined,
   };

@@ -205,6 +205,8 @@ message Track {
   string adder = 17 [(parvane.core.v2.max_len) = 64];
   // Выравнивание громкости (ReplayGain трека), сотые доли дБ; 0 — нет сведений.
   sint32 replay_gain_cdb = 18;
+  // Свой файл либо добавлен по ссылке («Свои файлы и ссылки» в листе «Источник» поиска).
+  bool own_file = 19;
 }
 
 message Album {
@@ -789,6 +791,8 @@ message CatalogSearchResponse {
   // Есть ли ещё треки и с какого места просить.
   bool has_more = 4;
   uint32 next_offset = 5;
+  // Сколько треков нашёл каталог всего (лист «Источник»: «Только каталог · 312»); 0 — неизвестно.
+  uint32 total = 6;
 }
 
 message CatalogChartRequest {}

@@ -1431,6 +1431,11 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicSourceOwn': undefined;
+  'MusicSourceOwnHint': undefined;
+  'MusicSourceReuploads': undefined;
+  'MusicSourceReuploadHint': undefined;
+  'MusicSourceShow': undefined;
   'MusicRecentItems': undefined;
   'MusicKindPlaylist': undefined;
   'MusicCatalogChart': undefined;
@@ -1641,7 +1646,6 @@ export interface LangPair {
   'MusicSourceEverywhere': undefined;
   'MusicSourceEverywhereHint': undefined;
   'MusicSourceServer': undefined;
-  'MusicSourceServerHint': undefined;
   'MusicSourceCatalog': undefined;
   'MusicSourceCatalogHint': undefined;
   'MusicAddToServer': undefined;
@@ -6939,6 +6943,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'limit': V;
   };
   'MusicTracksCount': {
+    'count': V;
+  };
+  'MusicSourceFound': {
     'count': V;
   };
   'MusicOnServerCount': {
