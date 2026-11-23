@@ -2,6 +2,7 @@ import { DEBUG } from '../config';
 import { pause } from '../util/schedulers';
 import { respondWithCache, respondWithCacheNetworkFirst } from './assetCache';
 import { respondForDownload } from './download';
+import { isMusicCover, respondForMusicCover } from './musicCovers';
 import { handleClientMessage as handlePrecacheMessage, pruneAppShellCache } from './precache';
 import { respondForProgressive } from './progressive';
 import {
@@ -78,6 +79,11 @@ self.addEventListener('fetch', (e: FetchEvent) => {
 
   if (pathname.includes('/share/')) {
     e.respondWith(respondForShare(e));
+    return true;
+  }
+
+  if (e.request.method === 'GET' && isMusicCover(pathname)) {
+    e.respondWith(respondForMusicCover(e));
     return true;
   }
 
