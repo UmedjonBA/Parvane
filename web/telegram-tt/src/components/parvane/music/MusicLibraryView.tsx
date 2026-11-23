@@ -55,6 +55,11 @@ const MusicLibraryView = ({ info }: OwnProps) => {
 
   const handleTab = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const value = e.currentTarget.dataset.tab as Tab;
+    // «Плейлисты» — своя страница разделами (доска `MusicPlaylist-01`)
+    if (value === 'playlists') {
+      openMusicView({ kind: 'playlists' });
+      return;
+    }
     setTab(value === tab ? undefined : value);
   });
   const handleOpenMenu = useLastCallback(() => setIsMenuOpen(true));

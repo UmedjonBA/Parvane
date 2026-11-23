@@ -877,8 +877,41 @@ async function galleryMusic() {
   });
   await musicBack();
   await step(page, 'MusicLibrary-04', async () => {
-    await music.locator('[data-music-library] [data-tab="playlists"]').click({ timeout: STEP_TIMEOUT_MS });
     await music.locator('[data-music-library] [data-item="starred"]').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await musicBack();
+  // Плейлисты (доска `MusicPlaylist`): «Новый плейлист» (-05), два своих, список разделами (-01), страница (-02),
+  // «В плейлист…» (-04)
+  const newPlaylist = async (name, whose) => {
+    await music.locator('[data-music-library-more]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-action="newPlaylist"]').click({ timeout: STEP_TIMEOUT_MS });
+    const form = page.locator('[data-music-new-playlist-form]');
+    await form.getByRole('textbox').first().fill(name);
+    if (whose) await form.locator(`[data-value="${whose}"]`).click({ timeout: STEP_TIMEOUT_MS });
+    return form;
+  };
+  await step(page, 'MusicPlaylist-05', async () => { await newPlaylist('Пробежка', 'shared'); });
+  await page.keyboard.press('Escape');
+  for (const name of ['Для работы', 'Дорога']) {
+    const form = await newPlaylist(name);
+    await form.locator('button[type="submit"]').click({ timeout: STEP_TIMEOUT_MS });
+    await form.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+    await musicBack();
+  }
+  await step(page, 'MusicPlaylist-01', async () => {
+    await music.locator('[data-music-library] [data-tab="playlists"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-playlists="mine"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await step(page, 'MusicPlaylist-02', async () => {
+    await music.locator('[data-music-playlists="mine"] [data-kind="playlist"]').first().click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-playlist]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await step(page, 'MusicPlaylist-04', async () => {
+    await music.locator('[data-music-playlist] [data-track]:visible [data-music-menu]').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-action="playlist"]').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-playlist-picker]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
   await page.context().close();
 }

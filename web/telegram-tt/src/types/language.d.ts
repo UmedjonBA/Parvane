@@ -1433,6 +1433,23 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicOnlyYou': undefined;
+  'MusicPlaylistsMineCaps': undefined;
+  'MusicPlaylistsSharedCaps': undefined;
+  'MusicPlaylistsGroupsCaps': undefined;
+  'MusicWhoseLabel': undefined;
+  'MusicWhoseMine': undefined;
+  'MusicWhoseShared': undefined;
+  'MusicWhoseGroups': undefined;
+  'MusicWithWhom': undefined;
+  'MusicWithAdd': undefined;
+  'MusicNickPlaceholder': undefined;
+  'MusicWhoAdds': undefined;
+  'MusicAddingAll': undefined;
+  'MusicAddingMe': undefined;
+  'MusicGroupLabel': undefined;
+  'MusicNoGroups': undefined;
+  'MusicGroupPlaylistHint': undefined;
   'MusicStateChoice': undefined;
   'MusicListenPreview': undefined;
   'MusicPreviewOnly': undefined;
@@ -5098,6 +5115,12 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicSortBy': {
     'name': V;
   };
+  'MusicRemovePerson': {
+    'nick': V;
+  };
+  'MusicInviteUnknownNick': {
+    'nick': V;
+  };
   'MusicPeopleCount': {
     'count': V;
   };
@@ -6867,6 +6890,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'limit': V;
   };
   'MusicTracksCount': {
+    'count': V;
+  };
+  'MusicGroupMark': {
     'count': V;
   };
   'MusicParallelValue': {

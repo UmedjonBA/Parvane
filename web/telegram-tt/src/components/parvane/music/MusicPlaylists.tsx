@@ -29,8 +29,6 @@ import PvSkeleton from '../notes/PvSkeleton';
 import MusicCover from './MusicCover';
 import MusicMenu from './MusicMenu';
 import MusicOfflineCircle from './MusicOfflineCircle';
-import MusicPlayButtons from './MusicPlayButtons';
-import MusicSectionHead from './MusicSectionHead';
 import MusicSendDialog from './MusicSendDialog';
 import MusicTrackRow from './MusicTrackRow';
 import MusicMakeShared from './shared/MusicMakeShared';
@@ -38,6 +36,7 @@ import MusicMakeShared from './shared/MusicMakeShared';
 import sheets from '../cloud/CloudSheets.module.scss';
 import kit from '../notes/PvKit.module.scss';
 import styles from './Music.module.scss';
+import page from './MusicPage.module.scss';
 
 type OwnProps = {
   playlistId: string;
@@ -50,8 +49,8 @@ const STATUS_KEYS = {
   'no-key': 'MusicPlaylistsNoKey',
   offline: 'MusicPlaylistsOffline',
 } as const;
-const COVER_PHONE = 96;
-const COVER_DESK = 72;
+const COVER_PHONE = 220;
+const COVER_DESK = 150;
 const NAME_MAX = 120;
 
 // Parvane (spec 039 этап C, 041; доски `MusicPlaylist`, `DeskMusicMore`): страница плейлиста — обложка тоном,
@@ -159,7 +158,16 @@ const MusicPlaylists = ({ playlistId, isPhone, onSendToChat }: OwnProps) => {
       openDelete();
     } else if (key === 'share') {
       openMakeShared();
+    } else if (key === 'chat') {
+      openSend();
+    } else if (key === 'shuffle') {
+      handleShuffle();
     }
+  });
+  // ♡+ (доска `MusicPlaylist-02`): все треки плейлиста — в «Любимое»; уже все там — убрать
+  const isAllStarred = playable.length > 0 && playable.every((track) => track.isStarred);
+  const handleStarAll = useLastCallback(() => {
+    playable.filter((track) => track.isStarred === isAllStarred).forEach(handleStar);
   });
 
   const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -192,6 +200,8 @@ const MusicPlaylists = ({ playlistId, isPhone, onSendToChat }: OwnProps) => {
     isHeld && !isPhone && lang('MusicPlaylistOfflineMark'),
   ].filter(Boolean).join(' · ');
   const menuActions: MusicMenuAction[] = [
+    { key: 'shuffle', title: lang('MusicShuffleOn'), isDisabled: !playable.length },
+    { key: 'chat', title: lang('MusicSendToChat'), isDisabled: !rows.length },
     { key: 'rename', title: lang('MusicPlaylistRename') },
     {
       key: 'offline',
@@ -204,84 +214,54 @@ const MusicPlaylists = ({ playlistId, isPhone, onSendToChat }: OwnProps) => {
       key: 'delete', title: lang('MusicPlaylistDelete'), isDanger: true, hasDivider: !isPhone,
     },
   ];
-  const moreButton = (
-    <button
-      type="button"
-      className={kit.ib}
-      aria-label={lang('MusicMore')}
-      aria-haspopup="menu"
-      data-music-playlist-menu
-      onClick={handleMenu}
-    >
-      <ParvaneIcon name="more" className={styles.moreIcon} />
-    </button>
-  );
-  const sendButton = (
-    <button
-      type="button"
-      className={kit.ib}
-      aria-label={lang('MusicSendToChat')}
-      data-music-playlist-to-chat
-      disabled={!rows.length}
-      onClick={openSend}
-    >
-      <ParvaneIcon name="send" />
-    </button>
-  );
 
   return (
-    <div className={styles.view} data-music-playlist={playlist.id}>
-      <MusicSectionHead
-        title={playlist.name}
-        tone={coverTone(playlist.id)}
-        barTitle={lang('MusicPlaylistKicker')}
-        kicker={isPhone ? undefined : lang('MusicPlaylistMineTitle')}
-        cover={(
-          <MusicCover
-            toneId={playlist.id}
-            size={isPhone ? COVER_PHONE : COVER_DESK}
-            glyph="list"
-            className={styles.heroCover}
-          />
-        )}
-        subtitle={isPhone ? (
-          <>
-            <div>{lang('MusicPlaylistMineTitle')}</div>
-            <div>{subtitle}</div>
-          </>
-        ) : subtitle}
-        isPhone={isPhone}
-        barActions={(
-          <>
-            {sendButton}
-            {moreButton}
-          </>
-        )}
-        actions={(
-          <>
-            <MusicPlayButtons isDisabled={!playable.length} onPlay={handlePlayAll} onShuffle={handleShuffle} />
-            {isPhone && <MusicOfflineCircle tracks={playable} holder={holder} />}
-            {!isPhone && (
-              <button
-                type="button"
-                className={kit.btn}
-                data-music-playlist-to-chat
-                disabled={!rows.length}
-                onClick={openSend}
-              >
-                {lang('MusicSendToChat')}
-              </button>
-            )}
-            {!isPhone && (
-              <button type="button" className={kit.btn} data-music-make-shared onClick={openMakeShared}>
-                {lang('MusicMakeShared')}
-              </button>
-            )}
-            {!isPhone && moreButton}
-          </>
-        )}
-        onBack={goBackMusic}
-      />
+    <div className={buildClassName(page.root, isPhone && page.rootPhone)} data-music-playlist={playlist.id}>
+      <div className={page.hero} style={`--hero-tone: ${coverTone(playlist.id)}`}>
+        <button type="button" className={page.back} aria-label={lang('Back')} data-music-back onClick={goBackMusic}>
+          <ParvaneIcon name="left" />
+        </button>
+        <MusicCover
+          toneId={playlist.id}
+          size={isPhone ? COVER_PHONE : COVER_DESK}
+          glyph="list"
+          isLarge
+          className={page.heroCover}
+        />
+        <div className={page.heroText}>
+          {!isPhone && <div className={page.kicker}>{lang('MusicPlaylistKicker')}</div>}
+          <h1 className={page.title} data-music-title>{playlist.name}</h1>
+          <div className={page.owner}>{lang('MusicPlaylistMineTitle')}</div>
+          <div className={page.metaPlain}>{subtitle}</div>
+        </div>
+      </div>
+      <div className={page.actions}>
+        {!isPhone && renderPlay()}
+        <button
+          type="button"
+          className={buildClassName(page.action, isAllStarred && page.actionOn)}
+          aria-label={lang(isAllStarred ? 'MusicUnstar' : 'MusicStar')}
+          aria-pressed={isAllStarred}
+          disabled={!playable.length}
+          data-music-star-playlist
+          onClick={handleStarAll}
+        >
+          <ParvaneIcon name={isAllStarred ? 'heart' : 'heartPlus'} />
+        </button>
+        <MusicOfflineCircle tracks={playable} holder={holder} />
+        <button
+          type="button"
+          className={page.action}
+          aria-label={lang('MusicMore')}
+          aria-haspopup="menu"
+          data-music-playlist-menu
+          onClick={handleMenu}
+        >
+          <ParvaneIcon name="dotsH" />
+        </button>
+        {isPhone && <span className={page.actionsGap} />}
+        {isPhone && renderPlay()}
+      </div>
       {!rows.length && <PvEmpty text={lang('MusicPlaylistEmpty')} data-music-empty />}
       {Boolean(rows.length) && !isPhone && (
         <div className={buildClassName(styles.tableHead, kit.muted, kit.small)} aria-hidden>
@@ -299,7 +279,7 @@ const MusicPlaylists = ({ playlistId, isPhone, onSendToChat }: OwnProps) => {
               key={row.itemId}
               track={row.track}
               index={index}
-              number={index + 1}
+              rank={index + 1}
               columns={isPhone ? undefined : ['artist', 'album']}
               isCurrent={row.track.id === currentId}
               isPlaying={player.isPlaying}
@@ -372,6 +352,21 @@ const MusicPlaylists = ({ playlistId, isPhone, onSendToChat }: OwnProps) => {
       <MusicSendDialog playlist={isSendOpen ? playlist : undefined} onClose={closeSend} />
     </div>
   );
+
+  function renderPlay() {
+    return (
+      <button
+        type="button"
+        className={page.play}
+        aria-label={lang('MusicPlay')}
+        disabled={!playable.length}
+        data-music-play-all
+        onClick={handlePlayAll}
+      >
+        <ParvaneIcon name="play" />
+      </button>
+    );
+  }
 };
 
 export default memo(MusicPlaylists);

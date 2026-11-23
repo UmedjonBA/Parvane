@@ -113,6 +113,17 @@
   background: var(--hero-tone);
 }
 
+.owner {
+  font-size: 0.8125rem;
+  color: var(--pv-fg);
+}
+
+// Плейлист (доска `MusicPlaylist-02`): подпись под названием обычным шрифтом
+.metaPlain {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
 .meta {
   font-family: var(--pv-font-mono, monospace);
   font-size: 0.8125rem;

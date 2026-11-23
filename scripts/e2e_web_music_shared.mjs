@@ -1,5 +1,5 @@
 // «Музыка», spec 041 (правило MUSIC-3 и «Найти и скачать» до макета): общий плейлист двух аккаунтов и задачи сервера.
-// Общий плейлист: alice создаёт его окном «Новый плейлист» с «Кто видит: Выбранные люди», зовёт bob по нику
+// Общий плейлист: alice создаёт его окном «Новый плейлист» с «Чей: Общий», зовёт bob по нику
 // («Позвать», роль «Добавляет»), bob видит приглашение в списке и открывает плейлист (отметка снимается), alice
 // видит «добавил(а) …» у трека bob, меняет его роль на «Слушает» — сервер больше не даёт bob править; alice убирает
 // bob и шлёт плейлист в чат карточкой — bob вступает «Открыть» по ключу из карточки и снова «Добавляет»; «Закрыть
@@ -119,8 +119,9 @@ try {
   await a.page.getByRole('menuitem', { name: /New playlist/ }).click();
   const form = a.page.locator('[data-music-new-playlist-form]');
   await form.getByRole('textbox', { name: 'Name' }).fill(SHARED_NAME);
-  await form.locator('[data-music-access]').getByRole('button', { name: 'Selected people' }).click();
-  await form.locator('[data-music-access="members"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Чей: Общий» (доска `MusicPlaylist-05`): «С кем» и «Все добавляют / Только я»
+  await form.locator('[data-value="shared"]').click();
+  await form.locator('[data-music-new-people]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await form.locator('button[type="submit"]').click();
   const aPage = aMusic.locator('[data-music-shared][data-role="owner"]');
   await aPage.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -130,7 +131,7 @@ try {
   const t1 = { trackId: 't1', title: 'Северный ветер', artist: 'Тихий порт', durationSecs: 4 };
   assert.ok(!(await callApi(a.page, 'parvaneMusicSharedItems', { id: sharedId, add: [t1] })).error, 'владелец добавил трек');
   await aPage.locator('[data-music-shared-tracks] [data-track="t1"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  console.log('OK: общий плейлист создан окном «Новый плейлист» («Выбранные люди»)');
+  console.log('OK: общий плейлист создан окном «Новый плейлист» («Чей: Общий»)');
 
   // ── Позвать по нику: неизвестный ник — отказ, bob — «Добавляет» ──
   await aPage.locator('[data-music-members-open]').click();

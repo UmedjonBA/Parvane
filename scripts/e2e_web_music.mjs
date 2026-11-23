@@ -306,7 +306,8 @@ try {
   await page.getByRole('menuitem', { name: /New playlist/ }).click();
   const newPlaylist = page.locator('[data-music-new-playlist-form]');
   await visible(newPlaylist);
-  await newPlaylist.getByRole('button', { name: 'Cancel' }).click();
+  // Окно закрывается ✕ (доска `MusicPlaylist-05`)
+  await page.locator('.Modal').filter({ has: newPlaylist }).getByRole('button', { name: 'Close' }).click();
   await gone(newPlaylist);
   console.log('OK: «+» в «Музыке» — «Найти в каталоге» и «Новый плейлист»');
 
@@ -675,7 +676,8 @@ try {
   const backInMusic = await openMusic(page);
   await pause(page);
   await backInMusic.locator('[data-music-nav] [data-view="playlist"]').filter({ hasText: 'В дорогу' }).click();
-  await backInMusic.locator('[data-music-playlist] [data-music-playlist-to-chat]').first().click();
+  await backInMusic.locator('[data-music-playlist] [data-music-playlist-menu]').click();
+  await page.getByRole('menuitem', { name: 'Send to chat', exact: true }).click();
   const playlistSend = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
   await playlistSend.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first()
     .locator('input[type="checkbox"]').check();

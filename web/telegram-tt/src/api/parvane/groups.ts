@@ -258,6 +258,16 @@ export function createGroupController(deps: GroupDependencies) {
     return isDone || undefined;
   }
 
+  // «Новый плейлист → Группы» (доска `MusicPlaylist-05`): привязать общий плейлист, оставив привязанную папку
+  async function setGroupPlaylist({
+    chat, playlistId, playlistKey,
+  }: { chat: ApiChat; playlistId: string; playlistKey: string }) {
+    const groupId = deps.getStore().getAddressForId(chat.id);
+    const info = groupId ? v2Of(groupId)?.groupInfo(groupId) : undefined;
+    if (!info) return undefined;
+    return setGroupShared({ chat, folder: info.shared_folder || '', playlistId, playlistKey });
+  }
+
   // Канал: дать либо снять участнику право писать (`SetRole.writer`); админские права не затрагиваются
   async function setChannelWriter({ chat, user, isWriter }: { chat: ApiChat; user: ApiUser; isWriter: boolean }) {
     const store = deps.getStore();
@@ -1087,6 +1097,7 @@ export function createGroupController(deps: GroupDependencies) {
     setChannelWriter,
     setGroupInfo,
     setGroupShared,
+    setGroupPlaylist,
     setJoinByRequest,
     updateChatAbout,
     updateChatAdmin,

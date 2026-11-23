@@ -56,7 +56,6 @@ import MusicPlaylistList from './MusicPlaylistList';
 import MusicPlaylists from './MusicPlaylists';
 import MusicQueue from './MusicQueue';
 import MusicSearchView from './MusicSearchView';
-import MusicSectionHead from './MusicSectionHead';
 import MusicSendDialog from './MusicSendDialog';
 import MusicSettingsView from './MusicSettingsView';
 import MusicStarredView from './MusicStarredView';
@@ -64,7 +63,6 @@ import MusicTrashView from './MusicTrashView';
 import MusicUploadStatus from './MusicUploadStatus';
 import MusicSharedPage from './shared/MusicSharedPage';
 
-import kit from '../notes/PvKit.module.scss';
 import styles from './Music.module.scss';
 
 const TABS: MusicTab[] = ['home', 'search', 'library'];
@@ -160,7 +158,6 @@ const Music = () => {
     openMusicView({ kind: e.currentTarget.dataset.value as MusicTab }, true);
   });
   const handleCloseSend = useLastCallback(() => setSentTrack(undefined));
-  const handleNewPlaylist = useLastCallback(() => openNewPlaylist());
   const handleOpenSearch = useLastCallback(() => {
     openMusicView({ kind: 'search' }, true);
     deskSearchRef.current?.focus();
@@ -237,27 +234,7 @@ const Music = () => {
       case 'people':
         return <MusicSettingsView page="people" isPhone={isPhone} />;
       case 'playlists':
-        return (
-          <div className={styles.view}>
-            <MusicSectionHead
-              title={lang('MusicPlaylists')}
-              isPhone={isPhone}
-              barActions={(
-                <button
-                  type="button"
-                  className={kit.ib}
-                  aria-label={lang('MusicPlaylistNew')}
-                  data-music-new-playlist
-                  onClick={handleNewPlaylist}
-                >
-                  <ParvaneIcon name="plus" />
-                </button>
-              )}
-              onBack={goBackMusic}
-            />
-            <MusicPlaylistList />
-          </div>
-        );
+        return <MusicPlaylistList isPhone={isPhone} />;
       default:
         return undefined;
     }
