@@ -6,7 +6,7 @@ import type { MusicTrack } from '../../../api/parvane/musicApi';
 import type { MusicMenuAction } from './MusicMenu';
 
 import buildClassName from '../../../util/buildClassName';
-import { splitListTime } from './musicFormat';
+import { coverTone, splitListTime } from './musicFormat';
 import { getOfflineHolds, getOfflineState, removeOfflineGroup, saveTracksOffline } from './musicOffline';
 import {
   getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
@@ -233,6 +233,7 @@ const MusicPlaylists = ({ playlistId, isPhone, onSendToChat }: OwnProps) => {
     <div className={styles.view} data-music-playlist={playlist.id}>
       <MusicSectionHead
         title={playlist.name}
+        tone={coverTone(playlist.id)}
         barTitle={lang('MusicPlaylistKicker')}
         kicker={isPhone ? undefined : lang('MusicPlaylistMineTitle')}
         cover={(

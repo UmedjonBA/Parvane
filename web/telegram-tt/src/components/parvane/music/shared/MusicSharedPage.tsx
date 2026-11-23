@@ -6,7 +6,7 @@ import { getActions } from '../../../../global';
 import type { MusicSharedItem } from '../../../../api/parvane/musicSharedApi';
 
 import buildClassName from '../../../../util/buildClassName';
-import { splitListTime } from '../musicFormat';
+import { coverTone, splitListTime } from '../musicFormat';
 import {
   getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from '../musicPlayer';
@@ -180,6 +180,7 @@ const MusicSharedPage = ({ id, isPhone }: OwnProps) => {
     >
       <MusicSectionHead
         kicker={lang(playlist.access === 'server' ? 'MusicSharedKickerServer' : 'MusicSharedKicker')}
+        tone={coverTone(playlist.id)}
         title={playlist.name}
         cover={<MusicCover toneId={playlist.id} size={72} glyph="list" className={musicStyles.heroCover} />}
         hasManyActions

@@ -5,7 +5,7 @@ import type {
 } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
-import { splitListTime } from './musicFormat';
+import { coverTone, splitListTime } from './musicFormat';
 import {
   callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
@@ -136,6 +136,7 @@ const MusicAlbumView = ({
     <div className={styles.view} data-music-album={albumId || singlesOf}>
       <MusicSectionHead
         title={title}
+        tone={coverTone(albumId || `${singlesOf}-singles`)}
         barTitle={lang(singlesOf ? 'MusicSingles' : 'MusicKindAlbum')}
         kicker={isPhone ? undefined : lang(singlesOf ? 'MusicSingles' : 'MusicKindAlbum')}
         cover={(

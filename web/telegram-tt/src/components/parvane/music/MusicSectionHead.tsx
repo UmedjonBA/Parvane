@@ -30,6 +30,10 @@ type OwnProps = {
   barSubtitle?: string;
   barActions?: TeactNode;
   isPhone?: boolean;
+  // Цвет шапки с обложкой (макет 23 ноя): фон переходит из него в панель, обложка крупно
+  tone?: string;
+  // Обложка слева от названия и на телефоне («Любимое», доска `MusicLibrary-04`)
+  isCoverAside?: boolean;
   onBack?: NoneToVoidFunction;
 };
 
@@ -38,9 +42,40 @@ type OwnProps = {
 // На телефоне сверху строка страницы с «назад»
 const MusicSectionHead = ({
   title, kicker, subtitle, cover, actions, tools, barTitle, barSubtitle, barActions, isPhone, hasManyActions,
-  onBack,
+  tone, isCoverAside, onBack,
 }: OwnProps) => {
   const lang = useLang();
+  // Доски `MusicPlaylist`, `MusicLibrary-04`: шапка на цвете — «назад» и значки поверх, обложка крупно
+  if (tone && cover) {
+    return (
+      <header className={styles.head} data-music-head>
+        <div
+          className={buildClassName(
+            styles.release, isPhone && styles.releasePhone, isCoverAside && styles.releaseAside,
+          )}
+          style={`--hero-tone: ${tone}`}
+        >
+          {isPhone && onBack && (
+            <div className={styles.releaseBar}>
+              <button type="button" className={kit.ib} aria-label={lang('Back')} data-music-back onClick={onBack}>
+                <ParvaneIcon name="left" />
+              </button>
+              <span className={kit.grow} />
+              {barActions}
+            </div>
+          )}
+          <span className={styles.releaseCover}>{cover}</span>
+          <div className={styles.heroText}>
+            {kicker && <div className={styles.releaseKicker}>{kicker}</div>}
+            <h2 className={styles.releaseTitle} data-music-title>{title}</h2>
+            {Boolean(subtitle) && <div className={styles.releaseSub}>{subtitle}</div>}
+          </div>
+        </div>
+        {Boolean(actions) && <div className={styles.releaseActions}>{actions}</div>}
+        {Boolean(tools) && <div className={styles.tools}>{tools}</div>}
+      </header>
+    );
+  }
   // Телефон: название — в строке страницы; крупная шапка — только с обложкой (плейлист, альбом, исполнитель)
   const hasHero = !isPhone || Boolean(cover || kicker);
 

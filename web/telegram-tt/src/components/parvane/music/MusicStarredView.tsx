@@ -3,7 +3,7 @@ import { memo, useMemo, useState } from '../../../lib/teact/teact';
 import type { MusicInfo, MusicTrack } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
-import { splitListTime } from './musicFormat';
+import { coverTone, splitListTime } from './musicFormat';
 import { filterByQuery, sortTracksByArtist } from './musicLibrary';
 import { getOfflineState } from './musicOffline';
 import {
@@ -20,6 +20,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import PvEmpty from '../notes/PvEmpty';
 import PvSkeleton from '../notes/PvSkeleton';
+import MusicCover from './MusicCover';
 import MusicLoadMore from './MusicLoadMore';
 import MusicPlayButtons from './MusicPlayButtons';
 import MusicSectionHead from './MusicSectionHead';
@@ -125,7 +126,10 @@ const MusicStarredView = ({ info, isPhone, onSendToChat }: OwnProps) => {
     <div className={styles.view}>
       <MusicSectionHead
         title={lang('MusicStarred')}
-        subtitle={isPhone ? undefined : subtitle}
+        tone={coverTone('starred')}
+        cover={<MusicCover toneId="starred" size={150} glyph="heart" isLarge />}
+        subtitle={subtitle}
+        isCoverAside
         isPhone={isPhone}
         barActions={!isSearchOpen && (
           <button type="button" className={kit.ib} aria-label={lang('MusicFindInStarred')} onClick={openSearch}>
@@ -142,7 +146,6 @@ const MusicStarredView = ({ info, isPhone, onSendToChat }: OwnProps) => {
           <MusicPlayButtons
             playKey={isPhone ? 'MusicPlayAll' : 'MusicListen'}
             shuffleKey={isPhone ? 'MusicShufflePlay' : 'MusicShuffleMix'}
-            isShuffleFirst={!isPhone}
             isDisabled={!tracks.length}
             onPlay={handlePlayAll}
             onShuffle={handleShuffle}
