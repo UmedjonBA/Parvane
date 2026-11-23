@@ -22,6 +22,7 @@ MUSIC_FETCH_PROXY (необязательный прокси для источн
 import json
 import re
 import os
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -34,6 +35,8 @@ LIBRARY_DIR = os.path.realpath(os.environ.get("MUSIC_FETCH_LIBRARY_DIR", "/music
 COOLDOWN_SECS = int(os.environ.get("MUSIC_FETCH_COOLDOWN_SECS", "900"))
 PROXY = os.environ.get("MUSIC_FETCH_PROXY") or None
 COOKIES_FILE = os.environ.get("MUSIC_FETCH_COOKIES_FILE") or None
+# Перезапись тегов скачанного файла (ffmpeg без перекодирования)
+RETAG_TIMEOUT_SECS = 120
 DEEZER_API = "https://api.deezer.com"
 # Чип поиска: `artist:"…"`, `album:"…"`, `track:"…"`
 FIELD_QUERY = re.compile(r'^(artist|album|track):"([^"]*)"$')
@@ -176,7 +179,7 @@ class Cancelled(Exception):
     pass
 
 
-def download(source, item_id, dest):
+def download(source, item_id, dest, tags=None):
     target = safe_dest(dest)
     os.makedirs(os.path.dirname(target), exist_ok=True)
 
@@ -207,11 +210,36 @@ def download(source, item_id, dest):
         with PROGRESS_LOCK:
             PROGRESS.pop(dest, None)
             CANCELLED.discard(dest)
+    if tags:
+        retag(path, tags)
     return {
         "path": os.path.relpath(path, LIBRARY_DIR),
         "bytes": os.path.getsize(path),
         "duration": int(info.get("duration") or 0),
     }
+
+
+def retag(path, tags):
+    """Теги файла — по эталону каталога (исполнитель, название, альбом), в UTF-8. Перезаливы несут свои: «5. Группа -
+    Песня (prod.)», нередко в cp1251, которую музыкальный сервер читает как latin-1. Звук не перекодируется; не вышло —
+    файл остаётся с прежними тегами."""
+    ext = os.path.splitext(path)[1]
+    tmp = f"{path}.tags{ext}"
+    command = ["ffmpeg", "-v", "error", "-y", "-i", path, "-map", "0:a", "-c", "copy", "-map_metadata", "-1"]
+    for key in ("artist", "title", "album"):
+        value = str(tags.get(key) or "").strip()
+        if value:
+            command += ["-metadata", f"{key}={value}"]
+    if ext.lower() == ".mp3":
+        command += ["-id3v2_version", "3"]
+    command.append(tmp)
+    try:
+        subprocess.run(command, check=True, timeout=RETAG_TIMEOUT_SECS, capture_output=True)
+        os.replace(tmp, path)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"retag: {type(error).__name__}: {error}", flush=True)
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -266,7 +294,8 @@ class Handler(BaseHTTPRequestHandler):
                 CANCELLED.add(str(body.get("dest", "")))
             self.reply(200, {})
             return
-        self.handle_request(lambda: download(body["source"], body["id"], body["dest"]))
+        tags = body.get("tags") if isinstance(body.get("tags"), dict) else None
+        self.handle_request(lambda: download(body["source"], body["id"], body["dest"], tags))
 
     def log_message(self, *_args):
         pass

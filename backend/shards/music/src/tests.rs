@@ -328,6 +328,8 @@ struct FakeFetch {
     candidates: Mutex<HashMap<String, Vec<serde_json::Value>>>,
     asked_sources: Mutex<Vec<String>>,
     library_dir: Mutex<std::path::PathBuf>,
+    /// Теги, которые шард попросил записать в скачанные файлы (эталон каталога)
+    download_tags: Mutex<Vec<serde_json::Value>>,
 }
 
 async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Response<Full<Bytes>> {
@@ -357,6 +359,7 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
             if v["id"].as_str().unwrap_or("").contains("drm") {
                 return reply(500, json!({"error": "DRM protected"}));
             }
+            fake.download_tags.lock().unwrap().push(v["tags"].clone());
             let rel = format!("{}.mp3", v["dest"].as_str().unwrap());
             let full = fake.library_dir.lock().unwrap().join(&rel);
             std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -459,6 +462,9 @@ async fn fetch_takes_confident_match_and_tracks_who_added_it() {
     assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
     assert_eq!(done.track_id, "t2");
     assert_eq!(fake.asked_sources.lock().unwrap()[..], ["soundcloud"], "русский трек: сначала SoundCloud; уверенное совпадение заканчивает поиск");
+    // Теги файла — по эталону, а не те, что у перезаливщика
+    let tags = fake.download_tags.lock().unwrap().clone();
+    assert_eq!((tags[0]["artist"].as_str(), tags[0]["title"].as_str()), (Some("Группа"), Some("Песня t2")), "{tags:?}");
     let mine: pb::AddedListResponse = call(&ctx, "alice@local", "music.added.list", pb::AddedListRequest { mine: true, ..Default::default() }).await.unwrap();
     assert_eq!(mine.tracks.len(), 1);
     assert_eq!((mine.tracks[0].adder.as_str(), mine.tracks[0].bytes, mine.tracks[0].track.as_ref().unwrap().id.as_str()), ("alice", 4000, "t2"));

@@ -612,7 +612,7 @@ impl Fetch {
         let dest = format!("{}/{} [{}]", nd_user(&user), file_stem(&query.artist, &query.title), id);
         self.update(id, |j| j.dest = dest.clone());
         let fetched = {
-            let job = service.download(&candidate.source, &candidate.id, &dest);
+            let job = service.download(&candidate.source, &candidate.id, &dest, &query);
             tokio::pin!(job);
             let mut tick = tokio::time::interval(PROGRESS_EVERY);
             tick.tick().await;

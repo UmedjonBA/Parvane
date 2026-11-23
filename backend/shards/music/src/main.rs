@@ -25,6 +25,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 
+/// Сколько ждать музыкальный сервер при старте: 100 попыток раз в 3 с — 5 минут
+const NAVIDROME_WAIT_ATTEMPTS: u32 = 100;
+const NAVIDROME_WAIT_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
+
 pub(crate) struct Ctx {
     /// Музыкальный сервер; `None` — библиотека выключена.
     pub sub: Option<Arc<subsonic::Subsonic>>,
@@ -154,11 +158,22 @@ async fn main() -> Result<()> {
     let ctx = Arc::new(Ctx { sub, fetch, key, public_base });
 
     // Свежий музыкальный сервер делает администратором первого пришедшего — пусть это будет служебный пользователь
-    if let Some(s) = &ctx.sub {
-        match s.call(subsonic::SERVICE_USER, "ping", &[]).await {
-            Ok(_) => info!("музыкальный сервер отвечает"),
-            Err(_) => warn!("музыкальный сервер пока не отвечает — запросы будут получать UNAVAILABLE до его готовности"),
-        }
+    // (иначе `startScan` после «Найти и скачать» отклоняется). Шард обычно стартует раньше музыкального сервера:
+    // стучаться, пока не ответит, а не один раз — иначе первым приходил человек и администратором становился он
+    if let Some(s) = ctx.sub.clone() {
+        tokio::spawn(async move {
+            for attempt in 0..NAVIDROME_WAIT_ATTEMPTS {
+                if s.call(subsonic::SERVICE_USER, "ping", &[]).await.is_ok() {
+                    info!("музыкальный сервер отвечает");
+                    return;
+                }
+                if attempt == 0 {
+                    warn!("музыкальный сервер пока не отвечает — запросы будут получать UNAVAILABLE до его готовности");
+                }
+                tokio::time::sleep(NAVIDROME_WAIT_PAUSE).await;
+            }
+            error!("музыкальный сервер не ответил за {} с", NAVIDROME_WAIT_ATTEMPTS as u64 * NAVIDROME_WAIT_PAUSE.as_secs());
+        });
     }
 
     let bind = std::env::var("PARVANE_MUSIC_HTTP_BIND").unwrap_or_else(|_| "0.0.0.0:9340".to_string());

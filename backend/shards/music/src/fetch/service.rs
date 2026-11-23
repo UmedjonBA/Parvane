@@ -149,8 +149,10 @@ impl FetchService {
     }
 
     /// Скачать файл в папку библиотеки; `dest` — путь без расширения.
-    pub async fn download(&self, source: &str, id: &str, dest: &str) -> Result<Downloaded, ServiceError> {
-        let rq = self.http.post(format!("{}/download", self.base)).json(&json!({"source": source, "id": id, "dest": dest}));
+    /// Скачать файл в `dest`; `tags` — эталон каталога: сервис пишет его в теги файла вместо тегов перезаливщика.
+    pub async fn download(&self, source: &str, id: &str, dest: &str, tags: &Query) -> Result<Downloaded, ServiceError> {
+        let tags = json!({"artist": tags.artist, "title": tags.title, "album": tags.album});
+        let rq = self.http.post(format!("{}/download", self.base)).json(&json!({"source": source, "id": id, "dest": dest, "tags": tags}));
         let v = self.json(rq, DOWNLOAD_TIMEOUT).await?;
         let path = v.get("path").and_then(Value::as_str).unwrap_or("").to_string();
         let bytes = v.get("bytes").and_then(Value::as_u64).unwrap_or(0);
