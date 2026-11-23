@@ -131,6 +131,46 @@ pub(crate) async fn popular(sub: &Subsonic, user: &str, artist_id: &str) -> Vec<
     out
 }
 
+/// «Популярное на сервере» за неделю (доска `MusicHome`): id трека и число прослушиваний всех людей за 7 суток.
+pub(crate) async fn popular_week(limit: usize) -> Vec<(String, u32)> {
+    let Some(pool) = PLAYS.get() else { return vec![] };
+    let since = crate::now_ms() / DAY_MS - 6;
+    let r: Result<Vec<(String, i64)>, _> =
+        sqlx::query_as("SELECT track_id, COUNT(*) AS n FROM plays WHERE day >= ? GROUP BY track_id ORDER BY n DESC, track_id LIMIT ?")
+            .bind(since)
+            .bind(limit as i64)
+            .fetch_all(pool)
+            .await;
+    match r {
+        Ok(rows) => rows.into_iter().map(|(id, n)| (id, u32::try_from(n).unwrap_or(u32::MAX))).collect(),
+        Err(e) => {
+            warn!("музыка: популярное за неделю не прочитано: {e}");
+            vec![]
+        }
+    }
+}
+
+/// «Частое у вас»: исполнители, которых человек слушал больше всего дней за 30 суток.
+pub(crate) async fn frequent_artists(user: &str, limit: usize) -> Vec<String> {
+    let Some(pool) = PLAYS.get() else { return vec![] };
+    let since = crate::now_ms() / DAY_MS - 29;
+    let r: Result<Vec<(String,)>, _> = sqlx::query_as(
+        "SELECT artist_id FROM plays WHERE user = ? AND day >= ? AND artist_id != '' GROUP BY artist_id ORDER BY COUNT(*) DESC, artist_id LIMIT ?",
+    )
+    .bind(user)
+    .bind(since)
+    .bind(limit as i64)
+    .fetch_all(pool)
+    .await;
+    match r {
+        Ok(rows) => rows.into_iter().map(|(id,)| id).collect(),
+        Err(e) => {
+            warn!("музыка: частые исполнители не прочитаны: {e}");
+            vec![]
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn reset_stats() {
     if let Ok(mut cached) = STATS.lock() {

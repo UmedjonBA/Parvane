@@ -243,17 +243,17 @@ function localOffsetMin() {
   return -new Date().getTimezoneOffset();
 }
 
-function field(source: Json, name: string): unknown {
+export function field(source: Json, name: string): unknown {
   if (name in source) return source[name];
   return source[name.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase())];
 }
 
-const text = (source: Json, name: string) => {
+export const text = (source: Json, name: string) => {
   const value = field(source, name);
   return typeof value === 'string' ? value : '';
 };
-const count = (source: Json, name: string) => Number(field(source, name)) || 0;
-const list = (source: Json, name: string) => {
+export const count = (source: Json, name: string) => Number(field(source, name)) || 0;
+export const list = (source: Json, name: string) => {
   const value = field(source, name);
   return Array.isArray(value) ? value as Json[] : [];
 };
@@ -298,7 +298,7 @@ function toArtist(raw: Json): MusicArtist {
   };
 }
 
-function toCatalogTrack(raw: Json): MusicCatalogTrack {
+export function toCatalogTrack(raw: Json): MusicCatalogTrack {
   const explicit = text(raw, 'explicit');
   return {
     artist: text(raw, 'artist'),
@@ -314,7 +314,7 @@ function toCatalogTrack(raw: Json): MusicCatalogTrack {
   };
 }
 
-function toCatalogArtist(raw: Json): MusicCatalogArtist {
+export function toCatalogArtist(raw: Json): MusicCatalogArtist {
   return {
     ref: text(raw, 'ref'),
     name: text(raw, 'name'),

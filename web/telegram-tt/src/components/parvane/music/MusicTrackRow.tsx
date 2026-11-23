@@ -16,7 +16,6 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import PvIcon from '../notes/PvIcon';
 import MusicCover from './MusicCover';
-import MusicOfflineButton from './MusicOfflineButton';
 import MusicTrackMenu from './MusicTrackMenu';
 
 import kit from '../notes/PvKit.module.scss';
@@ -143,7 +142,7 @@ const MusicTrackRow = ({
           <MusicCover
             coverId={track.coverId}
             toneId={track.albumId || track.id}
-            size={40}
+            size={46}
             className={styles.trackCover}
           />
         )}
@@ -151,21 +150,24 @@ const MusicTrackRow = ({
           <span className={styles.trackTitle}>{track.title}</span>
           {!isBare && (
             <span
-              className={buildClassName(kit.muted, kit.small, styles.trackArtist, isTable && styles.trackSecondary)}
+              className={buildClassName(styles.trackArtist, isTable && styles.trackSecondary)}
             >
-              {artistLine}
+              {/* Состояние трека значком под названием (доска `MusicOverview`): ⊕ — скачан на это устройство */}
+              {offlineState === 'saved' && <ParvaneIcon name="offline" isSmall className={styles.trackSaved} />}
+              <span className={styles.trackArtistText}>{artistLine}</span>
             </span>
           )}
         </span>
         {columns?.map((column) => (
           <span key={column} className={buildClassName(styles.trackCell, kit.muted, kit.small)}>{cells[column]}</span>
         ))}
-        {offlineState === 'saved' && trailing !== 'offline' && (
-          <ParvaneIcon name="downloaded" isSmall className={styles.trackSaved} />
+        {track.isStarred && trailing !== 'unstar' && (
+          <ParvaneIcon name="heart" isSmall className={buildClassName(styles.heartFilled, styles.trackHeart)} />
         )}
-        <span className={buildClassName(kit.mono, kit.muted, kit.small)}>{formatTrackTime(track.durationSecs)}</span>
+        <span className={buildClassName(kit.mono, kit.muted, kit.small, styles.trackTime)}>
+          {formatTrackTime(track.durationSecs)}
+        </span>
       </button>
-      {trailing === 'offline' && canSaveHere && <MusicOfflineButton track={track} />}
       {trailing === 'unstar' && (
         <button
           type="button"
@@ -181,7 +183,7 @@ const MusicTrackRow = ({
       {hasMenu && !isMenuHidden && (
         <button
           type="button"
-          className={buildClassName(kit.ib, trailing && styles.menuHidden, isTable && styles.hoverOnly)}
+          className={buildClassName(kit.ib, styles.trackMenu, trailing === 'unstar' && styles.menuHidden)}
           aria-label={lang('MusicTrackActions', { name: track.title })}
           aria-haspopup="menu"
           data-music-menu

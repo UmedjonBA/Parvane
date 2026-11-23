@@ -7,7 +7,7 @@ import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { setParvaneSection } from '../../../util/parvaneSection';
 import { formatTrackTime } from './musicFormat';
 import {
-  getCurrentTrack, getMusicPlayer, getMusicPosition, playNext, playPrevious, togglePlay,
+  getCurrentTrack, getMusicPlayer, getMusicPosition, playNext, playPrevious, setTrackStarred, togglePlay,
 } from './musicPlayer';
 import { openMusicPlayer } from './musicPlayerView';
 
@@ -64,6 +64,10 @@ const MusicMiniPlayer = ({ isCompact, isDocked }: OwnProps) => {
   const handleQueue = useLastCallback(() => {
     closePopup();
     openMusicPlayer();
+  });
+
+  const handleStar = useLastCallback(() => {
+    if (track) void setTrackStarred(track, !track.isStarred);
   });
 
   const handleOpenModule = useLastCallback(() => {
@@ -154,18 +158,28 @@ const MusicMiniPlayer = ({ isCompact, isDocked }: OwnProps) => {
     );
   }
 
+  // Доска `MusicHome`: карточка 56 px — обложка, название и исполнитель, «В Любимое», пауза; позиция — полоской снизу
   return (
     <div
       className={buildClassName(styles.bar, isDocked && styles.barDocked)}
-      style={`--progress: ${progress}%`}
       data-music-mini={player.isPlaying ? 'playing' : 'paused'}
     >
       <button type="button" className={styles.barOpen} aria-label={lang('MusicOpenPlayer')} onClick={openMusicPlayer}>
-        <MusicCover coverId={track.coverId} toneId={track.albumId || track.id} size={36} className={styles.barCover} />
+        <MusicCover coverId={track.coverId} toneId={track.albumId || track.id} size={40} className={styles.barCover} />
         <span className={styles.barText}>
           <span className={styles.barTitle}>{track.title}</span>
           <span className={buildClassName(styles.barTitle, styles.barArtist)}>{track.artist}</span>
         </span>
+      </button>
+      <button
+        type="button"
+        className={buildClassName(styles.barButton, track.isStarred && styles.barStarred)}
+        aria-label={lang(track.isStarred ? 'MusicUnstar' : 'MusicStar')}
+        aria-pressed={track.isStarred}
+        data-music-mini-star
+        onClick={handleStar}
+      >
+        <ParvaneIcon name={track.isStarred ? 'heart' : 'heartPlus'} />
       </button>
       <button
         type="button"
@@ -175,9 +189,9 @@ const MusicMiniPlayer = ({ isCompact, isDocked }: OwnProps) => {
       >
         <ParvaneIcon name={player.isPlaying ? 'pause' : 'play'} />
       </button>
-      <button type="button" className={styles.barButton} aria-label={lang('MusicNext')} onClick={playNext}>
-        <ParvaneIcon name="next" />
-      </button>
+      <span className={styles.barTrack} aria-hidden>
+        <span className={styles.barProgress} style={`width: ${progress}%`} />
+      </span>
     </div>
   );
 };

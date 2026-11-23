@@ -20,6 +20,8 @@ export type MusicMenuAction = {
   glyph?: TeactNode;
   isDanger?: boolean;
   isDisabled?: boolean;
+  // Быстрое действие уже сделано: «В Любимом» — красным
+  isOn?: boolean;
   // Черта перед пунктом (опасные действия — отдельно, доска `ZdMusicX`)
   hasDivider?: boolean;
   // Подменю у курсора: «В плейлист ›»
@@ -32,6 +34,9 @@ type OwnProps = {
   // Шторка телефона: обложка слева от названия (доска `XpMusic`)
   cover?: TeactNode;
   actions: MusicMenuAction[];
+  // Шторка телефона: круглые быстрые действия под шапкой (доска `RpMusicA`: «В Любимом · В плейлист · В очередь ·
+  // Поделиться»); у курсора на компьютере они идут первыми пунктами списка
+  quick?: MusicMenuAction[];
   anchor?: CloudMenuAnchor;
   footer?: TeactNode;
   onPick: (key: string) => void;
@@ -47,8 +52,9 @@ const EDGE_PX = 8;
 // Parvane (spec 041, доски `XpMusic`, `ZdMusicX`): меню «Музыки» — шторка с обложкой на телефоне, меню у курсора
 // на компьютере с подменю («В плейлист ›») и чертой перед удалением. Вид — как у меню «Файлов» (`CloudMenu`)
 const MusicMenu = ({
-  title, facts, cover, actions, anchor, footer, onPick, onClose,
+  title, facts, cover, actions: listActions, quick, anchor, footer, onPick, onClose,
 }: OwnProps) => {
+  const actions = anchor && quick ? [...quick, ...listActions] : listActions;
   const [openSub, setOpenSub] = useState<string>();
 
   useLayoutEffect(() => (anchor ? captureEscKeyListener(onClose) : undefined), [anchor, onClose]);
@@ -98,6 +104,8 @@ const MusicMenu = ({
   }
 
   if (!anchor) {
+    // Подменю шторки («Файл… ›») открывается вместо списка
+    const subList = openSub ? actions.find((action) => action.key === openSub)?.submenu : undefined;
     return (
       <PvSheet
         isOpen
@@ -109,8 +117,25 @@ const MusicMenu = ({
         onClose={onClose}
       >
         {!cover && facts && <div className={sheets.menuFacts}>{facts}</div>}
-        <div className={sheets.menuList} role="menu" aria-label={title}>{renderRows(actions)}</div>
-        {footer}
+        {quick && !subList && (
+          <div className={styles.menuQuick} role="group">
+            {quick.map((action) => (
+              <button
+                key={action.key}
+                type="button"
+                className={buildClassName(styles.menuQuickItem, action.isOn && styles.menuQuickOn)}
+                data-action={action.key}
+                disabled={action.isDisabled}
+                onClick={handlePick}
+              >
+                <span className={styles.menuQuickIcon}>{action.glyph}</span>
+                <span className={styles.menuQuickLabel}>{action.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className={sheets.menuList} role="menu" aria-label={title}>{renderRows(subList || actions, true)}</div>
+        {!subList && footer}
       </PvSheet>
     );
   }

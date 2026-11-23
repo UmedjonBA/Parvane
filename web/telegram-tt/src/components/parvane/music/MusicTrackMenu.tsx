@@ -1,4 +1,4 @@
-import { memo, useEffect } from '../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
 import { getActions } from '../../../global';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
@@ -6,6 +6,7 @@ import type { ParvaneIconName } from '../../main/ParvaneIcon';
 import type { CloudMenuAnchor } from '../cloud/CloudMenu';
 import type { MusicMenuAction } from './MusicMenu';
 
+import { copyTextToClipboard } from '../../../util/clipboard';
 import {
   addTracksToShared, canEditTracks, getSharedPlaylists, refreshSharedPlaylists, toTrackInput,
 } from './shared/musicShared';
@@ -26,7 +27,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicCover from './MusicCover';
 import MusicMenu from './MusicMenu';
-import MusicPlaylistChips from './MusicPlaylistChips';
+import MusicPlaylistPicker from './MusicPlaylistPicker';
 
 import sheets from '../cloud/CloudSheets.module.scss';
 import music from './Music.module.scss';
@@ -79,6 +80,7 @@ const MusicTrackMenu = ({
   const isSaved = offline.entries.some((entry) => entry.track.id === track.id);
   const isSaving = !isSaved && offline.pending > 0 && isTrackSaving(track.id);
   const isDesk = Boolean(anchor);
+  const [isPicking, setIsPicking] = useState(false);
 
   useEffect(() => {
     if (!isDesk) return;
@@ -103,6 +105,11 @@ const MusicTrackMenu = ({
   });
 
   const handlePick = useLastCallback((key: string) => {
+    // Телефон: «В плейлист» — выбор плейлиста вместо меню
+    if (key === 'playlist') {
+      setIsPicking(true);
+      return;
+    }
     onClose();
     if (key.startsWith(PLAYLIST_PREFIX)) {
       void addTo(key.slice(PLAYLIST_PREFIX.length));
@@ -113,7 +120,10 @@ const MusicTrackMenu = ({
       return;
     }
     const run: Record<string, NoneToVoidFunction> = {
-      next: () => addToQueue([track], true),
+      next: () => {
+        addToQueue([track], true);
+        showNotification({ message: lang('MusicQueuedNext', { name: track.title }) });
+      },
       queue: () => addToQueue([track], false),
       star: () => onStar?.(track),
       [NEW_PLAYLIST]: () => openNewPlaylist(track),
@@ -126,21 +136,27 @@ const MusicTrackMenu = ({
       down: () => extra?.onMoveDown?.(),
       delete: () => (onDelete ? onDelete(track) : void deleteLibraryTrack(track.id)),
       dislike: () => void dislike({ trackId: track.id, artist: track.artist, title: track.title }),
-      dislikeArtist: () => void dislike({ artist: track.artist }),
+      share: () => void shareTrack(),
     };
     run[key]?.();
   });
+
+  // «Поделиться»: системное меню, где оно есть, иначе название и исполнитель — в буфер обмена
+  async function shareTrack() {
+    const text = `${track.title} — ${track.artist}`;
+    if (navigator.share) {
+      await navigator.share({ text }).catch(() => undefined);
+      return;
+    }
+    copyTextToClipboard(text);
+    showNotification({ message: lang('MusicShareCopied') });
+  }
 
   // «Не нравится»: трек либо исполнитель больше не предлагается в «Миксе дня»
   async function dislike(target: { trackId?: string; artist: string; title?: string }) {
     const isDone = await callMusic('parvaneMusicDislike', target).then(() => true, () => false);
     showNotification({ message: lang(isDone ? 'MusicDisliked' : 'MusicPlaylistFailed') });
   }
-
-  const handleNewPlaylist = useLastCallback(() => {
-    onClose();
-    openNewPlaylist(track);
-  });
 
   const item = (
     key: string, icon: ParvaneIconName, title: string, more?: Partial<MusicMenuAction>,
@@ -150,38 +166,40 @@ const MusicTrackMenu = ({
 
   const offlineKey = isSaved ? 'MusicOfflineRemoveTrack' : isSaving ? 'MusicOfflineSaving'
     : isDesk ? 'MusicOfflineSaveDesk' : 'MusicOfflineSaveTrack';
-  const star = onStar && item('star', 'heart', lang(track.isStarred ? 'MusicUnstar' : 'MusicStar'));
-  const offlineItem = canSaveOffline
-    && item('offline', isSaved ? 'downloaded' : 'download', lang(offlineKey), { isDisabled: isSaving });
-  const chat = onSendToChat && item('chat', 'send', lang(isDesk ? 'MusicSendToChatDesk' : 'MusicSendToChat'));
-  const artist = track.artistId && item('artist', 'mic', lang(isDesk ? 'MusicGoToArtistDesk' : 'MusicGoToArtist'));
-  const album = track.albumId && item('album', 'disc', lang(isDesk ? 'MusicGoToAlbumDesk' : 'MusicGoToAlbum'));
-  const tail = [
-    extra?.onMoveUp && item('up', 'left', lang('MusicMoveUp')),
-    extra?.onMoveDown && item('down', 'right', lang('MusicMoveDown')),
-    extra?.onRemove && extra.removeLabel && item('remove', 'close', extra.removeLabel),
-    item('dislike', 'close', lang('MusicDislike'), { hasDivider: isDesk }),
-    track.artist && item('dislikeArtist', 'close', lang('MusicDislikeArtist')),
-    canDelete && item('delete', 'close', lang('MusicDeleteFromServer'), { isDanger: true, hasDivider: isDesk }),
+  const playlistSubmenu = [
+    ...playlists.map((playlist) => ({ key: `${PLAYLIST_PREFIX}${playlist.id}`, title: playlist.name })),
+    ...shared.map((playlist) => ({ key: `${SHARED_PREFIX}${playlist.id}`, title: playlist.name })),
+    { key: NEW_PLAYLIST, title: lang('MusicPlaylistChipNew') },
   ];
-  // Порядок пунктов — по доске устройства: у курсора `ZdMusicX`, шторка `XpMusic`
-  const actions = (isDesk ? [
-    canQueue && item('next', 'next', lang('MusicPlayNext')),
-    canQueue && item('queue', 'list', lang('MusicAddToQueueDesk')),
-    item('playlist', 'plus', lang('MusicToPlaylist'), {
-      submenu: [
-        ...playlists.map((playlist) => ({ key: `${PLAYLIST_PREFIX}${playlist.id}`, title: playlist.name })),
-        ...shared.map((playlist) => ({ key: `${SHARED_PREFIX}${playlist.id}`, title: playlist.name })),
-        { key: NEW_PLAYLIST, title: lang('MusicPlaylistChipNew') },
-      ],
+  // Доска `RpMusicA`: «В Любимом · В плейлист · В очередь · Поделиться» — кругами на телефоне, первыми пунктами
+  // меню у курсора на компьютере
+  const quick = [
+    onStar && item('star', 'heart', lang(track.isStarred ? 'MusicInFavourites' : 'MusicStarShort'), {
+      isOn: track.isStarred,
     }),
-    star, artist, album, chat, offlineItem, ...tail,
-  ] : [
-    canQueue && item('next', 'next', lang('MusicPlayNext')),
-    canQueue && item('queue', 'list', lang('MusicAddToQueue')),
-    star, offlineItem, chat, artist, album, ...tail,
-  ]).filter((action): action is MusicMenuAction => Boolean(action));
-  const facts = [track.artist, formatTrackTime(track.durationSecs), note].filter(Boolean).join(' · ');
+    item('playlist', 'plus', lang('MusicToPlaylist'), isDesk ? { submenu: playlistSubmenu } : undefined),
+    canQueue && item('next', 'list', lang('MusicToQueue')),
+    item('share', 'share', lang('MusicShare')),
+  ].filter((action): action is MusicMenuAction => Boolean(action));
+  const fileMenu = [
+    canDelete && item('delete', 'trash', lang('MusicDeleteFromServer'), { isDanger: true }),
+  ].filter((action): action is MusicMenuAction => Boolean(action));
+  const actions = [
+    onSendToChat && item('chat', 'send', lang(isDesk ? 'MusicSendToChatDesk' : 'MusicSendToChat'), {
+      hasDivider: isDesk,
+    }),
+    track.artistId && item('artist', 'mic', lang(isDesk ? 'MusicGoToArtistDesk' : 'MusicGoToArtist')),
+    track.albumId && item('album', 'disc', lang(isDesk ? 'MusicGoToAlbumDesk' : 'MusicGoToAlbum')),
+    canSaveOffline && item('offline', isSaved ? 'downloaded' : 'offline', lang(offlineKey), { isDisabled: isSaving }),
+    extra?.onMoveUp && item('up', 'chevronUp', lang('MusicMoveUp')),
+    extra?.onMoveDown && item('down', 'chevronDown', lang('MusicMoveDown')),
+    extra?.onRemove && extra.removeLabel && item('remove', 'close', extra.removeLabel),
+    item('dislike', 'ban', lang('MusicDislike')),
+    fileMenu.length && item('file', 'copy', lang('MusicFileMenu'), { submenu: fileMenu }),
+  ].filter((action): action is MusicMenuAction => Boolean(action));
+  const facts = [track.artist, track.album || formatTrackTime(track.durationSecs), note].filter(Boolean).join(' · ');
+
+  if (isPicking) return <MusicPlaylistPicker track={track} onClose={onClose} />;
 
   return (
     <MusicMenu
@@ -195,9 +213,9 @@ const MusicTrackMenu = ({
           className={music.trackCover}
         />
       )}
+      quick={quick}
       actions={actions}
       anchor={anchor}
-      footer={isDesk ? undefined : <MusicPlaylistChips track={track} onNew={handleNewPlaylist} onDone={onClose} />}
       onPick={handlePick}
       onClose={onClose}
     />

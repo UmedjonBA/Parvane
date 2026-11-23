@@ -140,9 +140,12 @@ const FoldersSidebar = ({ isActive, isNarrow, isSettingsOpen }: OwnProps & State
         ))}
       </div>
       <div className={styles.spacer} />
-      <div className={buildClassName(isNarrow && styles.playerNarrow)}>
-        <MusicMiniPlayer isCompact />
-      </div>
+      {/* В самой «Музыке» плеер — внизу модуля во всю ширину (доска `DeskMusic`), виджет ленты не нужен */}
+      {section !== 'music' && (
+        <div className={buildClassName(isNarrow && styles.playerNarrow)}>
+          <MusicMiniPlayer isCompact />
+        </div>
+      )}
       {/* Общий поиск (палитра): заметки, записи «Плана», чаты, файлы, треки и команды. То же — Ctrl+K. В узком
           окне кнопки нет: поиск — в шапке колонки (доска `RdNarrow`) */}
       {!isNarrow && (

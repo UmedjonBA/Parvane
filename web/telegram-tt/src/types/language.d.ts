@@ -3188,6 +3188,10 @@ export interface LangPair {
   'MusicPlaylistNew': undefined;
   'MusicSearch': undefined;
   'MusicLibrary': undefined;
+  'MusicLibraryMore': undefined;
+  'MusicVolume': undefined;
+  'MusicQueue': undefined;
+  'MusicLibMixSub': undefined;
   'MusicAddedByMe': undefined;
   'MusicAddToQueueDesk': undefined;
   'MusicAlbumFindRest': undefined;
@@ -3292,6 +3296,9 @@ export interface LangPair {
   'MusicStarShort': undefined;
   'MusicToPlaylist': undefined;
   'MusicToQueue': undefined;
+  'MusicShare': undefined;
+  'MusicFileMenu': undefined;
+  'MusicShareCopied': undefined;
   'MusicWholeLibrary': undefined;
   'MusicFetchQueued': undefined;
   'MusicFetchPickingReference': undefined;
@@ -5861,6 +5868,12 @@ export interface LangPairWithVariables<V = LangVariable> {
     'value': V;
     'pace': V;
   };
+  'MusicLibOfflinePhone': {
+    'count': V;
+  };
+  'MusicLibOfflineDesk': {
+    'count': V;
+  };
   'MusicAddedTo': {
     'name': V;
   };
@@ -5923,6 +5936,9 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
   };
   'MusicSourceStarred': {
+    'name': V;
+  };
+  'MusicQueuedNext': {
     'name': V;
   };
   'MusicFetchBytes': {
@@ -6655,6 +6671,18 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'ParvaneReportsCount': {
+    'count': V;
+  };
+  'MusicLibPlaylistOf': {
+    'count': V;
+  };
+  'MusicLibAddedSub': {
+    'count': V;
+  };
+  'MusicLibOwnPlaylist': {
+    'count': V;
+  };
+  'MusicLibSharedPlaylist': {
     'count': V;
   };
   'MusicServerTracks': {

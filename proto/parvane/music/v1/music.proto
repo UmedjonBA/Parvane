@@ -126,6 +126,9 @@ service MusicService {
   rpc Lyrics(LyricsRequest) returns (LyricsResponse) {
     option (parvane.core.v2.method) = {name: "music.lyrics" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  rpc LibraryHome(LibraryHomeRequest) returns (LibraryHomeResponse) {
+    option (parvane.core.v2.method) = {name: "music.library.home" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
 }
 
 message Track {
@@ -831,4 +834,19 @@ message LyricsLine {
 message LyricsResponse {
   bool synced = 1;
   repeated LyricsLine lines = 2 [(parvane.core.v2.max_items) = 1000];
+}
+
+// ── «Главная» (макет 23 ноя, доска `MusicHome`): что слушают все за неделю, частое у человека, новое на сервере ──
+message LibraryHomeRequest {}
+message PopularTrack {
+  Track track = 1;
+  // Сколько раз трек слушали за последние 7 суток (человек — раз в сутки).
+  uint32 plays_week = 2;
+}
+message LibraryHomeResponse {
+  repeated PopularTrack popular = 1 [(parvane.core.v2.max_items) = 20];
+  // Исполнители, которых человек слушал чаще всего за 30 суток.
+  repeated Artist frequent_artists = 2 [(parvane.core.v2.max_items) = 12];
+  // Недавно добавленные альбомы.
+  repeated Album fresh = 3 [(parvane.core.v2.max_items) = 12];
 }

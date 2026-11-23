@@ -54,6 +54,7 @@ const INFO_KEY = 'parvane:music-info';
 const RECENT_KEY = 'parvane:music-recent';
 const SOURCE_KEY = 'parvane:music-queue-source';
 const RECENT_LIMIT = 20;
+const VOLUME_KEY = 'parvane:music-volume';
 // Ссылка на поток берётся заново за минуту до конца срока
 const URL_MARGIN_MS = 60 * 1000;
 // «Назад» в первые секунды трека — предыдущий трек, позже — начало этого
@@ -69,10 +70,12 @@ const [getMusicPlayer, setMusicPlayer] = createSignal<MusicPlayerState>({
 // Позиция — отдельным сигналом: меняется каждую секунду и не должна перерисовывать списки
 const [getMusicPosition, setMusicPosition] = createSignal({ positionSecs: 0, durationSecs: 0 });
 const [getMusicInfo, setMusicInfo] = createSignal<MusicInfo | undefined>(undefined);
+// Громкость 0…1 — настройка устройства (плеер компьютера, доска `DeskMusic`)
+const [getMusicVolume, setMusicVolumeSignal] = createSignal(readJson<number>(VOLUME_KEY) ?? 1);
 const [getMusicRecent, setMusicRecent] = createSignal<MusicTrack[]>(readJson<MusicTrack[]>(RECENT_KEY) || []);
 
 export {
-  getMusicInfo, getMusicPlayer, getMusicPosition, getMusicRecent,
+  getMusicInfo, getMusicPlayer, getMusicPosition, getMusicRecent, getMusicVolume,
 };
 
 let audio: HTMLAudioElement | undefined;
@@ -164,6 +167,7 @@ function ensureAudio() {
   if (audio) return audio;
   audio = new Audio();
   audio.preload = 'auto';
+  audio.volume = getMusicVolume();
   audio.addEventListener('timeupdate', publishPosition);
   audio.addEventListener('durationchange', publishPosition);
   audio.addEventListener('play', () => setPlaying(true));
@@ -334,6 +338,14 @@ export function toggleShuffle() {
 
 export function cycleRepeat() {
   applyQueue(queueCall('musicQueueRepeat'), false);
+}
+
+/** Громкость 0…1: сразу в плеер и в память устройства. */
+export function setMusicVolume(volume: number) {
+  const value = Math.min(1, Math.max(0, volume));
+  setMusicVolumeSignal(value);
+  writeJson(VOLUME_KEY, value);
+  if (audio) audio.volume = value;
 }
 
 export function seekTo(positionSecs: number) {

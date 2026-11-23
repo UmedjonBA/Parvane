@@ -72,6 +72,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
     match method {
         "music.library.search" => search(sub, &user, body(&req)?).await,
         "music.library.recent" => recent(sub, &user, body(&req)?).await,
+        "music.library.home" => home(sub, &user).await,
         "music.library.album" => album(sub, &user, body(&req)?).await,
         "music.library.artist" => artist(sub, &user, body(&req)?).await,
         "music.track.get" => track_get(sub, &user, body(&req)?).await,
@@ -157,6 +158,35 @@ async fn search(sub: &Subsonic, user: &str, r: pb::LibrarySearchRequest) -> Repl
 async fn recent(sub: &Subsonic, user: &str, r: pb::LibraryRecentRequest) -> Reply {
     let v = sub.call(user, "getAlbumList2", &[("type", "newest".into()), ("size", page(r.limit).to_string()), ("offset", r.offset.to_string())]).await?;
     Ok(pb::LibraryRecentResponse { albums: list(&v, &["albumList2", "album"]).iter().filter_map(album_of).take(PAGE_MAX as usize).collect() }.encode_to_vec())
+}
+
+const HOME_POPULAR: usize = 20;
+const HOME_ARTISTS: usize = 12;
+const HOME_FRESH: u32 = 12;
+
+/// «Главная»: популярное за неделю с числом прослушиваний, частые исполнители человека, новые альбомы. Трека или
+/// исполнителя, которых уже нет в библиотеке, в ответе нет.
+async fn home(sub: &Subsonic, user: &str) -> Reply {
+    let popular_ids = crate::library::popular_week(HOME_POPULAR).await;
+    let jobs = popular_ids.into_iter().map(|(id, plays)| {
+        let (sub, user) = (sub.clone(), user.to_string());
+        async move { song(&sub, &user, &id).await.ok().map(|track| pb::PopularTrack { track: Some(track), plays_week: plays }) }
+    });
+    let popular: Vec<pb::PopularTrack> = futures::stream::iter(jobs).buffered(8).collect::<Vec<_>>().await.into_iter().flatten().collect();
+    let artist_ids = crate::library::frequent_artists(user, HOME_ARTISTS).await;
+    let jobs = artist_ids.into_iter().map(|id| {
+        let (sub, user) = (sub.clone(), user.to_string());
+        async move {
+            let v = sub.call(&user, "getArtist", &[("id", id)]).await.ok()?;
+            v.get("artist").and_then(artist_of)
+        }
+    });
+    let frequent_artists: Vec<pb::Artist> = futures::stream::iter(jobs).buffered(8).collect::<Vec<_>>().await.into_iter().flatten().collect();
+    let fresh = match sub.call(user, "getAlbumList2", &[("type", "newest".into()), ("size", HOME_FRESH.to_string())]).await {
+        Ok(v) => list(&v, &["albumList2", "album"]).iter().filter_map(album_of).take(HOME_FRESH as usize).collect(),
+        Err(_) => vec![],
+    };
+    Ok(pb::LibraryHomeResponse { popular, frequent_artists, fresh }.encode_to_vec())
 }
 
 async fn album(sub: &Subsonic, user: &str, r: pb::LibraryAlbumRequest) -> Reply {

@@ -680,5 +680,12 @@ async fn library_counts_and_popular_by_plays_of_everyone() {
     let ar: pb::LibraryArtistResponse = call(&ctx, "alice@local", "music.library.artist", pb::LibraryArtistRequest { artist_id: "ar-1".into() }).await.unwrap();
     // t2 слушали двое, t1 — один (повтор того же человека в тот же день не считается), t3 только загружали
     assert_eq!(ar.popular.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2", "t1"]);
+    // «Главная»: популярное за неделю с числом прослушиваний, частые исполнители — свои (у Боба тоже ar-1)
+    let home: pb::LibraryHomeResponse = call(&ctx, "alice@local", "music.library.home", pb::LibraryHomeRequest {}).await.unwrap();
+    let popular: Vec<(&str, u32)> = home.popular.iter().map(|p| (p.track.as_ref().unwrap().id.as_str(), p.plays_week)).collect();
+    assert_eq!(popular, [("t2", 2), ("t1", 1)]);
+    assert_eq!(home.frequent_artists.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["ar-1"]);
+    let carol: pb::LibraryHomeResponse = call(&ctx, "carol@local", "music.library.home", pb::LibraryHomeRequest {}).await.unwrap();
+    assert!(carol.frequent_artists.is_empty(), "частое — только по своим прослушиваниям");
     let _ = std::fs::remove_dir_all(dir);
 }

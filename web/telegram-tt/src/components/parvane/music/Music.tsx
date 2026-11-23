@@ -3,6 +3,7 @@ import {
 } from '../../../lib/teact/teact';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { CloudMenuAnchor } from '../cloud/CloudMenu';
 import type { MusicTab, MusicView } from './musicView';
 
 import buildClassName from '../../../util/buildClassName';
@@ -30,18 +31,19 @@ import ParvaneIcon from '../../main/ParvaneIcon';
 import PvEmpty from '../notes/PvEmpty';
 import PvLoading from '../notes/PvLoading';
 import PvOfflineBar from '../notes/PvOfflineBar';
-import PvSegment from '../notes/PvSegment';
 import MusicUploadsView from './fetch/MusicUploadsView';
 import MusicAddedView from './MusicAddedView';
 import MusicAlbumView from './MusicAlbumView';
 import MusicArtistView from './MusicArtistView';
 import MusicBrowseView from './MusicBrowseView';
+import MusicDeskPlayer from './MusicDeskPlayer';
 import MusicHomeView from './MusicHomeView';
+import MusicLibraryItems from './MusicLibraryItems';
 import MusicLibraryView from './MusicLibraryView';
+import MusicMenu from './MusicMenu';
 import MusicMiniPlayer from './MusicMiniPlayer';
 import MusicMixArtistsView from './MusicMixArtistsView';
 import MusicMixView from './MusicMixView';
-import MusicNav from './MusicNav';
 import MusicNewPlaylist from './MusicNewPlaylist';
 import MusicOffline from './MusicOffline';
 import MusicPlaylistList from './MusicPlaylistList';
@@ -76,6 +78,8 @@ const Music = () => {
   const [sentTrack, setSentTrack] = useState<MusicTrack>();
   // «+ → Найти и скачать»: курсор в поле поиска
   const [searchFocus, setSearchFocus] = useState(0);
+  // Компьютер: меню «…» медиатеки у кнопки
+  const [libraryMenu, setLibraryMenu] = useState<CloudMenuAnchor>();
   const isShown = section === 'music';
   const isEnabled = info?.isEnabled;
   const isOnline = useBrowserOnline();
@@ -129,9 +133,21 @@ const Music = () => {
   const handleRetry = useLastCallback(() => {
     void loadMusicInfo();
   });
-  const handleTab = useLastCallback((tab: MusicTab) => openMusicView({ kind: tab }, true));
+  const handleTab = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    openMusicView({ kind: e.currentTarget.dataset.value as MusicTab }, true);
+  });
   const handleCloseSend = useLastCallback(() => setSentTrack(undefined));
   const handleNewPlaylist = useLastCallback(() => openNewPlaylist());
+  const handleOpenSearch = useLastCallback(() => openMusicView({ kind: 'search' }, true));
+  const handleLibraryMore = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setLibraryMenu({ x: rect.left, y: rect.bottom });
+  });
+  const closeLibraryMenu = useLastCallback(() => setLibraryMenu(undefined));
+  const handleLibraryPick = useLastCallback((key: string) => {
+    setLibraryMenu(undefined);
+    if (key === 'newPlaylist') openNewPlaylist();
+  });
 
   function renderView(current: MusicView) {
     const common = { isPhone, onSendToChat: setSentTrack };
@@ -168,6 +184,8 @@ const Music = () => {
         return <MusicMixView isPhone={isPhone} onSendToChat={setSentTrack} />;
       case 'mixArtists':
         return <MusicMixArtistsView isPhone={isPhone} />;
+      case 'queue':
+        return <MusicQueue />;
       case 'playlists':
         return (
           <div className={styles.view}>
@@ -209,29 +227,25 @@ const Music = () => {
     const tab = getMusicTab(view);
     return (
       <>
-        <header className={styles.header}>
-          <h1 className={styles.title}>{lang('ParvaneModuleMusic')}</h1>
-          {tab === 'home' && Boolean(info!.libraryTracks) && (
-            <span className={buildClassName(kit.mono, kit.muted, kit.small)} data-music-total>
-              {lang(
-                'MusicServerTracks', { count: lang.number(info!.libraryTracks) }, { pluralValue: info!.libraryTracks },
-              )}
-            </span>
-          )}
-        </header>
-        {/* Пустая библиотека — без вкладок (доска `RpMusicB`) */}
-        {(tab !== 'home' || Boolean(info!.libraryTracks)) && (
-          <div className={styles.tabsBar}>
-            <PvSegment
-              className={styles.tabs}
-              items={TABS.map((value) => ({ value, label: lang(TAB_KEYS[value]) }))}
-              value={tab}
-              label={lang('ParvaneModuleMusic')}
-              isTabs
-              onChange={handleTab}
-            />
+        {/* Доски `MusicHome`, `MusicSearch`, `MusicLibrary`: вкладки в полосе шапки, без заголовка модуля */}
+        <nav className={styles.tabsBar} aria-label={lang('ParvaneModuleMusic')}>
+          <div className={styles.tabs} role="tablist">
+            {TABS.map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={value === tab}
+                className={buildClassName(styles.tab, value === tab && styles.tabOn)}
+                data-view={value}
+                data-value={value}
+                onClick={handleTab}
+              >
+                {lang(TAB_KEYS[value])}
+              </button>
+            ))}
           </div>
-        )}
+        </nav>
         <div className={buildClassName(styles.main, 'custom-scroll')} data-music-view={view.kind}>
           {renderView(view)}
         </div>
@@ -243,16 +257,51 @@ const Music = () => {
     if (!info || info.isFailed) return <PvLoading onRetry={handleRetry} />;
     if (!info.isEnabled) return <PvEmpty text={lang('MusicNotConnected')} data-music-off />;
     if (isPhone) return renderPhone();
+    // Доска `DeskMusic`: медиатека слева, вид в середине на своей панели, плеер внизу во всю ширину
     return (
-      <div className={styles.layout}>
-        <MusicNav view={view} info={info} />
-        <div className={buildClassName(styles.main, 'custom-scroll')} data-music-view={view.kind}>
-          {renderView(view)}
-        </div>
-        {view.kind === 'home' && (
-          <aside className={styles.side}>
-            <MusicQueue />
+      <div className={styles.desk}>
+        <div className={styles.deskRow}>
+          <aside className={styles.deskLibrary} aria-label={lang('MusicLibrary')} data-music-nav>
+            <div className={styles.deskLibraryHead}>
+              <span className={styles.deskLibraryTitle}>{lang('MusicLibrary')}</span>
+              <button
+                type="button"
+                className={styles.deskLibraryButton}
+                aria-label={lang('MusicSearch')}
+                data-view="search"
+                onClick={handleOpenSearch}
+              >
+                <ParvaneIcon name="search" isSmall />
+              </button>
+              <button
+                type="button"
+                className={styles.deskLibraryButton}
+                aria-label={lang('MusicLibraryMore')}
+                data-music-library-more
+                onClick={handleLibraryMore}
+              >
+                <ParvaneIcon name="more" isSmall />
+              </button>
+            </div>
+            <div className={buildClassName(styles.deskLibraryList, 'custom-scroll')}>
+              <MusicLibraryItems info={info} view={view} />
+            </div>
           </aside>
+          <div className={styles.deskCenter}>
+            <div className={buildClassName(styles.deskPanel, styles.main, 'custom-scroll')} data-music-view={view.kind}>
+              {renderView(view)}
+            </div>
+          </div>
+        </div>
+        <MusicDeskPlayer />
+        {libraryMenu && (
+          <MusicMenu
+            title={lang('MusicLibrary')}
+            actions={[{ key: 'newPlaylist', title: lang('MusicPlaylistNew') }]}
+            anchor={libraryMenu}
+            onPick={handleLibraryPick}
+            onClose={closeLibraryMenu}
+          />
         )}
       </div>
     );
