@@ -126,6 +126,33 @@
   min-width: 0;
 }
 
+// Телефон: строка модуля с подстроками — кнопка «раскрыть»; стрелка справа от подписи
+.textButton {
+  position: relative;
+
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  justify-content: center;
+
+  padding: 0 1.5rem 0 0;
+  border: none;
+
+  color: inherit;
+  text-align: start;
+
+  background: none;
+}
+
+.expandIcon {
+  position: absolute;
+  top: 50%;
+  right: 0.25rem;
+  transform: translateY(-50%);
+
+  color: var(--pv-muted);
+}
+
 .title {
   overflow: hidden;
   font-weight: var(--font-weight-medium);

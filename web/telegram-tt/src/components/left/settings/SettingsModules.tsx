@@ -80,11 +80,18 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
   const { states: modules, prefs } = useParvaneModules();
   const listRef = useRef<HTMLDivElement>();
   const [drag, setDrag] = useState<DragState>();
+  // Телефон: подстроки модуля (ссылка настроек, блоки «Здоровья») свёрнуты, касание строки раскрывает их
+  const [expandedIds, setExpandedIds] = useState<ParvaneModuleId[]>([]);
 
   useHistoryBack({ isActive, onBack: onReset });
 
   const handleToggle = useLastCallback((isOn: boolean, e: React.MouseEvent<HTMLButtonElement>) => {
     setModuleOn(e.currentTarget.dataset.module as ParvaneModuleId, isOn);
+  });
+
+  const handleExpandClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const id = e.currentTarget.dataset.moduleExpand as ParvaneModuleId;
+    setExpandedIds((ids) => (ids.includes(id) ? ids.filter((other) => other !== id) : [...ids, id]));
   });
 
   const handleBlockToggle = useLastCallback((isOn: boolean, e: React.MouseEvent<HTMLButtonElement>) => {
@@ -319,6 +326,9 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
     const title = lang(MODULE_TITLE_KEYS[module.id]);
     const isSwitchDisabled = module.isLocked || module.isServerOff || module.isUnavailable;
     const isDragged = drag?.id === module.id;
+    const hasExtra = !isDesk && module.isOn
+      && (module.id === 'health' || Boolean(SETTINGS_LINK_KEYS[module.id as keyof typeof SETTINGS_LINK_KEYS]));
+    const isExpanded = hasExtra && expandedIds.includes(module.id);
     return (
       <div key={module.id} role="listitem" data-module-row={module.id}>
         <div
@@ -349,6 +359,22 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
                 {isDragged ? lang('ParvaneNavDropHere') : formatInline(getSubtitle(module))}
               </span>
             </div>
+          ) : hasExtra ? (
+            <button
+              type="button"
+              className={buildClassName(styles.text, styles.textButton)}
+              aria-expanded={isExpanded}
+              data-module-expand={module.id}
+              onClick={handleExpandClick}
+            >
+              <div className={buildClassName(styles.title, !module.isOn && styles.titleOff)}>{title}</div>
+              <div className={styles.subtitle}>{isDragged ? lang('ParvaneNavDropHere') : getSubtitle(module)}</div>
+              <ParvaneIcon
+                name={isExpanded ? 'chevronUp' : 'chevronDown'}
+                isSmall
+                className={styles.expandIcon}
+              />
+            </button>
           ) : (
             <div className={styles.text}>
               <div className={buildClassName(styles.title, !module.isOn && styles.titleOff)}>{title}</div>
@@ -365,8 +391,8 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
             onChange={handleToggle}
           />
         </div>
-        {!isDesk && renderSettingsLink(module)}
-        {module.id === 'health' && module.isOn && renderBlocks()}
+        {!isDesk && isExpanded && renderSettingsLink(module)}
+        {module.id === 'health' && module.isOn && (isDesk || isExpanded) && renderBlocks()}
       </div>
     );
   }

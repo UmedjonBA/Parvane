@@ -319,6 +319,18 @@ async function runServerOffPart(suffix) {
   await expectModules(mobile, RIBBON, ['chats', 'plan', 'files', 'health', 'profile'], 'вторая ручка не перетащилась');
   console.log('OK: после касания следующая ручка тоже перетаскивается');
 
+  // Подстроки модуля на телефоне свёрнуты: касание строки «План» раскрывает «Настройки плана», второе — сворачивает
+  const planSettingsLink = mobile.locator('[data-module-row="plan"] [data-module-settings="plan"]');
+  assert.equal(await planSettingsLink.count(), 0, 'подстроки «Плана» раскрыты сразу');
+  assert.equal(await mobile.locator('[data-module-row="health"] [data-block]').count(), 0, 'блоки «Здоровья» раскрыты сразу');
+  await mobile.locator('[data-module-expand="plan"]').click();
+  await planSettingsLink.waitFor({ state: 'visible', timeout: WAIT_MS });
+  await mobile.locator('[data-module-expand="plan"]').click();
+  await planSettingsLink.waitFor({ state: 'detached', timeout: WAIT_MS });
+  await mobile.locator('[data-module-expand="health"]').click();
+  await mobile.locator('[data-module-row="health"] [data-block="sleep"]').waitFor({ state: 'visible', timeout: WAIT_MS });
+  console.log('OK: подстроки модулей на телефоне свёрнуты и раскрываются касанием');
+
 }
 
 // Часть «всё включено»: семь модулей, стрелки ленты, «+» «Плана», узкое окно компьютера (доски `Main`, `Ribbon`,
