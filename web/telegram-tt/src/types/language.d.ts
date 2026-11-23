@@ -1386,6 +1386,7 @@ export interface LangPair {
   'MusicFetchLibraryPending': undefined;
   'MusicFetchNoSpace': undefined;
   'MusicFetchLimit': undefined;
+  'MusicFetchDuplicate': undefined;
   'MusicFetchStartFailed': undefined;
   'MusicSourceYoutube': undefined;
   'MusicSourceReupload': undefined;
@@ -1420,9 +1421,66 @@ export interface LangPair {
   'MusicDislike': undefined;
   'MusicDislikeArtist': undefined;
   'MusicDisliked': undefined;
+  'MusicKindSingle': undefined;
+  'MusicRetry': undefined;
+  'MusicDislikes': undefined;
+  'MusicDislikesHint': undefined;
+  'MusicDislikesEmpty': undefined;
+  'MusicDislikedArtist': undefined;
+  'MusicKindTrackLower': undefined;
+  'MusicRestore': undefined;
+  'MusicSettings': undefined;
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
-  'MusicNothingFound': undefined;
+  'MusicMadeForYou': undefined;
+  'MusicAlbumCatalog': undefined;
+  'MusicAddAllToServer': undefined;
+  'MusicMoreActions': undefined;
+  'MusicKindSingleTitle': undefined;
+  'MusicKindEp': undefined;
+  'MusicKindCompile': undefined;
+  'MusicArtistCatalog': undefined;
+  'MusicPopular': undefined;
+  'MusicReleases': undefined;
+  'MusicRecent': undefined;
+  'MusicClear': undefined;
+  'MusicBrowse': undefined;
+  'MusicBestResult': undefined;
+  'MusicOnServerShort': undefined;
+  'MusicInCatalogShort': undefined;
+  'MusicCatalogDown': undefined;
+  'MusicNothingFoundHint': undefined;
+  'MusicLoadingMore': undefined;
+  'MusicSource': undefined;
+  'MusicSourceHint': undefined;
+  'MusicSourceEverywhere': undefined;
+  'MusicSourceEverywhereHint': undefined;
+  'MusicSourceServer': undefined;
+  'MusicSourceServerHint': undefined;
+  'MusicSourceCatalog': undefined;
+  'MusicSourceCatalogHint': undefined;
+  'MusicAddToServer': undefined;
+  'MusicFetchFailedShort': undefined;
+  'MusicStateCatalog': undefined;
+  'MusicStateWaiting': undefined;
+  'MusicStateAdding': undefined;
+  'MusicStateProcessing': undefined;
+  'MusicStateFailed': undefined;
+  'MusicSearchWhat': undefined;
+  'MusicAll': undefined;
+  'MusicShowAll': undefined;
+  'MusicFindInCatalog': undefined;
+  'MusicAddFindSub': undefined;
+  'MusicAddLink': undefined;
+  'MusicAddLinkSub': undefined;
+  'MusicAddFile': undefined;
+  'MusicAddFileSub': undefined;
+  'MusicAddPlaylistSub': undefined;
+  'MusicLinkShort': undefined;
+  'MusicOwnFile': undefined;
+  'MusicEmptyMixNote': undefined;
+  'MusicPopularWeek': undefined;
+  'MusicFrequent': undefined;
   'MusicStarredEmpty': undefined;
   'MusicEmpty': undefined;
   'MusicPlayAll': undefined;
@@ -3233,7 +3291,6 @@ export interface LangPair {
   'MusicLetterIndex': undefined;
   'MusicListen': undefined;
   'MusicListenAll': undefined;
-  'MusicLoadingMore': undefined;
   'MusicMore': undefined;
   'MusicMoveDown': undefined;
   'MusicMoveUp': undefined;
@@ -4894,6 +4951,36 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicMixArtistsChosen': {
     'count': V;
   };
+  'MusicSortBy': {
+    'name': V;
+  };
+  'MusicOwnedOf': {
+    'owned': V;
+    'total': V;
+  };
+  'MusicArtistOwnedOf': {
+    'owned': V;
+    'total': V;
+  };
+  'MusicForgetQuery': {
+    'query': V;
+  };
+  'MusicNothingFound': {
+    'query': V;
+  };
+  'MusicAddToServerNamed': {
+    'name': V;
+  };
+  'MusicRetryNamed': {
+    'name': V;
+  };
+  'MusicUploadingChip': {
+    'count': V;
+  };
+  'MusicUploadingLabel': {
+    'count': V;
+    'percent': V;
+  };
   'MusicListTime': {
     'hours': V;
     'minutes': V;
@@ -6524,6 +6611,15 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'limit': V;
   };
   'MusicTracksCount': {
+    'count': V;
+  };
+  'MusicAddingToServer': {
+    'count': V;
+  };
+  'MusicPlaysWeek': {
+    'count': V;
+  };
+  'MusicUploadingBar': {
     'count': V;
   };
   'MusicAlbumsCount': {

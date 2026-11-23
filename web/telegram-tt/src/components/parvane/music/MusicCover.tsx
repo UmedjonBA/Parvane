@@ -14,6 +14,8 @@ import screen from './MusicPlayerScreen.module.scss';
 type OwnProps = {
   // Обложка альбома; нет — цветная заглушка с нотой
   coverId?: string;
+  // Обложка каталога готовой ссылкой (треки и альбомы каталога, ещё не на сервере)
+  coverUrl?: string;
   // Чем красить заглушку: id альбома либо трека
   toneId: string;
   size: number;
@@ -29,10 +31,10 @@ type OwnProps = {
 // Parvane (spec 039): обложка трека или альбома. Картинку отдаёт сервер по подписанной ссылке; под ней всегда
 // лежит заглушка — её видно, пока картинка грузится и когда её нет
 const MusicCover = ({
-  coverId, toneId, size, className, isLarge, glyph, isRound,
+  coverId, coverUrl: catalogUrl, toneId, size, className, isLarge, glyph, isRound,
 }: OwnProps) => {
   const [failedUrl, setFailedUrl] = useState<string>();
-  const url = coverUrl(coverId, size * 2);
+  const url = catalogUrl || coverUrl(coverId, size * 2);
   return (
     <span
       className={buildClassName(styles.cover, isRound && styles.coverRound, className)}

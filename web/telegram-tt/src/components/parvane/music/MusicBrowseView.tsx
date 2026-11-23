@@ -59,6 +59,7 @@ const MusicBrowseView = ({ kind, info, isPhone }: OwnProps) => {
   const [albumSort, setAlbumSort] = useState<MusicAlbumSort>('artist');
   const [selectedId, setSelectedId] = useState<string>();
   const isArtists = kind === 'artists';
+  const emptyText = effective ? lang('MusicNothingFound', { query: effective }) : lang('MusicEmpty');
 
   useEffect(() => {
     const timer = window.setTimeout(() => setEffective(query.trim()), SEARCH_DELAY_MS);
@@ -173,7 +174,7 @@ const MusicBrowseView = ({ kind, info, isPhone }: OwnProps) => {
     if (!artists.isLoaded) return <PvSkeleton />;
     if (artists.isFailed) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
     if (!sortedArtists.length) {
-      return <PvEmpty text={lang(effective ? 'MusicNothingFound' : 'MusicEmpty')} data-music-empty />;
+      return <PvEmpty text={emptyText} data-music-empty />;
     }
     if (letters) {
       return (
@@ -241,7 +242,7 @@ const MusicBrowseView = ({ kind, info, isPhone }: OwnProps) => {
     if (!albums.isLoaded) return <PvSkeleton />;
     if (albums.isFailed) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
     if (!sortedAlbums.length) {
-      return <PvEmpty text={lang(effective ? 'MusicNothingFound' : 'MusicEmpty')} data-music-empty />;
+      return <PvEmpty text={emptyText} data-music-empty />;
     }
     return <MusicAlbumTiles albums={sortedAlbums} />;
   }

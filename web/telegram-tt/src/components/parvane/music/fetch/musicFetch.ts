@@ -150,6 +150,16 @@ export async function startFetch(track: MusicCatalogTrack): Promise<StartResult>
   }
 }
 
+/** Альбом каталога целиком: на сервер — треки, которых там нет. */
+export async function startFetchAlbum(albumRef: string): Promise<StartResult> {
+  try {
+    (await callMusic('parvaneMusicFetchAlbum', { albumRef })).forEach(putJob);
+    return 'ok';
+  } catch (err) {
+    return failureOf(err);
+  }
+}
+
 /** «Найти и скачать «запрос»»: эталон сервер выбирает сам. */
 export async function startFetchByQuery(query: string): Promise<StartResult> {
   try {

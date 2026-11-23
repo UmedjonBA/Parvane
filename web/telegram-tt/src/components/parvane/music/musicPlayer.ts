@@ -1,6 +1,7 @@
 import type {
   createMusicApi, MusicInfo, MusicStreamQuality, MusicTrack,
 } from '../../../api/parvane/musicApi';
+import type { createMusicCatalogApi } from '../../../api/parvane/musicCatalogApi';
 
 import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
 import { pause } from '../../../util/schedulers';
@@ -13,7 +14,8 @@ import { engineStatic, loadProtocol } from '../../../api/parvane/v2/engine';
 // `<audio>`, ссылки на поток и память устройства (очередь, недавно прослушанное)
 import { loadOfflineUrl } from './musicOffline';
 
-type MusicMethods = ReturnType<typeof createMusicApi>;
+// Методы «Музыки»: библиотека и плейлисты (`musicApi.ts`), каталог, история поиска и тексты (`musicCatalogApi.ts`)
+type MusicMethods = ReturnType<typeof createMusicApi> & ReturnType<typeof createMusicCatalogApi>;
 export const callMusic = callApi as unknown as <N extends keyof MusicMethods>(
   name: N, ...args: Parameters<MusicMethods[N]>
 ) => ReturnType<MusicMethods[N]>;

@@ -1,63 +1,69 @@
+import type { TeactNode } from '../../../lib/teact/teact';
 import {
   memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
-import type {
-  MusicAlbum, MusicArtist, MusicInfo, MusicTrack,
-} from '../../../api/parvane/musicApi';
-import type { MusicSearchFilter } from './musicLibrary';
+import type { MusicInfo, MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicSearchFound } from './musicSearchLists';
 
 import buildClassName from '../../../util/buildClassName';
-import { buildSearchRows, mergePage } from './musicLibrary';
-import { saveTracksOffline } from './musicOffline';
+import { getSharedPlaylists } from './shared/musicShared';
 import {
   callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
-import { getMusicQuery, openMusicView, setMusicQuery } from './musicView';
+import { getPlaylists } from './musicPlaylists';
+import { buildSearchLists } from './musicSearchLists';
+import {
+  getMusicQuery, openMusicView, requestMusicAdd, setMusicQuery,
+} from './musicView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
+import PvSheet from '../notes/PvSheet';
 import PvSkeleton from '../notes/PvSkeleton';
-import MusicSearchStart from './fetch/MusicSearchStart';
+import MusicCatalogRow from './MusicCatalogRow';
 import MusicCover from './MusicCover';
-import MusicFetch from './MusicFetch';
 import MusicLoadMore from './MusicLoadMore';
-import MusicSectionHead from './MusicSectionHead';
 import MusicTrackRow from './MusicTrackRow';
 
-import kit from '../notes/PvKit.module.scss';
-import styles from './Music.module.scss';
+import styles from './MusicSearch.module.scss';
 
 type OwnProps = {
   info: MusicInfo;
   isPhone?: boolean;
-  // «+ → Найти и скачать»: курсор в поле (меняется при каждом запросе)
+  // «+ → Найти в каталоге»: курсор в поле (меняется при каждом запросе)
   focusToken?: number;
   onSendToChat: (track: MusicTrack) => void;
 };
 
-type Found = {
-  query: string;
-  tracks: MusicTrack[];
-  albums: MusicAlbum[];
-  artists: MusicArtist[];
-  hasMore: boolean;
-  isFailed?: boolean;
-};
+type Filter = 'all' | 'tracks' | 'artists' | 'albums' | 'playlists';
+type Source = 'everywhere' | 'server' | 'catalog';
 
 const SEARCH_DELAY_MS = 300;
-const PAGE = 50;
-const FILTERS: MusicSearchFilter[] = ['all', 'tracks', 'artists', 'albums'];
+const FILTERS: Filter[] = ['all', 'tracks', 'artists', 'albums', 'playlists'];
 const FILTER_KEYS = {
-  all: 'MusicFilterAll', tracks: 'MusicFilterTracks', artists: 'MusicArtists', albums: 'MusicAlbums',
+  all: 'MusicFilterAll',
+  tracks: 'MusicFilterTracks',
+  artists: 'MusicArtists',
+  albums: 'MusicAlbums',
+  playlists: 'MusicPlaylists',
 } as const;
+const SOURCES: Source[] = ['everywhere', 'server', 'catalog'];
+const SOURCE_KEYS = {
+  everywhere: ['MusicSourceEverywhere', 'MusicSourceEverywhereHint'],
+  server: ['MusicSourceServer', 'MusicSourceServerHint'],
+  catalog: ['MusicSourceCatalog', 'MusicSourceCatalogHint'],
+} as const;
+// Треков в «Всё» (доска `MusicSearch-02`)
+const ALL_TRACKS = 4;
 
-// Parvane (spec 041, доски `MusicSearch`, `DeskMusicMore`, `ZpMusicX`): поиск по библиотеке сервера — поле, чипы
-// «Всё / Треки / Исполнители / Альбомы», найденное одним списком «На сервере · N»; ниже — «Нет на сервере»
-// («Найти и скачать», `MusicFetch`)
+// Parvane (макет «Музыки» 23 ноя, доски `MusicSearch`, `DeskMusic-02`): поиск — сервер и каталог одним списком.
+// Пустое поле — «Недавнее» (история на сервере) и «Обзор». С запросом — чипы «Всё · Треки · Исполнители · Альбомы ·
+// Плейлисты» и «Источник»: «Лучший результат», треки (сервер первым, каталог — серым с облачком), исполнители и
+// альбомы лентой, плейлисты. Каталог не ответил — показываем сервер с пометкой
 const MusicSearchView = ({
   info, isPhone, focusToken, onSendToChat,
 }: OwnProps) => {
@@ -65,244 +71,515 @@ const MusicSearchView = ({
   const inputRef = useRef<HTMLInputElement>();
   const query = useDerivedState(getMusicQuery);
   const player = useDerivedState(getMusicPlayer);
+  const playlists = useDerivedState(getPlaylists);
+  const shared = useDerivedState(getSharedPlaylists);
   const current = getCurrentTrack(player);
   const [effective, setEffective] = useState(query.trim());
-  const [filter, setFilter] = useState<MusicSearchFilter>('all');
-  const [found, setFound] = useState<Found>();
+  const [filter, setFilter] = useState<Filter>('all');
+  const [source, setSource] = useState<Source>('everywhere');
+  const [isSourceOpen, setIsSourceOpen] = useState(false);
+  const [found, setFound] = useState<MusicSearchFound>();
+  const [history, setHistory] = useState<string[]>();
   const requestRef = useRef(0);
+  const hasCatalog = info.isFetchEnabled;
 
-  // Курсор в поле в кадр появления: набранное сразу после открытия не теряется
   useLayoutEffect(() => {
-    inputRef.current?.focus();
-  }, [focusToken]);
+    if (isPhone) inputRef.current?.focus();
+  }, [focusToken, isPhone]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setEffective(query.trim()), SEARCH_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  const fetchPage = useLastCallback(async (text: string, offset: number) => {
+  useEffect(() => {
+    if (effective) return;
+    void callMusic('parvaneMusicSearchHistory').then(setHistory, () => setHistory([]));
+  }, [effective]);
+
+  const search = useLastCallback((text: string) => {
     const id = ++requestRef.current;
-    const page = await callMusic('parvaneMusicSearch', { query: text, offset }).catch(() => undefined);
-    if (id !== requestRef.current) return;
-    if (!page) {
-      setFound({
-        query: text, tracks: [], albums: [], artists: [], hasMore: false, isFailed: true,
-      });
-      return;
-    }
-    const hasMore = page.tracks.length >= PAGE || page.albums.length >= PAGE || page.artists.length >= PAGE;
-    setFound((previous) => (offset && previous?.query === text ? {
-      query: text,
-      tracks: mergePage(previous.tracks, page.tracks),
-      albums: mergePage(previous.albums, page.albums),
-      artists: mergePage(previous.artists, page.artists),
-      hasMore,
-    } : { query: text, ...page, hasMore }));
+    const patch = (change: Partial<MusicSearchFound>) => {
+      if (id === requestRef.current) setFound((previous) => ({ ...previous, ...change, query: text }));
+    };
+    setFound((previous) => (previous?.query === text ? previous : { query: text }));
+    void callMusic('parvaneMusicSearch', { query: text })
+      .then((server) => patch({ server }), () => patch({ isServerFailed: true }));
+    if (!hasCatalog) return;
+    void callMusic('parvaneMusicCatalogSearch', { query: text })
+      .then((catalog) => patch({ catalog, isCatalogFailed: false }), () => patch({ isCatalogFailed: true }));
   });
 
   useEffect(() => {
-    if (effective) void fetchPage(effective, 0);
-  }, [effective, fetchPage]);
+    if (effective) search(effective);
+  }, [effective, search]);
 
-  const handleMore = useLastCallback(() => {
-    if (!found?.hasMore) return;
-    void fetchPage(found.query, Math.max(found.tracks.length, found.albums.length, found.artists.length));
+  const handleMore = useLastCallback(async () => {
+    const catalog = found?.catalog;
+    if (!found || !catalog?.hasMore) return;
+    const text = found.query;
+    const page = await callMusic('parvaneMusicCatalogSearch', { query: text, offset: catalog.nextOffset })
+      .catch(() => undefined);
+    if (!page) return;
+    setFound((previous) => (previous?.query === text && previous.catalog ? {
+      ...previous,
+      catalog: {
+        ...previous.catalog,
+        tracks: [...previous.catalog.tracks, ...page.tracks],
+        hasMore: page.hasMore,
+        nextOffset: page.nextOffset,
+      },
+    } : previous));
   });
 
-  const handleFilter = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    setFilter(e.currentTarget.dataset.filter as MusicSearchFilter);
+  const remember = useLastCallback(() => {
+    if (effective.length < 2) return;
+    void callMusic('parvaneMusicSearchRemember', { query: effective }).catch(() => undefined);
   });
 
   const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => setMusicQuery(e.currentTarget.value));
-  const handleBack = useLastCallback(() => {
-    setMusicQuery('');
-    openMusicView({ kind: 'home' }, true);
+  const handleKeyDown = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') remember();
   });
+  const handleFilter = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setFilter(e.currentTarget.dataset.filter as Filter);
+  });
+  const handleOpenSource = useLastCallback(() => setIsSourceOpen(true));
+  const handleCloseSource = useLastCallback(() => setIsSourceOpen(false));
+  const handleSource = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setSource(e.currentTarget.dataset.source as Source);
+    setIsSourceOpen(false);
+  });
+  const handlePickHistory = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setMusicQuery(e.currentTarget.dataset.query!);
+  });
+  const handleForget = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const forgotten = e.currentTarget.dataset.query!;
+    setHistory((previous) => previous?.filter((item) => item !== forgotten));
+    void callMusic('parvaneMusicSearchForget', { query: forgotten }).catch(() => undefined);
+  });
+  const handleClearHistory = useLastCallback(() => {
+    setHistory([]);
+    void callMusic('parvaneMusicSearchForget', {}).catch(() => undefined);
+  });
+  const handleOpen = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const { kind, id } = e.currentTarget.dataset;
+    remember();
+    openMusicView({ kind: kind as 'album', id: id! });
+  });
+  const handleOpenAlbums = useLastCallback(() => openMusicView({ kind: 'albums' }));
+  const handleOpenArtists = useLastCallback(() => openMusicView({ kind: 'artists' }));
+  const handleFilterArtists = useLastCallback(() => setFilter('artists'));
+  const handleFilterAlbums = useLastCallback(() => setFilter('albums'));
+  const handleLink = useLastCallback(() => requestMusicAdd('link'));
+  const handleFile = useLastCallback(() => requestMusicAdd('file'));
+  const handleRetry = useLastCallback(() => search(effective));
 
-  // Пока идёт запрос нового текста, на экране остаются прежние результаты (без заглушки между нажатиями — список
-  // не прыгал при наборе); неудачный прежний запрос не держим
-  const shown = found && (found.query === effective || !found.isFailed) ? found : undefined;
-  const rows = useMemo(() => (shown ? buildSearchRows(shown, filter) : []), [shown, filter]);
-  const playable = useMemo(() => rows.filter((row) => row.kind === 'track')
-    .map((row) => shown!.tracks.find((track) => track.id === row.id)!), [rows, shown]);
+  const shown = found?.query === effective ? found : undefined;
+  const withServer = source !== 'catalog';
+  const withCatalog = source !== 'server' && hasCatalog;
+  const serverTracks = (withServer && shown?.server?.tracks) || [];
+  const lists = useMemo(() => buildSearchLists(shown, withServer, withCatalog), [shown, withServer, withCatalog]);
+  const matchedPlaylists = useMemo(() => {
+    const text = effective.toLowerCase();
+    if (!text) return [];
+    return [
+      ...playlists.filter((item) => item.name.toLowerCase().includes(text)).map((item) => ({
+        key: `playlist:${item.id}`, kind: 'playlist', id: item.id, name: item.name, count: item.count,
+      })),
+      ...shared.filter((item) => item.name.toLowerCase().includes(text)).map((item) => ({
+        key: `shared:${item.id}`, kind: 'shared', id: item.id, name: item.name, count: item.trackCount,
+      })),
+    ];
+  }, [effective, playlists, shared]);
 
   const handlePlay = useLastCallback((index: number) => {
-    playTracks(playable, index, { source: { kind: 'search', name: shown!.query } });
+    remember();
+    playTracks(serverTracks, index, { source: { kind: 'search', name: effective } });
   });
-
   const handleStar = useLastCallback((track: MusicTrack) => {
     const isStarred = !track.isStarred;
-    setFound((previous) => previous && {
-      ...previous, tracks: previous.tracks.map((item) => (item.id === track.id ? { ...item, isStarred } : item)),
+    setFound((previous) => previous?.server && {
+      ...previous,
+      server: {
+        ...previous.server,
+        tracks: previous.server.tracks.map((item) => (item.id === track.id ? { ...item, isStarred } : item)),
+      },
     });
     void setTrackStarred(track, isStarred);
   });
 
-  const handleOpenAlbum = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    openMusicView({ kind: 'album', id: e.currentTarget.dataset.id! });
-  });
-
-  const handleOpenArtist = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    openMusicView({ kind: 'artist', id: e.currentTarget.dataset.id! });
-  });
-
-  // Альбом на компьютере — загрузка на устройство значком в строке (доска `DeskMusicMore`)
-  const handleSaveAlbum = useLastCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
-    const albumId = e.currentTarget.dataset.id!;
-    const { tracks } = await callMusic('parvaneMusicAlbum', { albumId }).catch(() => ({ tracks: [] }));
-    if (tracks.length) saveTracksOffline(tracks, { kind: 'album', id: albumId });
-  });
-
-  const handlePlayLibraryTrack = useLastCallback(async (trackId: string) => {
-    const tracks = await callMusic('parvaneMusicTracks', { trackIds: [trackId] }).catch(() => []);
-    const playableFound = tracks.filter(Boolean);
-    if (playableFound.length) playTracks(playableFound, 0, { source: { kind: 'search', name: effective } });
-  });
-
-  function renderAlbum(album: MusicAlbum) {
-    const count = lang('MusicTracksCount', { count: album.trackCount }, { pluralValue: album.trackCount });
+  function renderStart() {
     return (
-      <li key={`album:${album.id}`} className={styles.track} data-album={album.id}>
-        <button type="button" className={styles.trackMain} data-id={album.id} onClick={handleOpenAlbum}>
-          <MusicCover coverId={album.coverId} toneId={album.id} size={40} glyph="disc" className={styles.trackCover} />
-          <span className={styles.trackText}>
-            <span className={styles.trackTitle}>{album.title}</span>
-            <span className={buildClassName(kit.muted, kit.small, styles.trackArtist)}>
-              {[lang('MusicKindAlbum'), album.artist, count].filter(Boolean).join(' · ')}
-            </span>
-          </span>
-        </button>
-        {isPhone ? (
-          <ParvaneIcon name="right" isSmall className={styles.chevron} />
-        ) : (
-          <button
-            type="button"
-            className={kit.ib}
-            aria-label={lang('MusicOfflineSaveAlbum')}
-            data-id={album.id}
-            onClick={handleSaveAlbum}
-          >
-            <ParvaneIcon name="download" isSmall />
-          </button>
+      <>
+        {Boolean(history?.length) && (
+          <section className={styles.section}>
+            <div className={styles.head}>
+              <h2 className={styles.headTitle}>{lang('MusicRecent')}</h2>
+              <button type="button" className={styles.headAction} onClick={handleClearHistory}>
+                {lang('MusicClear')}
+              </button>
+            </div>
+            <div className={styles.list} data-music-history>
+              {history.map((item) => (
+                <div key={item} className={styles.historyRow}>
+                  <button type="button" className={styles.historyMain} data-query={item} onClick={handlePickHistory}>
+                    <span className={styles.historyIcon}><ParvaneIcon name="search" isSmall /></span>
+                    <span className={styles.listTitle}>{item}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.historyForget}
+                    aria-label={lang('MusicForgetQuery', { query: item })}
+                    data-query={item}
+                    onClick={handleForget}
+                  >
+                    <ParvaneIcon name="close" isSmall />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
         )}
-      </li>
+        <section className={styles.section}>
+          <h2 className={styles.headTitle}>{lang('MusicBrowse')}</h2>
+          <div className={styles.browse}>
+            <button
+              type="button"
+              className={buildClassName(styles.browseTile, styles.toneA)}
+              onClick={handleOpenAlbums}
+            >
+              <span className={styles.browseTitle}>{lang('MusicNewOnServer')}</span>
+              <span className={styles.browseSub}>
+                {lang('MusicTracksCount', { count: info.libraryTracks }, { pluralValue: info.libraryTracks })}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={buildClassName(styles.browseTile, styles.toneB)}
+              onClick={handleOpenArtists}
+            >
+              <span className={styles.browseTitle}>{lang('MusicArtists')}</span>
+              <span className={styles.browseSub}>{info.libraryArtists}</span>
+            </button>
+          </div>
+        </section>
+      </>
     );
   }
 
-  function renderArtist(artist: MusicArtist) {
+  function renderBest() {
+    const { best } = lists;
+    if (!best) return undefined;
     return (
-      <li key={`artist:${artist.id}`} className={styles.track} data-artist={artist.id}>
-        <button type="button" className={styles.trackMain} data-id={artist.id} onClick={handleOpenArtist}>
+      <section className={styles.section}>
+        <h2 className={styles.headTitle}>{lang('MusicBestResult')}</h2>
+        <button
+          type="button"
+          className={styles.best}
+          data-kind={best.kind}
+          data-id={best.id}
+          data-music-best
+          onClick={handleOpen}
+        >
           <MusicCover
-            coverId={artist.coverId}
-            toneId={artist.id}
-            size={40}
-            glyph="mic"
-            isRound
-            className={styles.trackCover}
+            coverId={best.coverId}
+            coverUrl={best.coverUrl}
+            toneId={best.id}
+            size={isPhone ? 76 : 86}
+            glyph={best.glyph}
+            isRound={best.glyph === 'mic'}
+            className={styles.bestCover}
           />
-          <span className={styles.trackText}>
-            <span className={styles.trackTitle}>{artist.name}</span>
-            <span className={buildClassName(kit.muted, kit.small, styles.trackArtist)}>
-              {[lang('MusicKindArtist'),
-                lang('MusicAlbumsCount', { count: artist.albumCount }, { pluralValue: artist.albumCount })].join(' · ')}
+          <span className={styles.bestText}>
+            <span className={styles.bestTitle}>{best.title}</span>
+            <span className={styles.bestSub}>
+              {[lang(best.glyph === 'mic' ? 'MusicKindArtist' : 'MusicKindAlbum'), best.sub]
+                .filter(Boolean).join(' · ')}
             </span>
           </span>
+          <span className={styles.bestPlay} aria-hidden><ParvaneIcon name="play" /></span>
         </button>
-        <ParvaneIcon name="right" isSmall className={styles.chevron} />
-      </li>
+      </section>
+    );
+  }
+
+  function renderTracks(limit?: number) {
+    const { catalogTracks } = lists;
+    const serverShown = limit ? serverTracks.slice(0, limit) : serverTracks;
+    const catalogShown = limit ? catalogTracks.slice(0, Math.max(0, limit - serverShown.length)) : catalogTracks;
+    if (!serverShown.length && !catalogShown.length) return undefined;
+    return (
+      <ul className={styles.rows} data-music-tracks>
+        {serverShown.map((track, index) => (
+          <MusicTrackRow
+            key={`track:${track.id}`}
+            track={track}
+            index={index}
+            isCurrent={track.id === current?.id}
+            isPlaying={player.isPlaying}
+            canQueue
+            canSaveOffline
+            onPlay={handlePlay}
+            onStar={handleStar}
+            onSendToChat={onSendToChat}
+          />
+        ))}
+        {catalogShown.map((track) => (
+          <MusicCatalogRow key={`catalog:${track.ref || `${track.artist}:${track.title}`}`} track={track} />
+        ))}
+      </ul>
+    );
+  }
+
+  function renderArtists(isStrip?: boolean) {
+    if (!lists.artists.length) return undefined;
+    return (
+      <div className={isStrip ? styles.strip : styles.grid} data-music-artists>
+        {lists.artists.map((artist) => (
+          <button
+            key={artist.key}
+            type="button"
+            className={buildClassName(styles.tile, styles.tileRound)}
+            data-kind={artist.kind}
+            data-id={artist.id}
+            onClick={handleOpen}
+          >
+            <MusicCover
+              coverId={artist.coverId}
+              coverUrl={artist.coverUrl}
+              toneId={artist.id}
+              size={96}
+              glyph="mic"
+              isRound
+              className={styles.tileCover}
+            />
+            <span className={styles.tileTitle}>{artist.name}</span>
+            <span className={styles.tileSub}>
+              {lang(artist.isServer ? 'MusicOnServerShort' : 'MusicInCatalogShort')}
+            </span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function renderAlbums(isStrip?: boolean) {
+    if (!lists.albums.length) return undefined;
+    return (
+      <div className={isStrip ? styles.strip : styles.grid} data-music-albums>
+        {lists.albums.map((album) => (
+          <button
+            key={album.key}
+            type="button"
+            className={styles.tile}
+            data-kind={album.kind}
+            data-id={album.id}
+            onClick={handleOpen}
+          >
+            <MusicCover
+              coverId={album.coverId}
+              coverUrl={album.coverUrl}
+              toneId={album.id}
+              size={96}
+              glyph="disc"
+              className={styles.tileCover}
+            />
+            <span className={styles.tileTitle}>{album.title}</span>
+            <span className={styles.tileSub}>{album.artist}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function renderPlaylists() {
+    if (!matchedPlaylists.length) return undefined;
+    return (
+      <div className={styles.list} data-music-playlists-found>
+        {matchedPlaylists.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={styles.listRow}
+            data-kind={item.kind}
+            data-id={item.id}
+            onClick={handleOpen}
+          >
+            <MusicCover
+              toneId={item.id}
+              size={46}
+              glyph={item.kind === 'shared' ? 'users' : 'list'}
+              className={styles.listCover}
+            />
+            <span className={styles.listText}>
+              <span className={styles.listTitle}>{item.name}</span>
+              <span className={styles.listSub}>
+                {lang('MusicTracksCount', { count: item.count }, { pluralValue: item.count })}
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function renderSection(title: string, body: TeactNode, onAll?: NoneToVoidFunction) {
+    if (!body) return undefined;
+    return (
+      <section className={styles.section}>
+        <div className={styles.head}>
+          <h2 className={styles.headTitle}>{title}</h2>
+          {onAll && (
+            <button type="button" className={styles.headAction} onClick={onAll}>{lang('MusicShowAll')}</button>
+          )}
+        </div>
+        {body}
+      </section>
+    );
+  }
+
+  function renderEmpty() {
+    return (
+      <div className={styles.empty} data-music-empty="search">
+        <h2 className={styles.emptyTitle}>{lang('MusicNothingFound', { query: effective })}</h2>
+        <p className={styles.emptyText}>{lang('MusicNothingFoundHint')}</p>
+        <div className={styles.emptyActions}>
+          {info.isFetchEnabled && (
+            <button type="button" className={styles.emptyButton} onClick={handleLink}>
+              <ParvaneIcon name="link" isSmall />
+              {lang('MusicLinkShort')}
+            </button>
+          )}
+          {info.isUploadEnabled && (
+            <button type="button" className={styles.emptyButton} onClick={handleFile}>
+              <ParvaneIcon name="upload" isSmall />
+              {lang('MusicOwnFile')}
+            </button>
+          )}
+        </div>
+      </div>
     );
   }
 
   function renderResults() {
-    // Пустое поле: «Недавние запросы» и вход в «Загрузки на сервер» (доска `ZpMusicX`)
-    if (!effective) return <MusicSearchStart onPick={setMusicQuery} />;
-    if (!shown) return <PvSkeleton />;
-    if (shown.isFailed) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
-    let trackIndex = -1;
+    if (!shown || (!shown.server && !shown.isServerFailed && !shown.catalog)) return <PvSkeleton />;
+    const isCatalogDown = withCatalog && shown.isCatalogFailed;
+    const isWaitingCatalog = withCatalog && !shown.catalog && !shown.isCatalogFailed;
+    const isEmpty = !serverTracks.length && !lists.catalogTracks.length && !lists.artists.length
+      && !lists.albums.length && !matchedPlaylists.length;
     return (
       <>
-        <div className={kit.caps} data-music-found={rows.length}>
-          {lang('MusicOnServer', { count: rows.length })}
-        </div>
-        {!rows.length && (
-          <div className={kit.muted} data-music-empty="search">{lang('MusicNothingOnServer')}</div>
+        {isCatalogDown && (
+          <div className={styles.notice} role="status" data-music-catalog-down>
+            <ParvaneIcon name="cloudLine" isSmall />
+            <span className={styles.noticeText}>{lang('MusicCatalogDown')}</span>
+            <button type="button" className={styles.headAction} onClick={handleRetry}>{lang('MusicRetry')}</button>
+          </div>
         )}
-        {Boolean(rows.length) && (
-          <ul className={styles.tracks} data-music-tracks>
-            {rows.map((row) => {
-              if (row.kind === 'album') return renderAlbum(shown.albums.find((item) => item.id === row.id)!);
-              if (row.kind === 'artist') return renderArtist(shown.artists.find((item) => item.id === row.id)!);
-              trackIndex += 1;
-              const track = playable[trackIndex];
-              return (
-                <MusicTrackRow
-                  key={`track:${track.id}`}
-                  track={track}
-                  index={trackIndex}
-                  isCurrent={track.id === current?.id}
-                  isPlaying={player.isPlaying}
-                  prefix={lang('MusicKindTrack')}
-                  trailing="offline"
-                  canQueue
-                  canSaveOffline
-                  onPlay={handlePlay}
-                  onStar={handleStar}
-                  onSendToChat={onSendToChat}
-                />
-              );
-            })}
-          </ul>
+        {isEmpty && !isWaitingCatalog && renderEmpty()}
+        {filter === 'all' && !isEmpty && (
+          <>
+            <div className={styles.top}>
+              {renderBest()}
+              {renderSection(lang('MusicFilterTracks'), renderTracks(ALL_TRACKS))}
+            </div>
+            {renderSection(lang('MusicArtists'), renderArtists(true), handleFilterArtists)}
+            {renderSection(lang('MusicAlbums'), renderAlbums(true), handleFilterAlbums)}
+            {renderSection(lang('MusicPlaylists'), renderPlaylists())}
+          </>
         )}
-        {shown.hasMore && <MusicLoadMore onMore={handleMore} />}
-        <MusicFetch query={shown.query} filter={filter} onPlayLibraryTrack={handlePlayLibraryTrack} />
+        {filter === 'tracks' && renderTracks()}
+        {filter === 'artists' && renderArtists()}
+        {filter === 'albums' && renderAlbums()}
+        {filter === 'playlists' && renderPlaylists()}
+        {filter === 'tracks' && withCatalog && shown.catalog?.hasMore && (
+          <>
+            <div className={styles.more}>
+              <span className={styles.moreRing} />
+              {lang('MusicLoadingMore')}
+            </div>
+            <MusicLoadMore onMore={handleMore} />
+          </>
+        )}
+        {isWaitingCatalog && <PvSkeleton />}
       </>
     );
   }
 
   return (
-    <div className={styles.view} data-music-search>
-      {/* Телефон: поиск — страница со своей шапкой «‹ Музыка / поиск» и подписью над полем (доска `ZpMusicX`) */}
+    <div className={buildClassName(styles.root, isPhone && styles.rootPhone)} data-music-search>
       {isPhone && (
-        <MusicSectionHead
-          title={lang('ParvaneModuleMusic')}
-          barSubtitle={lang('MusicSearch').toLowerCase()}
-          isPhone
-          onBack={handleBack}
-        />
+        <div className={styles.field}>
+          <ParvaneIcon name="search" isSmall className={styles.fieldIcon} />
+          <input
+            ref={inputRef}
+            className={styles.fieldInput}
+            type="search"
+            value={query}
+            placeholder={lang('MusicSearchWhat')}
+            aria-label={lang('MusicSearchWhat')}
+            onChange={handleQuery}
+            onKeyDown={handleKeyDown}
+          />
+        </div>
       )}
-      <div className={styles.searchBar}>
-        {isPhone && <div className={styles.searchLabel}>{lang('MusicSearchPlaceholder')}</div>}
-        <input
-          ref={inputRef}
-          className={buildClassName(kit.input, styles.search)}
-          type="search"
-          value={query}
-          placeholder={isPhone ? undefined : lang('MusicSearchPlaceholder')}
-          aria-label={lang('MusicSearchPlaceholder')}
-          onChange={handleQuery}
-        />
-        <div
-          className={buildClassName(kit.chips, styles.searchFilter)}
-          role="group"
-          aria-label={lang('MusicFilterLabel')}
-        >
-          {FILTERS.map((value) => (
+      {Boolean(effective) && (
+        <div className={styles.chips} role="group" aria-label={lang('MusicFilterLabel')}>
+          <div className={styles.chipsScroll}>
+            {FILTERS.map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={buildClassName(styles.chip, filter === value && styles.chipOn)}
+                aria-pressed={filter === value}
+                data-filter={value}
+                onClick={handleFilter}
+              >
+                {lang(FILTER_KEYS[value])}
+              </button>
+            ))}
+          </div>
+          {hasCatalog && (
+            <button
+              type="button"
+              className={buildClassName(styles.filterButton, source !== 'everywhere' && styles.filterOn)}
+              aria-label={lang('MusicSource')}
+              data-music-source-open
+              onClick={handleOpenSource}
+            >
+              <ParvaneIcon name="filter" isSmall />
+            </button>
+          )}
+        </div>
+      )}
+      {effective ? renderResults() : renderStart()}
+      <PvSheet
+        isOpen={isSourceOpen}
+        title={lang('MusicSource')}
+        subtitle={lang('MusicSourceHint')}
+        onClose={handleCloseSource}
+      >
+        <div className={styles.list} role="radiogroup" data-music-sources>
+          {SOURCES.map((value) => (
             <button
               key={value}
               type="button"
-              className={buildClassName(kit.chip, filter === value && kit.chipOn)}
-              aria-pressed={filter === value}
-              data-filter={value}
-              onClick={handleFilter}
+              role="radio"
+              aria-checked={source === value}
+              className={styles.listRow}
+              data-source={value}
+              onClick={handleSource}
             >
-              {lang(FILTER_KEYS[value])}
+              <span className={buildClassName(styles.radio, source === value && styles.radioOn)} />
+              <span className={styles.listText}>
+                <span className={styles.listTitle}>{lang(SOURCE_KEYS[value][0])}</span>
+                <span className={styles.listSub}>{lang(SOURCE_KEYS[value][1])}</span>
+              </span>
             </button>
           ))}
         </div>
-      </div>
-      {renderResults()}
+      </PvSheet>
     </div>
   );
 };

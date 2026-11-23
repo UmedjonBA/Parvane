@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useLayoutEffect, useState,
+  memo, useEffect, useLayoutEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
@@ -17,8 +17,8 @@ import {
 } from './musicPlayer';
 import { refreshPlaylists } from './musicPlaylists';
 import {
-  consumeMusicAddRequest, getIsMusicPage, getMusicAddRequest, getMusicTab, getMusicView, goBackMusic, openMusicView,
-  openNewPlaylist,
+  consumeMusicAddRequest, getIsMusicPage, getMusicAddRequest, getMusicQuery, getMusicTab, getMusicView, goBackMusic,
+  openMusicView, openNewPlaylist, setMusicQuery,
 } from './musicView';
 
 import useAppLayout from '../../../hooks/useAppLayout';
@@ -33,10 +33,12 @@ import PvLoading from '../notes/PvLoading';
 import PvOfflineBar from '../notes/PvOfflineBar';
 import MusicUploadsView from './fetch/MusicUploadsView';
 import MusicAddedView from './MusicAddedView';
+import MusicAlbumPage from './MusicAlbumPage';
 import MusicAlbumView from './MusicAlbumView';
-import MusicArtistView from './MusicArtistView';
+import MusicArtistPage from './MusicArtistPage';
 import MusicBrowseView from './MusicBrowseView';
 import MusicDeskPlayer from './MusicDeskPlayer';
+import MusicDislikesView from './MusicDislikesView';
 import MusicHomeView from './MusicHomeView';
 import MusicLibraryItems from './MusicLibraryItems';
 import MusicLibraryView from './MusicLibraryView';
@@ -53,6 +55,7 @@ import MusicSearchView from './MusicSearchView';
 import MusicSectionHead from './MusicSectionHead';
 import MusicSendDialog from './MusicSendDialog';
 import MusicStarredView from './MusicStarredView';
+import MusicUploadStatus from './MusicUploadStatus';
 import MusicSharedPage from './shared/MusicSharedPage';
 
 import kit from '../notes/PvKit.module.scss';
@@ -83,7 +86,10 @@ const Music = () => {
   const isShown = section === 'music';
   const isEnabled = info?.isEnabled;
   const isOnline = useBrowserOnline();
-  const isPage = isPhone && view.kind !== 'home' && view.kind !== 'library';
+  const isPage = isPhone && view.kind !== 'home' && view.kind !== 'search' && view.kind !== 'library';
+  const query = useDerivedState(getMusicQuery);
+  const isSearchBar = view.kind === 'home' || view.kind === 'search';
+  const deskSearchRef = useRef<HTMLInputElement>();
 
   useEffect(() => {
     if (!isShown || info) return;
@@ -104,6 +110,11 @@ const Music = () => {
     consumeMusicAddRequest();
     if (addRequest === 'playlist') {
       openNewPlaylist();
+      return;
+    }
+    // «Вставить ссылку» и «Загрузить файл» — на странице «Загрузки на сервер» (доски `RpMusicB`, `RdMusic`)
+    if (addRequest === 'link' || addRequest === 'file') {
+      openMusicView({ kind: 'uploads' });
       return;
     }
     openMusicView({ kind: 'search' }, true);
@@ -138,7 +149,14 @@ const Music = () => {
   });
   const handleCloseSend = useLastCallback(() => setSentTrack(undefined));
   const handleNewPlaylist = useLastCallback(() => openNewPlaylist());
-  const handleOpenSearch = useLastCallback(() => openMusicView({ kind: 'search' }, true));
+  const handleOpenSearch = useLastCallback(() => {
+    openMusicView({ kind: 'search' }, true);
+    deskSearchRef.current?.focus();
+  });
+  const handleDeskQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setMusicQuery(e.currentTarget.value);
+    if (view.kind !== 'search') openMusicView({ kind: 'search' }, true);
+  });
   const handleLibraryMore = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     setLibraryMenu({ x: rect.left, y: rect.bottom });
@@ -147,6 +165,7 @@ const Music = () => {
   const handleLibraryPick = useLastCallback((key: string) => {
     setLibraryMenu(undefined);
     if (key === 'newPlaylist') openNewPlaylist();
+    else if (key === 'dislikes') openMusicView({ kind: 'dislikes' }, true);
   });
 
   function renderView(current: MusicView) {
@@ -164,11 +183,15 @@ const Music = () => {
       case 'albums':
         return <MusicBrowseView kind={current.kind} info={info!} isPhone={isPhone} />;
       case 'album':
-        return <MusicAlbumView albumId={current.id} info={info!} {...common} />;
+        return <MusicAlbumPage id={current.id} {...common} />;
+      case 'catalogAlbum':
+        return <MusicAlbumPage catalogRef={current.id} {...common} />;
+      case 'catalogArtist':
+        return <MusicArtistPage catalogRef={current.id} {...common} />;
       case 'singles':
         return <MusicAlbumView singlesOf={current.id} info={info!} {...common} />;
       case 'artist':
-        return <MusicArtistView artistId={current.id} {...common} />;
+        return <MusicArtistPage id={current.id} {...common} />;
       case 'playlist':
         return <MusicPlaylists playlistId={current.id} {...common} />;
       case 'offline':
@@ -186,6 +209,8 @@ const Music = () => {
         return <MusicMixArtistsView isPhone={isPhone} />;
       case 'queue':
         return <MusicQueue />;
+      case 'dislikes':
+        return <MusicDislikesView isPhone={isPhone} />;
       case 'playlists':
         return (
           <div className={styles.view}>
@@ -249,6 +274,7 @@ const Music = () => {
         <div className={buildClassName(styles.main, 'custom-scroll')} data-music-view={view.kind}>
           {renderView(view)}
         </div>
+        <div className={styles.phoneUploads}><MusicUploadStatus isPhone /></div>
       </>
     );
   }
@@ -280,7 +306,7 @@ const Music = () => {
                 data-music-library-more
                 onClick={handleLibraryMore}
               >
-                <ParvaneIcon name="more" isSmall />
+                <ParvaneIcon name="dotsH" isSmall />
               </button>
             </div>
             <div className={buildClassName(styles.deskLibraryList, 'custom-scroll')}>
@@ -289,6 +315,29 @@ const Music = () => {
           </aside>
           <div className={styles.deskCenter}>
             <div className={buildClassName(styles.deskPanel, styles.main, 'custom-scroll')} data-music-view={view.kind}>
+              {/* Доска `DeskMusic`: на главной и в поиске сверху — поле поиска и «Добавляем N», на остальных — только
+                  чип в углу */}
+              {isSearchBar ? (
+                <div className={styles.deskTop}>
+                  <div className={styles.deskSearch}>
+                    <ParvaneIcon name="search" isSmall className={styles.deskSearchIcon} />
+                    <input
+                      ref={deskSearchRef}
+                      className={styles.deskSearchInput}
+                      type="search"
+                      value={query}
+                      placeholder={lang('MusicSearchWhat')}
+                      aria-label={lang('MusicSearchWhat')}
+                      data-music-desk-search
+                      onChange={handleDeskQuery}
+                    />
+                  </div>
+                  <span className={styles.deskTopGap} />
+                  <MusicUploadStatus />
+                </div>
+              ) : (
+                <div className={styles.deskCorner}><MusicUploadStatus /></div>
+              )}
               {renderView(view)}
             </div>
           </div>
@@ -297,7 +346,10 @@ const Music = () => {
         {libraryMenu && (
           <MusicMenu
             title={lang('MusicLibrary')}
-            actions={[{ key: 'newPlaylist', title: lang('MusicPlaylistNew') }]}
+            actions={[
+              { key: 'newPlaylist', title: lang('MusicPlaylistNew') },
+              { key: 'dislikes', title: lang('MusicDislikes') },
+            ]}
             anchor={libraryMenu}
             onPick={handleLibraryPick}
             onClose={closeLibraryMenu}

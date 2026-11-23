@@ -48,6 +48,41 @@ const CANDIDATES = {
   },
 };
 
+// Ссылки каталога: исполнитель — `dz:a<номер>`, альбом — `dz:b<номер>` по месту имени в списке, трек — `dz:<100+место>`
+function artistOut(name) {
+  const names = [...new Set(CATALOG.map((track) => track.artist))];
+  return { ref: `dz:a${names.indexOf(name)}`, name, picture: '', albums: 1 };
+}
+
+function albumOut(title) {
+  const titles = [...new Set(CATALOG.map((track) => track.album))];
+  const first = CATALOG.find((track) => track.album === title);
+  return {
+    ref: `dz:b${titles.indexOf(title)}`,
+    title,
+    artist: first?.artist || '',
+    artist_ref: first ? artistOut(first.artist).ref : '',
+    cover: '',
+    year: 2025,
+    record_type: 'album',
+    tracks: CATALOG.filter((track) => track.album === title).length,
+  };
+}
+
+function trackOut(track) {
+  return {
+    ...track,
+    ref: `dz:${100 + CATALOG.indexOf(track)}`,
+    album_ref: track.album ? albumOut(track.album).ref : '',
+    cover: '',
+    year: 2025,
+  };
+}
+
+function refName(ref, names) {
+  return names[Number(String(ref || '').replace(/^dz:[ab]/, ''))] || '';
+}
+
 function reply(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -80,6 +115,31 @@ http.createServer((req, res) => {
       : CATALOG.filter((track) => `${track.artist} ${track.title}`.toLowerCase().includes(query));
     // Ссылка каталога — по месту в CATALOG (как `dz:<id>` у Deezer)
     return reply(res, 200, { tracks: tracks.map((track) => ({ ...track, ref: `dz:${100 + CATALOG.indexOf(track)}` })) });
+  }
+  // Каталог (поиск, исполнитель, альбом — доски `MusicSearch`, `XpMusic`): те же эталоны, исполнитель и альбом —
+  // по именам из CATALOG
+  if (url.pathname === '/catalog/search') {
+    const query = (url.searchParams.get('q') || '').toLowerCase();
+    const tracks = CATALOG.filter((track) => `${track.artist} ${track.title} ${track.album}`.toLowerCase().includes(query));
+    const artists = [...new Set(tracks.map((track) => track.artist))].map(artistOut);
+    const albums = [...new Set(tracks.filter((track) => track.album).map((track) => track.album))].map(albumOut);
+    return reply(res, 200, {
+      artists, albums, tracks: tracks.map(trackOut), has_more: false, next: 0,
+    });
+  }
+  if (url.pathname === '/catalog/artist') {
+    const name = refName(url.searchParams.get('ref'), [...new Set(CATALOG.map((track) => track.artist))]);
+    const own = CATALOG.filter((track) => track.artist === name);
+    return reply(res, 200, {
+      artist: artistOut(name),
+      albums: [...new Set(own.filter((track) => track.album).map((track) => track.album))].map(albumOut),
+      top: own.map(trackOut),
+    });
+  }
+  if (url.pathname === '/catalog/album') {
+    const title = refName(url.searchParams.get('ref'), [...new Set(CATALOG.map((track) => track.album))]);
+    const tracks = CATALOG.filter((track) => track.album === title);
+    return reply(res, 200, { album: albumOut(title), tracks: tracks.map(trackOut) });
   }
   // «Микс дня»: исполнители для выбора и похожие на выбранного
   if (url.pathname === '/catalog/artists') {

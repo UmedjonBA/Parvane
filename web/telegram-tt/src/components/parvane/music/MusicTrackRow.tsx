@@ -14,7 +14,6 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
-import PvIcon from '../notes/PvIcon';
 import MusicCover from './MusicCover';
 import MusicTrackMenu from './MusicTrackMenu';
 
@@ -28,8 +27,10 @@ type OwnProps = {
   index: number;
   isCurrent?: boolean;
   isPlaying?: boolean;
-  // Номер строки вместо обложки (плейлист, альбом, «Популярное»)
+  // Номер строки вместо обложки (плейлист, альбом)
   number?: number;
+  // Место перед обложкой («Популярное на сервере», доска `MusicHome`)
+  rank?: number;
   // Без второй строки: альбом на телефоне (доска `RpMusicA`)
   isBare?: boolean;
   // Во второй строке альбом, а не исполнитель («Популярное» на странице исполнителя, доска `XpMusic`)
@@ -77,7 +78,7 @@ const PHONE_MAX_WIDTH = 925;
 // Parvane (spec 039, 041): строка трека — обложка либо номер, название и исполнитель (на компьютере — колонками),
 // длительность; нажатие играет. Действия — в меню «⋯» (и по правой кнопке, долгому нажатию)
 const MusicTrackRow = ({
-  track, index, isCurrent, isPlaying, number, isBare, isAlbumLine, columns, trailing, note, prefix, isMissing,
+  track, index, isCurrent, isPlaying, number, rank, isBare, isAlbumLine, columns, trailing, note, prefix, isMissing,
   canRemove, isMenuHidden, dragLabel, dragState, drag, canQueue, canSaveOffline, extra,
   onPlay, onStar, onRemove, onDelete, onSendToChat,
 }: OwnProps) => {
@@ -136,6 +137,9 @@ const MusicTrackRow = ({
       onContextMenu={handleContextMenu}
     >
       <button type="button" className={styles.trackMain} disabled={isMissing} onClick={handlePlay}>
+        {rank !== undefined && (
+          <span className={buildClassName(styles.trackRank, kit.mono, kit.muted, kit.small)}>{rank}</span>
+        )}
         {number !== undefined ? (
           <span className={buildClassName(styles.trackNo, kit.mono, kit.muted, kit.small)}>{number}</span>
         ) : (
@@ -189,7 +193,7 @@ const MusicTrackRow = ({
           data-music-menu
           onClick={handleMenu}
         >
-          <PvIcon name="dots" isSmall />
+          <ParvaneIcon name="dotsH" isSmall />
         </button>
       )}
       {canRemove && (

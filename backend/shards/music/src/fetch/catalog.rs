@@ -35,11 +35,13 @@ impl Fetch {
         .encode_to_vec())
     }
 
-    pub async fn catalog_artist(&self, r: pb::CatalogArtistRequest) -> Reply {
+    pub async fn catalog_artist(&self, sub: &Subsonic, user: &str, r: pb::CatalogArtistRequest) -> Reply {
         let v = self.catalog_service("artist", &[("ref", checked_ref(&r.r#ref)?)]).await?;
+        let top = self.owned_tracks(sub, user, list(&v, "top")).await;
         Ok(pb::CatalogArtistResponse {
             artist: v.get("artist").map(artist_pb),
             albums: list(&v, "albums").iter().map(album_pb).collect(),
+            top,
         }
         .encode_to_vec())
     }

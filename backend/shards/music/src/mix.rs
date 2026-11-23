@@ -67,7 +67,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, sub: &Subsonic, method: &str, req: &Shar
         "music.dislike.list" => dislike_list(address).await,
         "music.search.history" => history(address).await,
         "music.search.remember" => remember(address, body(req)?).await,
-        "music.search.forget" => forget(address).await,
+        "music.search.forget" => forget(address, body(req)?).await,
         _ => Err(ErrorCode::Unavailable),
     }
 }
@@ -554,7 +554,13 @@ async fn remember(address: &str, r: pb::SearchRememberRequest) -> Reply {
     Ok(pb::SearchRememberResponse {}.encode_to_vec())
 }
 
-async fn forget(address: &str) -> Reply {
-    sqlx::query("DELETE FROM search_history WHERE user = ?").bind(address).execute(pool()?).await.map_err(db_err)?;
+/// Забыть один запрос (`query`) либо, без него, всю историю.
+async fn forget(address: &str, r: pb::SearchForgetRequest) -> Reply {
+    let query = r.query.trim();
+    if query.is_empty() {
+        sqlx::query("DELETE FROM search_history WHERE user = ?").bind(address).execute(pool()?).await.map_err(db_err)?;
+    } else {
+        sqlx::query("DELETE FROM search_history WHERE user = ? AND query_key = ?").bind(address).bind(query.to_lowercase()).execute(pool()?).await.map_err(db_err)?;
+    }
     Ok(pb::SearchForgetResponse {}.encode_to_vec())
 }

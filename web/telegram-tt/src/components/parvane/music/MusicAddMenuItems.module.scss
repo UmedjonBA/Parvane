@@ -1,0 +1,10 @@
+.text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.sub {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}

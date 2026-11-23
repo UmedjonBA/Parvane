@@ -9,7 +9,7 @@ import { ALL_FOLDER_ID } from '../../config';
 import buildClassName from '../../util/buildClassName';
 import { openHealthQuick } from '../../util/parvaneQuick';
 import { requestModuleAdd, requestPlannerAdd } from '../../util/parvaneSection';
-import { requestMusicAdd } from '../parvane/music/musicView';
+import { openMusicView } from '../parvane/music/musicView';
 import {
   getActiveModule, MODULE_ICONS, MODULE_TITLE_KEYS, openModule,
 } from './parvaneModuleNav';
@@ -20,6 +20,7 @@ import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useParvaneModules from '../../hooks/useParvaneModules';
 
+import MusicAddMenuItems from '../parvane/music/MusicAddMenuItems';
 import MusicMiniPlayer from '../parvane/music/MusicMiniPlayer';
 import Menu from '../ui/Menu';
 import MenuItem from '../ui/MenuItem';
@@ -89,7 +90,10 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   });
 
   const handleModuleClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    openModule(e.currentTarget.dataset.module as ParvaneModuleId, Boolean(isSettingsOpen));
+    const id = e.currentTarget.dataset.module as ParvaneModuleId;
+    // «Музыка» в «Музыке» — на главную модуля
+    if (id === 'music' && activeModule === 'music') openMusicView({ kind: 'home' }, true);
+    openModule(id, Boolean(isSettingsOpen));
   });
 
   // «+» зависит от модуля: в «Чатах», «Файлах» и «Музыке» — меню, в «Плане» и «Здоровье» — быстрый ввод записи,
@@ -118,8 +122,6 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   });
 
   const handleUpload = useLastCallback(() => requestModuleAdd('upload'));
-  const handleMusicFetch = useLastCallback(() => requestMusicAdd('fetch'));
-  const handleMusicPlaylist = useLastCallback(() => requestMusicAdd('playlist'));
   const handleNewFolder = useLastCallback(() => requestModuleAdd('folder'));
 
   return (
@@ -202,8 +204,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
           >
             {activeModule === 'music' ? (
               <>
-                <MenuItem icon="search" onClick={handleMusicFetch}>{lang('MusicAddFetch')}</MenuItem>
-                <MenuItem icon="add" onClick={handleMusicPlaylist}>{lang('MusicPlaylistNew')}</MenuItem>
+                <MusicAddMenuItems />
               </>
             ) : activeModule === 'files' ? (
               <>

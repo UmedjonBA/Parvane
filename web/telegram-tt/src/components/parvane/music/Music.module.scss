@@ -93,6 +93,14 @@
   background: none;
 }
 
+.tab:focus {
+  outline: none;
+}
+
+.tab:focus-visible {
+  box-shadow: 0 0 0 2px var(--pv-blue);
+}
+
 .tabOn {
   font-weight: var(--font-weight-semibold);
   color: var(--pv-panel);
@@ -652,6 +660,13 @@
   flex: none;
   width: 1.5rem;
   text-align: center;
+}
+
+.trackRank {
+  flex: none;
+  width: 1.125rem;
+  font-size: 0.8125rem;
+  text-align: end;
 }
 
 .trackCurrent .trackNo {
@@ -1432,4 +1447,117 @@
   position: relative;
   border-radius: 0.625rem;
   background: var(--pv-panel);
+}
+
+.deskTop {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.deskTopGap {
+  flex: 1;
+}
+
+.deskSearch {
+  position: relative;
+  flex: 0 1 22.5rem;
+  min-width: 0;
+}
+
+.deskSearchIcon {
+  pointer-events: none;
+
+  position: absolute;
+  top: 0.625rem;
+  left: 0.75rem;
+
+  color: var(--pv-muted);
+}
+
+.deskSearchInput {
+  width: 100%;
+  height: 2.5rem;
+  padding: 0 1rem 0 2.5rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 1.25rem;
+
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+  outline: none;
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
+}
+
+.deskCorner {
+  position: absolute;
+  z-index: 1;
+  top: 0.75rem;
+  right: 1rem;
+}
+
+// Телефон: «Добавляем на сервер» над мини-плеером и лентой модулей
+.phoneUploads {
+  position: fixed;
+  z-index: var(--z-chat-float-button);
+  right: 0;
+  bottom: var(--parvane-bottom-inset, 0);
+  left: 0;
+}
+
+// Трек каталога (доска `MusicOverview`): название серое, состояние значком под ним
+.trackTitleMuted {
+  color: var(--pv-muted);
+}
+
+.trackState {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.trackStateBusy {
+  color: var(--pv-at);
+}
+
+.trackStateFailed {
+  color: var(--pv-orange);
+}
+
+// Добавляется: кольцо, которое крутится
+.trackRing {
+  flex: none;
+
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid var(--pv-line2);
+  border-top-color: var(--pv-at);
+  border-radius: 50%;
+
+  animation: track-ring-spin 1s linear infinite;
+}
+
+@keyframes track-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.trackAction {
+  color: var(--pv-muted);
+}
+
+.trackRetry {
+  color: var(--pv-orange);
+}
+
+.trackCatalog .trackMain {
+  cursor: pointer;
 }

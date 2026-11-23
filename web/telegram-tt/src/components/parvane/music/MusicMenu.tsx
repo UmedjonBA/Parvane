@@ -57,7 +57,7 @@ const MusicMenu = ({
   const actions = anchor && quick ? [...quick, ...listActions] : listActions;
   const [openSub, setOpenSub] = useState<string>();
 
-  useLayoutEffect(() => (anchor ? captureEscKeyListener(onClose) : undefined), [anchor, onClose]);
+  useLayoutEffect(() => captureEscKeyListener(onClose), [onClose]);
 
   const handlePick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const { action, sub } = e.currentTarget.dataset;

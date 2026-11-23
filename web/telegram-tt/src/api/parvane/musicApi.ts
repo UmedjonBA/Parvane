@@ -453,6 +453,19 @@ export function createMusicApi(deps: Deps) {
       };
     },
 
+    /** «Главная» (доска `MusicHome`): популярное за неделю с числом прослушиваний, частые исполнители, новые альбомы. */
+    async parvaneMusicHome() {
+      const reply = await deps.call('music.library.home', {});
+      return {
+        popular: list(reply, 'popular').flatMap((raw) => {
+          const track = field(raw, 'track') as Json | undefined;
+          return track ? [{ track: toTrack(track), playsWeek: count(raw, 'plays_week') }] : [];
+        }),
+        frequentArtists: list(reply, 'frequent_artists').map(toArtist),
+        fresh: list(reply, 'fresh').map(toAlbum),
+      };
+    },
+
     /** Недавно добавленные альбомы. */
     async parvaneMusicRecent({ offset = 0 }: { offset?: number } = {}) {
       const reply = await deps.call('music.library.recent', { offset, limit: PAGE });
@@ -624,6 +637,12 @@ export function createMusicApi(deps: Deps) {
     async parvaneMusicFetchStart({ track }: { track: MusicCatalogTrack }) {
       const reply = await deps.call('music.fetch.start', { track: fromCatalogTrack(track) });
       return toFetchJob(field(reply, 'job') as Json);
+    },
+
+    /** Добавить на сервер альбом каталога целиком: задачи на треки, которых на сервере ещё нет. */
+    async parvaneMusicFetchAlbum({ albumRef }: { albumRef: string }) {
+      const reply = await deps.call('music.fetch.start', { album_ref: albumRef });
+      return list(reply, 'jobs').map(toFetchJob);
     },
 
     /** «Найти и скачать «запрос»»: эталон сервер берёт из каталога сам (spec 041). */

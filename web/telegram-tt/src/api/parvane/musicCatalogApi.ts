@@ -72,6 +72,8 @@ export function createMusicCatalogApi(deps: Deps) {
       return {
         artist: artist ? toCatalogArtist(artist) : undefined,
         albums: list(reply, 'albums').map(toCatalogAlbum),
+        // «Популярное» исполнителя в каталоге
+        top: list(reply, 'top').map(toCatalogTrack),
       };
     },
 
@@ -97,9 +99,9 @@ export function createMusicCatalogApi(deps: Deps) {
       return true;
     },
 
-    /** Очистить историю поиска целиком. */
-    async parvaneMusicSearchForget() {
-      await deps.call('music.search.forget', {});
+    /** Забыть запрос; без него — очистить историю поиска целиком. */
+    async parvaneMusicSearchForget({ query }: { query?: string } = {}) {
+      await deps.call('music.search.forget', { query: query || '' });
       return true;
     },
 

@@ -1,0 +1,602 @@
+// Поиск «Музыки» (доски `MusicSearch`, `DeskMusic-02`)
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.headTitle {
+  flex: 1;
+
+  min-width: 0;
+  margin: 0;
+
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.headAction {
+  cursor: pointer;
+
+  flex: none;
+
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+
+  background: none;
+}
+
+// Поле телефона: 42 px, рамка цветом акцента в фокусе
+.field {
+  position: relative;
+  flex: none;
+}
+
+.fieldIcon {
+  pointer-events: none;
+
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+
+  color: var(--pv-muted);
+}
+
+.fieldInput {
+  width: 100%;
+  height: 2.625rem;
+  padding: 0 0.875rem 0 2.5rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.5rem;
+
+  font: inherit;
+  font-size: 0.9375rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+  outline: none;
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
+}
+
+.chips {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.chipsScroll {
+  scrollbar-width: none;
+
+  overflow-x: auto;
+  display: flex;
+  flex: 1;
+  gap: 0.5rem;
+
+  min-width: 0;
+}
+
+.chip {
+  cursor: pointer;
+
+  flex: none;
+
+  height: 2.125rem;
+  padding: 0 0.875rem;
+  border: none;
+  border-radius: 1.0625rem;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--pv-fg);
+  white-space: nowrap;
+
+  background: var(--pv-raised);
+
+  &:focus {
+    outline: none;
+  }
+}
+
+.chipOn {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+  background: var(--pv-fg);
+}
+
+.filterButton {
+  cursor: pointer;
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.125rem;
+  height: 2.125rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+
+  color: var(--pv-muted);
+
+  background: none;
+}
+
+.filterOn {
+  color: var(--pv-at);
+}
+
+// Компьютер: «Лучший результат» и треки рядом
+.top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+.best {
+  cursor: pointer;
+
+  position: relative;
+
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+
+  width: 100%;
+  min-height: 12.5rem;
+  padding: 1rem;
+  border: none;
+  border-radius: 0.5rem;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: var(--pv-raised);
+}
+
+.bestCover {
+  width: 5.375rem;
+  height: 5.375rem;
+  border-radius: 0.375rem;
+}
+
+.bestText {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  min-width: 0;
+  padding-inline-end: 3.5rem;
+}
+
+.bestTitle {
+  overflow: hidden;
+
+  font-size: 1.875rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bestSub {
+  overflow: hidden;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bestPlay {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+}
+
+.rows {
+  margin: 0 -1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.top .rows {
+  margin: 0;
+}
+
+// Исполнители и альбомы: лентой в «Всё», сеткой во вкладке
+.strip {
+  scrollbar-width: none;
+
+  overflow-x: auto;
+  display: flex;
+  gap: 0.875rem;
+
+  margin: 0 -1rem;
+  padding: 0 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: 0.875rem 0.625rem;
+}
+
+.tile {
+  cursor: pointer;
+
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  width: 7.5rem;
+  padding: 0.375rem;
+  border: none;
+  border-radius: 0.5rem;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+.grid .tile {
+  width: auto;
+}
+
+.tileRound {
+  align-items: center;
+  text-align: center;
+}
+
+.tileCover {
+  width: 6.75rem;
+  height: 6.75rem;
+  border-radius: 0.375rem;
+}
+
+.tileRound .tileCover {
+  border-radius: 50%;
+}
+
+.grid .tileCover {
+  aspect-ratio: 1;
+  width: 100%;
+  height: auto;
+}
+
+.tileTitle,
+.tileSub,
+.listTitle,
+.listSub {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tileTitle {
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.tileSub {
+  margin-top: -0.1875rem;
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0 -1rem;
+}
+
+.listRow,
+.historyMain {
+  cursor: pointer;
+
+  display: flex;
+  flex: 1;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-width: 0;
+  min-height: 3.625rem;
+  padding: 0 1rem;
+  border: none;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+}
+
+.listCover {
+  flex: none;
+  width: 2.875rem;
+  height: 2.875rem;
+  border-radius: 0.25rem;
+}
+
+.listText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.listTitle {
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.listSub {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.historyRow {
+  display: flex;
+  align-items: center;
+}
+
+.historyIcon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.875rem;
+  height: 2.875rem;
+  border-radius: 50%;
+
+  color: var(--pv-muted);
+
+  background: var(--pv-raised);
+}
+
+.historyForget {
+  cursor: pointer;
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  margin-inline-end: 0.25rem;
+  padding: 0;
+  border: none;
+
+  color: var(--pv-muted);
+
+  background: none;
+}
+
+// «Обзор»: цветные плитки 2 в ряд
+.browse {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.browseTile {
+  cursor: pointer;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+
+  height: 4.875rem;
+  padding: 0.625rem 0.75rem;
+  border: none;
+  border-radius: 0.5rem;
+
+  font: inherit;
+  color: #fff;
+  text-align: start;
+}
+
+.toneA {
+  background: var(--pv-aqua);
+}
+
+.toneB {
+  background: var(--pv-orange);
+}
+
+.browseTitle {
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.browseSub {
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+
+.notice {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+
+  font-size: 0.8125rem;
+
+  background: var(--pv-raised);
+}
+
+.noticeText {
+  flex: 1;
+  min-width: 0;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+
+  margin: 2rem auto;
+
+  text-align: center;
+}
+
+.emptyTitle {
+  max-width: 17rem;
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.emptyText {
+  max-width: 17rem;
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.emptyActions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.emptyButton {
+  cursor: pointer;
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  height: 2.5rem;
+  padding: 0 1rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 1.25rem;
+
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
+
+.more {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.moreRing {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid var(--pv-line2);
+  border-top-color: var(--pv-at);
+  border-radius: 50%;
+
+  animation: search-ring 1s linear infinite;
+}
+
+@keyframes search-ring {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.radio {
+  flex: none;
+
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid var(--pv-line2);
+  border-radius: 50%;
+}
+
+.radioOn {
+  border: 6px solid var(--pv-accent);
+}
+
+// Телефон: одна колонка, лучший результат — строкой
+.rootPhone {
+  .top {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.875rem;
+  }
+
+  .top .rows {
+    margin: 0 -1rem;
+  }
+
+  .best {
+    flex-direction: row;
+    gap: 0.75rem;
+    align-items: center;
+    min-height: 0;
+  }
+
+  .bestCover {
+    width: 4.75rem;
+    height: 4.75rem;
+  }
+
+  .bestTitle {
+    font-size: 1.25rem;
+  }
+
+  .bestPlay {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+}

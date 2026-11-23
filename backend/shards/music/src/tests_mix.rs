@@ -18,6 +18,10 @@ async fn catalog_search_marks_owned_and_album_page_counts_them() {
     assert_eq!(owned, [("Песня t2", true, "dz:100"), ("Новая", false, "dz:101")], "уже в библиотеке — с её треком");
     let album: pb::CatalogAlbumResponse = call(&ctx, "alice@local", "music.catalog.album", pb::CatalogAlbumRequest { r#ref: "dz:10".into() }).await.unwrap();
     assert_eq!(album.album.unwrap().owned, pb::OwnedStatus::Partial as i32, "один из двух — частично");
+    // Исполнитель каталога: релизы и «Популярное» с той же пометкой «уже на сервере»
+    let artist: pb::CatalogArtistResponse = call(&ctx, "alice@local", "music.catalog.artist", pb::CatalogArtistRequest { r#ref: "dz:1".into() }).await.unwrap();
+    assert_eq!((artist.albums.len(), artist.top.len()), (1, 2));
+    assert!(!artist.top[0].library_track_id.is_empty() && artist.top[1].library_track_id.is_empty());
     // Не ссылка каталога — отказ до сервиса
     let bad = call::<pb::CatalogAlbumResponse>(&ctx, "alice@local", "music.catalog.album", pb::CatalogAlbumRequest { r#ref: "../x".into() }).await;
     assert!(bad.is_err());
@@ -102,7 +106,11 @@ async fn search_history_is_per_user_deduplicated_and_clearable() {
     assert_eq!(h.queries, ["miyagi", "кино"], "повтор — наверх, в своём написании, без дубля");
     let other: pb::SearchHistoryResponse = call(&ctx, "someone@local", "music.search.history", pb::SearchHistoryRequest {}).await.unwrap();
     assert!(other.queries.is_empty(), "история своя");
-    let _: pb::SearchForgetResponse = call(&ctx, user, "music.search.forget", pb::SearchForgetRequest {}).await.unwrap();
+    // ✕ у одного запроса — забыть только его (без учёта регистра)
+    let _: pb::SearchForgetResponse = call(&ctx, user, "music.search.forget", pb::SearchForgetRequest { query: "КИНО".into() }).await.unwrap();
+    let h: pb::SearchHistoryResponse = call(&ctx, user, "music.search.history", pb::SearchHistoryRequest {}).await.unwrap();
+    assert_eq!(h.queries, ["miyagi"]);
+    let _: pb::SearchForgetResponse = call(&ctx, user, "music.search.forget", pb::SearchForgetRequest::default()).await.unwrap();
     let h: pb::SearchHistoryResponse = call(&ctx, user, "music.search.history", pb::SearchHistoryRequest {}).await.unwrap();
     assert!(h.queries.is_empty());
     let _ = std::fs::remove_dir_all(dir);

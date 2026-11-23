@@ -1,13 +1,17 @@
 import { memo, useEffect } from '../../../lib/teact/teact';
 
 import type { MusicInfo, MusicTrack } from '../../../api/parvane/musicApi';
+import type { ParvaneIconName } from '../../main/ParvaneIcon';
+import type { MusicView } from './musicView';
 
 import buildClassName from '../../../util/buildClassName';
+import { getSharedPlaylists } from './shared/musicShared';
 import { getIsMusicMixFailed, getMusicMix, loadMusicMix } from './musicMix';
 import {
-  callMusic, getCurrentTrack, getMusicPlayer, getMusicRecent, loadMusicInfo, playTracks, setTrackStarred,
+  callMusic, getCurrentTrack, getMusicPlayer, loadMusicInfo, playTracks, setTrackStarred,
 } from './musicPlayer';
-import { getMusicQuery, openMusicView, requestMusicAdd, setMusicQuery } from './musicView';
+import { getPlaylists } from './musicPlaylists';
+import { openMusicView, requestMusicAdd } from './musicView';
 import useMusicData from './useMusicData';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -15,15 +19,11 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
-import PvEmpty from '../notes/PvEmpty';
 import PvSkeleton from '../notes/PvSkeleton';
-import MusicUploadFiles from './fetch/MusicUploadFiles';
-import MusicAlbumTiles from './MusicAlbumTiles';
 import MusicCover from './MusicCover';
 import MusicTrackRow from './MusicTrackRow';
 
-import kit from '../notes/PvKit.module.scss';
-import styles from './Music.module.scss';
+import styles from './MusicHome.module.scss';
 
 type OwnProps = {
   info: MusicInfo;
@@ -31,220 +31,271 @@ type OwnProps = {
   onSendToChat: (track: MusicTrack) => void;
 };
 
-// Плиток «Недавно прослушанное» на главной (доска `DeskMusic`)
-const RECENT_TILES = 5;
+type Tile = {
+  key: string;
+  view: MusicView;
+  title: string;
+  glyph: ParvaneIconName;
+  toneId: string;
+};
 
-// Parvane (spec 041, доски `MusicHome`, `DeskMusic`, `RpMusicB`, `ZdMusicX`): главная «Музыки» — поиск и число треков
-// сервера (компьютер), «Микс дня» (заглушка — решение пользователя), недавно прослушанное плитками, новое на
-// сервере с тем, кто добавил. Пустая библиотека — приглашение найти первый трек
+// Плиток быстрого доступа на телефоне — 2 × 3 (доска `MusicHome`)
+const QUICK_TILES = 6;
+const POPULAR_ROWS = 5;
+
+// Parvane (макет «Музыки» 23 ноя, доски `MusicHome`, `DeskMusic`): главная — плитки быстрого доступа (телефон),
+// «Сделано для вас» (микс дня), «Новое на сервере» альбомами, «Популярное на сервере» за неделю с номерами,
+// «Частое у вас» кругами исполнителей. Пустой сервер — приглашение найти в каталоге, вставить ссылку, загрузить файл
 const MusicHomeView = ({ info, isPhone, onSendToChat }: OwnProps) => {
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
-  const recent = useDerivedState(getMusicRecent);
-  const query = useDerivedState(getMusicQuery);
-  const current = getCurrentTrack(player);
-  const { data, isFailed, reload, patch } = useMusicData('home', async () => {
-    // С подключённым скачиванием «Новое на сервере» — добавленные треки с тем, кто добавил; без него — альбомы
-    const [albums, added] = await Promise.all([
-      info.isFetchEnabled ? [] : callMusic('parvaneMusicRecent'),
-      info.isFetchEnabled ? callMusic('parvaneMusicAdded', { isMine: false }).catch(() => []) : [],
-    ]);
-    return { albums, added: added.filter((item) => item.track.id) };
-  });
-
-  // «Микс дня»: готов — число треков и когда обновится; нет исполнителей — выбрать; собирается — подождать
+  const playlists = useDerivedState(getPlaylists);
+  const shared = useDerivedState(getSharedPlaylists);
   const mixToday = useDerivedState(getMusicMix);
   const isMixFailed = useDerivedState(getIsMusicMixFailed);
+  const current = getCurrentTrack(player);
+  const { data, isFailed, reload, patch } = useMusicData('home', () => callMusic('parvaneMusicHome'));
+
   useEffect(() => {
     void loadMusicMix();
   }, []);
+
+  const mixTracks = mixToday?.mix?.tracks || [];
   const mixState = mixToday?.needsArtists ? 'pick' : mixToday?.mix && !mixToday.isBuilding ? 'ready'
     : isMixFailed ? 'failed' : 'building';
-  const mixTracks = mixToday?.mix?.tracks || [];
-  const mixText = mixState === 'pick' ? lang('MusicMixPickArtists')
-    : mixState === 'failed' ? lang('MusicMixFailed')
-      : mixState === 'building' ? lang('MusicMixBuilding')
-        : lang('MusicTracksCount', { count: mixTracks.length }, { pluralValue: mixTracks.length });
-  const handleOpenMix = useLastCallback(() => {
-    openMusicView({ kind: mixState === 'pick' ? 'mixArtists' : 'mix' });
-  });
-  const handlePlayMix = useLastCallback(() => {
-    playTracks(mixTracks.map((row) => row.track).filter(Boolean), 0, { source: { kind: 'home' } });
-  });
+  const popular = data?.popular.slice(0, POPULAR_ROWS) || [];
+  const popularTracks = popular.map((item) => item.track);
 
-  const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setMusicQuery(e.currentTarget.value);
-    openMusicView({ kind: 'search' }, true);
-  });
+  // Плитки быстрого доступа (телефон): «Любимое», микс, свои и общие плейлисты
+  const tiles: Tile[] = [
+    { key: 'starred', view: { kind: 'starred' }, title: lang('MusicStarred'), glyph: 'heart', toneId: 'starred' },
+  ];
+  if (mixTracks.length) {
+    tiles.push({ key: 'mix', view: { kind: 'mix' }, title: lang('MusicMixTitle'), glyph: 'wave', toneId: 'mix' });
+  }
+  playlists.forEach((playlist) => tiles.push({
+    key: `playlist:${playlist.id}`,
+    view: { kind: 'playlist', id: playlist.id },
+    title: playlist.name,
+    glyph: 'list',
+    toneId: playlist.id,
+  }));
+  shared.forEach((playlist) => tiles.push({
+    key: `shared:${playlist.id}`,
+    view: { kind: 'shared', id: playlist.id },
+    title: playlist.name,
+    glyph: 'users',
+    toneId: playlist.id,
+  }));
+  const quickTiles = tiles.slice(0, QUICK_TILES);
 
-  const handlePlayRecent = useLastCallback((index: number) => playTracks(recent, index, { source: { kind: 'home' } }));
-  const handlePlayAdded = useLastCallback((index: number) => {
-    playTracks(data!.added.map((item) => item.track), index, { source: { kind: 'home' } });
+  const handleOpenTile = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const tile = tiles.find((item) => item.key === e.currentTarget.dataset.tile);
+    if (tile) openMusicView(tile.view);
   });
-  const handleRecentTile = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    handlePlayRecent(Number(e.currentTarget.dataset.index));
+  const handleOpenMix = useLastCallback(() => openMusicView({ kind: mixState === 'pick' ? 'mixArtists' : 'mix' }));
+  const handleOpenAlbum = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    openMusicView({ kind: 'album', id: e.currentTarget.dataset.id! });
+  });
+  const handleOpenArtist = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    openMusicView({ kind: 'artist', id: e.currentTarget.dataset.id! });
+  });
+  const handleAllAlbums = useLastCallback(() => openMusicView({ kind: 'albums' }));
+  const handlePlayPopular = useLastCallback((index: number) => {
+    playTracks(popularTracks, index, { source: { kind: 'home' } });
   });
   const handleStar = useLastCallback((track: MusicTrack) => {
     const isStarred = !track.isStarred;
     patch((previous) => ({
       ...previous,
-      added: previous.added.map((item) => (
-        item.track.id === track.id ? { ...item, track: { ...track, isStarred } } : item
+      popular: previous.popular.map((item) => (
+        item.track.id === track.id ? { ...item, track: { ...item.track, isStarred } } : item
       )),
     }));
     void setTrackStarred(track, isStarred);
   });
   const handleFind = useLastCallback(() => requestMusicAdd('fetch'));
+  const handleLink = useLastCallback(() => requestMusicAdd('link'));
+  const handleFile = useLastCallback(() => requestMusicAdd('file'));
   const handleRetry = useLastCallback(() => {
     void loadMusicInfo();
     reload();
   });
 
-  if (isFailed) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
+  if (isFailed && !data) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
   if (!data) return <PvSkeleton onRetry={handleRetry} />;
 
-  // Пустая библиотека: на сервере нет ни трека (недавнее на устройстве — от прежней библиотеки, не в счёт)
-  const isEmpty = !info.libraryTracks && !data.albums.length && !data.added.length;
-  if (isEmpty) return renderEmpty();
-
-  function renderAdderNote(adder: string) {
-    // «добавил я» — для своих треков (доска `DeskMusic`)
-    return adder === info.selfName ? lang('MusicAddedByMe') : lang('MusicAddedBy', { name: adder });
-  }
-
-  function renderEmpty() {
-    if (isPhone) {
-      return (
-        <PvEmpty
-          title={lang('MusicEmptyTitle')}
-          text={lang(info.isFetchEnabled ? 'MusicEmptyText' : 'MusicEmptyFetchOff')}
-          actionText={info.isFetchEnabled ? lang('MusicEmptyFind') : undefined}
-          data-music-empty="library"
-          onAction={handleFind}
-        >
-          <MusicUploadFiles canDropOnWindow />
-        </PvEmpty>
-      );
-    }
+  // Пустой сервер (доска `MusicHome`, «На сервере пока нет музыки»)
+  if (!info.libraryTracks && !data.fresh.length) {
+    const canFetch = info.isFetchEnabled;
     return (
-      <section className={styles.emptyLibrary} data-music-empty="library">
-        <div>
-          <h2 className={styles.listTitle}>{lang('MusicHome')}</h2>
-          <div className={buildClassName(kit.muted, kit.small)}>{lang('MusicEmptyCaption')}</div>
+      <section className={styles.empty} data-music-empty="library">
+        <span className={styles.emptyRing} aria-hidden>
+          <ParvaneIcon name="music" />
+        </span>
+        <h2 className={styles.emptyTitle}>{lang('MusicEmptyTitle')}</h2>
+        <p className={styles.emptyText}>{lang(canFetch ? 'MusicEmptyText' : 'MusicEmptyFetchOff')}</p>
+        {canFetch && (
+          <button type="button" className={styles.emptyPrimary} data-music-empty-find onClick={handleFind}>
+            <ParvaneIcon name="search" isSmall />
+            {lang('MusicFindInCatalog')}
+          </button>
+        )}
+        <div className={styles.emptyRow}>
+          {canFetch && (
+            <button type="button" className={styles.emptySecondary} onClick={handleLink}>
+              <ParvaneIcon name="link" isSmall />
+              {lang('MusicLinkShort')}
+            </button>
+          )}
+          {info.isUploadEnabled && (
+            <button type="button" className={styles.emptySecondary} onClick={handleFile}>
+              <ParvaneIcon name="upload" isSmall />
+              {lang('MusicOwnFile')}
+            </button>
+          )}
         </div>
-        <p className={styles.emptyLibraryText}>{lang('MusicEmptyDeskText')}</p>
-        <div className={styles.cardList}>
-          <div className={styles.cardRow}>
-            <ParvaneIcon name="search" className={styles.cardRowIcon} />
-            <div className={kit.grow}>
-              <div className={styles.trackTitle}>{lang('MusicEmptyFindTitle')}</div>
-              <div className={buildClassName(kit.muted, kit.small)}>
-                {lang(info.isFetchEnabled ? 'MusicEmptyFindHint' : 'MusicEmptyFetchOff')}
-              </div>
-            </div>
-            {info.isFetchEnabled && (
-              <button type="button" className={kit.btn} data-music-empty-find onClick={handleFind}>
-                {lang('MusicEmptySearch')}
-              </button>
-            )}
-          </div>
-          <MusicUploadFiles canDropOnWindow />
-        </div>
-        <div className={buildClassName(kit.muted, kit.small)}>{lang('MusicEmptyPlayerHint')}</div>
+        <p className={styles.emptyNote}>{lang('MusicEmptyMixNote')}</p>
       </section>
     );
   }
 
-  return (
-    <>
-      {!isPhone && (
-        <div className={styles.homeSearch}>
-          <input
-            className={buildClassName(kit.input, styles.search)}
-            type="search"
-            value={query}
-            placeholder={lang('MusicSearchPlaceholder')}
-            aria-label={lang('MusicSearchPlaceholder')}
-            onChange={handleQuery}
-          />
-          {Boolean(info.libraryTracks) && (
-            <span className={buildClassName(kit.mono, kit.muted, kit.small)} data-music-total>
-              {lang(
-                'MusicTracksCount', { count: lang.number(info.libraryTracks) }, { pluralValue: info.libraryTracks },
-              )}
-            </span>
+  function renderSectionHead(title: string, onAll?: NoneToVoidFunction, sub?: string) {
+    return (
+      <>
+        <div className={styles.head}>
+          <h2 className={styles.headTitle}>{title}</h2>
+          {onAll && (
+            <button type="button" className={styles.headAll} onClick={onAll}>
+              {lang(isPhone ? 'MusicAll' : 'MusicShowAll')}
+            </button>
           )}
         </div>
+        {sub && <div className={styles.headSub}>{sub}</div>}
+      </>
+    );
+  }
+
+  function renderMixCard() {
+    const mixArtists = [...new Set(mixTracks.map((row) => row.track?.artist || row.catalog?.artist).filter(Boolean))];
+    const sub = mixState === 'pick' ? lang('MusicMixPickArtists')
+      : mixState === 'failed' ? lang('MusicMixFailed')
+        : mixState === 'building' ? lang('MusicMixBuilding')
+          : mixArtists.slice(0, 3).join(', ');
+    return (
+      <button type="button" className={styles.card} data-music-mix={mixState} onClick={handleOpenMix}>
+        <span className={buildClassName(styles.cardArt, styles.mixArt)}>
+          <ParvaneIcon name="wave" className={styles.mixGlyph} />
+          {isPhone && <span className={styles.mixName}>{lang('MusicMixTitle')}</span>}
+        </span>
+        {!isPhone && <span className={styles.cardTitle}>{lang('MusicMixTitle')}</span>}
+        <span className={styles.cardSub}>{sub}</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className={buildClassName(styles.root, isPhone && styles.rootPhone)} data-music-home>
+      {isPhone && Boolean(quickTiles.length) && (
+        <div className={styles.quick} data-music-quick>
+          {quickTiles.map((tile) => (
+            <button
+              key={tile.key}
+              type="button"
+              className={styles.quickTile}
+              data-tile={tile.key}
+              onClick={handleOpenTile}
+            >
+              <MusicCover toneId={tile.toneId} size={56} glyph={tile.glyph} className={styles.quickCover} />
+              <span className={styles.quickTitle}>{tile.title}</span>
+            </button>
+          ))}
+        </div>
       )}
-      <section className={styles.mix} data-music-mix={mixState}>
-        <button type="button" className={styles.mixOpen} onClick={handleOpenMix}>
-          <span className={buildClassName(kit.caps, styles.mixCaps)}>{lang('MusicMixTitle')}</span>
-          <span className={styles.mixText}>{mixText}</span>
-        </button>
-        {mixState === 'ready' && (
-          <button
-            type="button"
-            className={styles.mixPlay}
-            aria-label={lang('MusicListen')}
-            data-music-mix-play
-            onClick={handlePlayMix}
-          >
-            <ParvaneIcon name="play" />
-          </button>
-        )}
-      </section>
-      {Boolean(recent.length) && (
+
+      {renderSectionHead(lang('MusicMadeForYou'))}
+      <div className={styles.cards}>{renderMixCard()}</div>
+
+      {Boolean(data.fresh.length) && (
         <>
-          <div className={kit.caps}>{lang('MusicRecentlyPlayed')}</div>
-          <div className={styles.tileRow} data-music-recent>
-            {recent.slice(0, RECENT_TILES).map((track, index) => (
+          {renderSectionHead(lang('MusicNewOnServer'), handleAllAlbums)}
+          <div className={styles.cards} data-music-fresh>
+            {data.fresh.map((album) => (
               <button
-                key={track.id}
+                key={album.id}
                 type="button"
-                className={styles.tile}
-                data-index={index}
-                data-track={track.id}
-                onClick={handleRecentTile}
+                className={styles.card}
+                data-id={album.id}
+                data-album={album.id}
+                onClick={handleOpenAlbum}
               >
                 <MusicCover
-                  coverId={track.coverId}
-                  toneId={track.albumId || track.id}
-                  size={96}
-                  className={styles.tileCover}
+                  coverId={album.coverId}
+                  toneId={album.id}
+                  size={isPhone ? 140 : 110}
+                  glyph="disc"
+                  className={styles.cardArt}
                 />
-                <span className={styles.tileTitle}>{track.title}</span>
-                <span className={buildClassName(kit.muted, kit.small, styles.tileTitle)}>{track.artist}</span>
+                <span className={styles.cardTitle}>{album.title}</span>
+                <span className={styles.cardSub}>{album.artist}</span>
               </button>
             ))}
           </div>
         </>
       )}
-      {(Boolean(data.added.length) || Boolean(data.albums.length)) && (
-        <div className={kit.caps}>{lang('MusicNewOnServer')}</div>
+
+      {Boolean(popular.length) && (
+        <>
+          {renderSectionHead(lang('MusicPopularOnServer'), undefined, isPhone ? lang('MusicPopularWeek') : undefined)}
+          <ul className={styles.rows} data-music-popular>
+            {popular.map((item, index) => (
+              <MusicTrackRow
+                key={item.track.id}
+                track={item.track}
+                index={index}
+                rank={index + 1}
+                isCurrent={item.track.id === current?.id}
+                isPlaying={player.isPlaying}
+                note={lang('MusicPlaysWeek', { count: item.playsWeek }, { pluralValue: item.playsWeek })}
+                columns={isPhone ? undefined : ['album']}
+                canQueue
+                canSaveOffline
+                onPlay={handlePlayPopular}
+                onStar={handleStar}
+                onSendToChat={onSendToChat}
+              />
+            ))}
+          </ul>
+        </>
       )}
-      {Boolean(data.albums.length) && <MusicAlbumTiles albums={data.albums} />}
-      {Boolean(data.added.length) && (
-        <ul className={styles.tracks} data-music-added="all">
-          {data.added.map((item, index) => (
-            <MusicTrackRow
-              key={item.track.id}
-              track={item.track}
-              index={index}
-              isCurrent={item.track.id === current?.id}
-              isPlaying={player.isPlaying}
-              note={renderAdderNote(item.adder)}
-              columns={isPhone ? undefined : ['artist', 'note']}
-              trailing="offline"
-              canQueue
-              canSaveOffline
-              onPlay={handlePlayAdded}
-              onStar={handleStar}
-              onSendToChat={onSendToChat}
-            />
-          ))}
-        </ul>
+
+      {Boolean(data.frequentArtists.length) && (
+        <>
+          {renderSectionHead(lang('MusicFrequent'))}
+          <div className={styles.cards} data-music-frequent>
+            {data.frequentArtists.map((artist) => (
+              <button
+                key={artist.id}
+                type="button"
+                className={buildClassName(styles.card, styles.artistCard)}
+                data-id={artist.id}
+                onClick={handleOpenArtist}
+              >
+                <MusicCover
+                  coverId={artist.coverId}
+                  toneId={artist.id}
+                  size={isPhone ? 86 : 110}
+                  glyph="mic"
+                  isRound
+                  className={styles.artistArt}
+                />
+                <span className={styles.cardTitle}>{artist.name}</span>
+              </button>
+            ))}
+          </div>
+        </>
       )}
-    </>
+    </div>
   );
 };
 

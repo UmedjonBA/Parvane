@@ -353,6 +353,10 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
         "/catalog/album" => reply(200, json!({
             "album": {"ref": "dz:10", "title": "Альбом", "artist": "Группа", "artist_ref": "dz:1", "cover": "", "year": 2020, "record_type": "album", "tracks": 2},
             "tracks": catalog_album_tracks()})),
+        "/catalog/artist" => reply(200, json!({
+            "artist": {"ref": "dz:1", "name": "Группа", "picture": "", "albums": 1},
+            "albums": [{"ref": "dz:10", "title": "Альбом", "artist": "Группа", "artist_ref": "dz:1", "cover": "", "year": 2020, "record_type": "album", "tracks": 2}],
+            "top": catalog_album_tracks()})),
         "/catalog/related" => reply(200, json!({"artists": [{"ref": "dz:2", "name": "Соседи", "picture": "", "albums": 3}]})),
         "/catalog/artists" => reply(200, json!({"artists": [{"ref": "dz:1", "name": "Группа", "picture": "", "albums": 1}]})),
         "/candidates" => {

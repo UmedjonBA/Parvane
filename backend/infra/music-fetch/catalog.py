@@ -167,13 +167,18 @@ def search(query, offset):
     return out
 
 
+ARTIST_TOP_LIMIT = 10
+
+
 def artist_page(ref):
     """Исполнитель и его релизы, новые первыми."""
     artist_id = ref_id(ref)
     artist = get(f"/artist/{artist_id}")
     albums = data(f"/artist/{artist_id}/albums", limit=ARTIST_ALBUMS_LIMIT)
     albums.sort(key=lambda item: item.get("release_date") or "", reverse=True)
-    return {"artist": artist_out(artist), "albums": [album_out(item, artist) for item in albums]}
+    # «Популярное» исполнителя (доска `XpMusic`): его самые слушаемые треки в каталоге
+    top = [track_out(item, item.get("album") or {}) for item in data(f"/artist/{artist_id}/top", limit=ARTIST_TOP_LIMIT)]
+    return {"artist": artist_out(artist), "albums": [album_out(item, artist) for item in albums], "top": top}
 
 
 def album_page(ref):

@@ -695,6 +695,8 @@ message CatalogArtistRequest {
 message CatalogArtistResponse {
   CatalogArtist artist = 1;
   repeated CatalogAlbum albums = 2 [(parvane.core.v2.max_items) = 200];
+  // Самые слушаемые треки исполнителя в каталоге, с пометкой «уже на сервере».
+  repeated CatalogTrack top = 3 [(parvane.core.v2.max_items) = 20];
 }
 
 message CatalogAlbumRequest {
@@ -714,8 +716,10 @@ message SearchRememberRequest {
   string query = 1 [(parvane.core.v2.max_len) = 256];
 }
 message SearchRememberResponse {}
-// Очистить историю целиком.
-message SearchForgetRequest {}
+// Забыть один запрос; пусто — очистить историю целиком.
+message SearchForgetRequest {
+  string query = 1 [(parvane.core.v2.max_len) = 256];
+}
 message SearchForgetResponse {}
 
 // ── «Микс дня»: ежедневная подборка из библиотеки сервера и похожего из каталога ─────────────────────────────────

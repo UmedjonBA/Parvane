@@ -728,210 +728,109 @@ async function galleryShell() {
 // ── «Музыка»: доски MusicHome, MusicLibrary, MusicPlayer, MusicPlaylist, MusicSearch, RpMusicA/B, XpMusic, ZpMusicX,
 //    DeskMusic, DeskMusicMore, RdMusic, XdMusic, ZdMusicX. Нужна библиотека сервера: раннер
 //    `run_web_gallery_music_e2e.sh` поднимает поддельный сервер, как у сценария `music` ──
-const MUSIC_VIEWS = ['home', 'starred', 'artists', 'albums', 'offline'];
-
 async function galleryMusic() {
   const { page } = await openSession('music');
   await toRussian(page);
   const music = await openModule(page, 'music', 'ParvaneMusic');
   await page.locator('#ParvaneMusic[data-music-enabled="true"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForTimeout(2000);
-  const nav = (view) => music.locator(`[data-music-nav] [data-view="${view}"]:visible`).first();
-  // Компьютер
-  for (const view of MUSIC_VIEWS) {
-    await step(page, `music-desk-${view}`, async () => { await nav(view).click({ timeout: STEP_TIMEOUT_MS }); });
-  }
-  await step(page, 'music-desk-playing', async () => {
-    await nav('albums').click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-albums] button').first().click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-track]').first().getByRole('button').first().click({ timeout: STEP_TIMEOUT_MS });
-    await nav('home').click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1500);
+  const libraryItem = (key) => music.locator(`[data-music-nav] [data-item="${key}"]:visible`).first();
+  const firstTrack = () => music.locator('[data-track]:visible').first();
+  const playFirst = async () => {
+    await firstTrack().getByRole('button').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-music-desk-player], [data-music-mini]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  };
+  // Компьютер (доска `DeskMusic`): трек играет — плеер внизу; главная с популярным
+  await music.locator('[data-music-desk-search]').fill('harbor');
+  await music.locator('[data-track]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await playFirst();
+  await step(page, 'DeskMusic-02', async () => { await page.waitForTimeout(1500); });
+  await step(page, 'DeskMusic-01', async () => {
+    await music.locator('[data-music-desk-search]').fill('');
+    await page.locator('[data-module="music"]:visible').first().click();
+    await music.locator('[data-music-home]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
-  // Компьютер: альбом, поиск, окно «Новый плейлист» (доски `DeskMusicMore`, `XdMusic`, `ZdMusicX`)
-  const search = () => music.locator('[data-music-search]:visible').getByRole('searchbox').first();
-  await step(page, 'music-desk-album', async () => {
-    await nav('albums').click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-albums] button').first().click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-tracks] [data-track]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await step(page, 'XdMusic-01', async () => {
+    await music.locator('[data-music-desk-queue]').click({ timeout: STEP_TIMEOUT_MS });
   });
-  await step(page, 'music-desk-track-menu', async () => {
-    await music.locator('[data-music-tracks] [data-track]').nth(1).locator('[data-music-menu]').click({ timeout: STEP_TIMEOUT_MS });
+  await step(page, 'music-desk-starred', async () => { await libraryItem('starred').click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'music-desk-dislikes', async () => {
+    await music.locator('[data-music-library-more]').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-action="dislikes"]').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'DeskMusicMore-02', async () => {
+    await page.locator('[data-module="music"]:visible').first().click();
+    await music.locator('[data-music-desk-search]').fill('glass');
+    await firstTrack().click({ button: 'right', timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
-  await step(page, 'music-desk-search', async () => {
-    await nav('search').click({ timeout: STEP_TIMEOUT_MS });
-    await search().fill('harbor');
-    await page.waitForTimeout(1500);
-  });
-  await step(page, 'music-desk-search-none', async () => {
-    await search().fill('qwerty band');
-    await page.waitForTimeout(1500);
-  });
-  await search().fill('').catch(() => undefined);
-  await step(page, 'music-desk-new-playlist', async () => {
-    await music.locator('[data-music-nav] [data-music-new-playlist]').click({ timeout: STEP_TIMEOUT_MS });
-    await page.locator('[data-music-new-playlist-form] input[type="text"], [data-music-new-playlist-form] input:not([type])')
-      .first().fill('Дорога');
-  });
-  await step(page, 'music-desk-playlist-one', async () => {
-    await page.locator('[data-music-new-playlist-form] button[type="submit"]').click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-playlist]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  });
-  await nav('home').click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
 
-  // Телефон
+  // Телефон: вкладки «Главная / Поиск / Медиатека» (доска `MusicHome`)
   await resize(page, PHONE);
-  // Телефон: три вкладки «Главная / Поиск / Библиотека» (доска `MusicHome`)
-  const tab = (index) => music.locator('[role="tablist"]').first().locator('[role="tab"]').nth(index);
-  await step(page, 'MusicHome-01', async () => { await tab(0).click({ timeout: STEP_TIMEOUT_MS }); });
-  await step(page, 'MusicSearch-01', async () => { await tab(1).click({ timeout: STEP_TIMEOUT_MS }); });
-  // Поиск на телефоне — страница без вкладок: к вкладкам возвращает «назад»
-  await step(page, 'MusicLibrary-01', async () => {
-    await music.locator('[data-music-back]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await tab(2).click({ timeout: STEP_TIMEOUT_MS });
-  });
-  // Телефон: альбом, исполнители, плеер во весь экран (доски `RpMusicA`, `MusicPlayer`)
-  const libraryRow = (kind) => music.locator(`[data-music-library] [data-view="${kind}"]:visible`).first();
+  const tab = (view) => music.locator(`[role="tablist"] [data-view="${view}"]:visible`).first();
   const musicBack = () => music.locator('[data-music-back]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
-  await step(page, 'music-phone-albums', async () => { await libraryRow('albums').click({ timeout: STEP_TIMEOUT_MS }); });
-  await step(page, 'RpMusicA-01', async () => {
-    await music.locator('[data-music-albums] button:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    // Трек библиотеки стенда короткий: к этому шагу прежний доиграл — запускаем снова, чтобы был мини-плеер
-    await music.locator('[data-music-tracks] [data-track]:visible').first().getByRole('button').first()
-      .click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1000);
+  await step(page, 'MusicHome-01', async () => {
+    await musicBack();
+    await tab('home').click({ timeout: STEP_TIMEOUT_MS });
   });
-  await step(page, 'MusicPlayer-01', async () => {
-    await page.locator('[data-music-mini]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1000);
+  await step(page, 'MusicHome-02', async () => {
+    await music.locator('[data-music-popular]').scrollIntoViewIfNeeded({ timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'MusicSearch-01', async () => { await tab('search').click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'MusicSearch-02', async () => {
+    await music.locator('[data-music-search] input[type="search"]:visible').first().fill('harbor');
+    await music.locator('[data-track]:visible').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'MusicSearch-04', async () => {
+    await music.locator('[data-music-source-open]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
-  // Шторка трека с чипами плейлистов (доска `XpMusic-03`); чип кладёт трек в плейлист, пункт — в «Любимое»
-  const trackRow = (index) => music.locator('[data-music-tracks] [data-track]:visible').nth(index);
-  await step(page, 'XpMusic-03', async () => {
-    await trackRow(1).locator('[data-music-menu]').click({ timeout: STEP_TIMEOUT_MS });
-    await page.locator('.Modal [data-playlist-chips]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await step(page, 'MusicSearch-03', async () => {
+    await music.locator('[data-music-search] [data-filter="tracks"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
   });
-  await page.locator('.Modal [data-playlist-chips]').getByRole('button', { name: 'Дорога', exact: true })
-    .click({ timeout: 3000 }).catch(() => page.keyboard.press('Escape'));
-  for (const index of [2, 3]) {
-    await trackRow(index).locator('[data-music-menu]').click({ timeout: 3000 }).catch(() => undefined);
-    await page.locator('.Modal [data-playlist-chips]').getByRole('button', { name: 'Дорога', exact: true })
-      .click({ timeout: 3000 }).catch(() => page.keyboard.press('Escape'));
-    await trackRow(index).locator('[data-music-menu]').click({ timeout: 3000 }).catch(() => undefined);
-    await page.locator(`.Modal [data-action="star"], .Modal [role="menu"] >> text=${t('В любимое', 'Add to favorites')}`).first()
-      .click({ timeout: 3000 }).catch(() => page.keyboard.press('Escape'));
-  }
-  await step(page, 'music-phone-starred', async () => {
-    await musicBack();
-    await musicBack();
-    await libraryRow('starred').click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(800);
+  await step(page, 'MusicSearch-06', async () => {
+    await music.locator('[data-music-search] input[type="search"]:visible').first().fill('qwzxharbr');
+    await music.locator('[data-music-empty="search"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
-  await step(page, 'MusicLibrary-01b', async () => { await musicBack(); });
-  await step(page, 'MusicPlaylist-01', async () => {
-    await music.locator('[data-music-library] [data-playlist]:visible, [data-music-playlists] [data-playlist]:visible')
-      .first().click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-playlist]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  });
-  await step(page, 'music-phone-playlist-menu', async () => {
-    await music.locator('[data-music-playlist-menu]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+  await music.locator('[data-music-search] input[type="search"]:visible').first().fill('harbor');
+  await music.locator('[data-music-search] [data-filter="all"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+  await step(page, 'RpMusicA-02', async () => {
+    await music.locator('[data-track]:visible [data-music-menu]').first().click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
+  await musicBack();
+  await step(page, 'MusicLibrary-01', async () => { await tab('library').click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'MusicLibrary-02', async () => {
+    await music.locator('[data-music-library] [data-tab="albums"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-library-albums] button').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'MusicLibrary-03', async () => {
+    await music.locator('[data-music-library-more]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'MusicLibrary-05', async () => {
+    await music.locator('[data-music-library] [data-tab="artists"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-library-artists] button').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
   await step(page, 'XpMusic-01', async () => {
-    await musicBack();
-    await libraryRow('artists').click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-artists] button:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1000);
-  });
-  await musicBack();
-  await musicBack();
-  await step(page, 'MusicSearch-01q', async () => {
-    await tab(1).click({ timeout: STEP_TIMEOUT_MS });
-    await search().fill('harbor');
-    await page.waitForTimeout(1500);
-  });
-  await step(page, 'ZpMusicX-01', async () => {
-    await search().fill('qwerty band');
-    await page.waitForTimeout(1500);
-  });
-  await search().fill('').catch(() => undefined);
-  // Начало поиска (недавние запросы) и «Загрузки на сервер» (доска `ZpMusicX-02`)
-  await step(page, 'music-phone-search-start', async () => { await page.waitForTimeout(800); });
-  await step(page, 'ZpMusicX-02', async () => {
-    await music.locator('[data-fetch-uploads]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-library-artists] button').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
   });
   await musicBack();
-  await musicBack();
-  await tab(2).click({ timeout: 3000 }).catch(() => undefined);
-  await step(page, 'RpMusicB-01', async () => {
-    await music.locator('[data-music-new-playlist]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await page.locator('[data-music-new-playlist-form]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  });
-  await page.keyboard.press('Escape');
-  // Компьютер: плейлист с треками и «Любимое» со списком
-  await resize(page, DESK);
-  await step(page, 'music-desk-playlist', async () => {
-    await music.locator('[data-music-nav] [data-playlist]').first().click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-playlist] [data-track]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  });
-  // «Любимое» со списком: сердце из меню трека плейлиста (доска `ZdMusicX-01`, меню — `ZdMusicX-03`)
-  for (const index of [0, 1]) {
-    await music.locator('[data-music-playlist] [data-track]').nth(index).click({ button: 'right', timeout: 3000 })
-      .catch(() => undefined);
-    if (index === 0) await snap(page, 'ZdMusicX-03');
-    await page.locator('[data-action="star"]:visible').first().click({ timeout: 3000 })
-      .catch(() => page.keyboard.press('Escape'));
-    await page.waitForTimeout(500);
-  }
-  await step(page, 'music-desk-starred-list', async () => {
-    await nav('starred').click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1500);
-  });
-  // Плейлист становится общим: окно участников (доски `ZdMusicX-04`, `RpMusicB-02`)
-  await step(page, 'ZdMusicX-04', async () => {
-    await music.locator('[data-music-nav] [data-playlist]').first().click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-make-shared]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1500);
-  });
-  await step(page, 'music-desk-shared', async () => {
-    await page.locator('.Modal.open').getByRole('button', { name: t('Сделать общим', 'Make shared'), exact: true }).last()
-      .click({ timeout: STEP_TIMEOUT_MS });
-    await music.locator('[data-music-shared]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await page.waitForTimeout(1000);
-  });
-  await step(page, 'music-desk-shared-members', async () => {
-    await music.locator('[data-music-members-open]').click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1000);
-  });
-  await page.keyboard.press('Escape');
-  await resize(page, PHONE);
-  await step(page, 'RpMusicB-02', async () => { await page.waitForTimeout(800); });
-  await step(page, 'music-phone-shared-members', async () => {
-    await music.locator('[data-music-members-open]:visible').click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1000);
-  });
-  await page.keyboard.press('Escape');
-  await step(page, 'music-phone-starred-list', async () => {
-    await musicBack();
-    await tab(2).click({ timeout: 3000 }).catch(() => undefined);
-    await libraryRow('starred').click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(1000);
-  });
-  await musicBack();
-  await resize(page, DESK);
-  await resize(page, PHONE);
-  await tab(2).click({ timeout: 3000 }).catch(() => undefined);
-  await step(page, 'music-phone-artists', async () => {
-    await libraryRow('artists').click({ timeout: STEP_TIMEOUT_MS });
+  await step(page, 'XpMusic-03', async () => {
+    await music.locator('[data-music-library] [data-tab="albums"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-library-albums] button').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
   });
-  await step(page, 'music-phone-offline', async () => {
-    await musicBack();
-    await libraryRow('offline').click({ timeout: STEP_TIMEOUT_MS });
+  await step(page, 'MusicPlayer-02', async () => {
+    await page.locator('[data-music-mini]:visible').first().getByRole('button').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
+  });
+  await page.keyboard.press('Escape');
+  await musicBack();
+  await step(page, 'MusicLibrary-04', async () => {
+    await music.locator('[data-music-library] [data-tab="playlists"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-library] [data-item="starred"]').click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.context().close();
 }

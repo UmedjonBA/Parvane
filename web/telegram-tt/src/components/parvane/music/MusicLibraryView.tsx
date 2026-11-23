@@ -1,133 +1,206 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useState } from '../../../lib/teact/teact';
 
-import type { MusicInfo } from '../../../api/parvane/musicApi';
+import type { MusicAlbum, MusicArtist, MusicInfo } from '../../../api/parvane/musicApi';
 import type { ParvaneIconName } from '../../main/ParvaneIcon';
-import type { MusicViewKind } from './musicView';
 
 import buildClassName from '../../../util/buildClassName';
-import { getOfflineBytes, getOfflineState } from './musicOffline';
-import { getPlaylists } from './musicPlaylists';
+import { callMusic } from './musicPlayer';
 import { openMusicView, openNewPlaylist } from './musicView';
+import useMusicPages from './useMusicPages';
 
-import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
-import MusicPlaylistList from './MusicPlaylistList';
-import { formatMusicSize } from './MusicSize';
+import PvSkeleton from '../notes/PvSkeleton';
+import MusicCover from './MusicCover';
+import MusicLibraryItems from './MusicLibraryItems';
+import MusicLoadMore from './MusicLoadMore';
+import MusicMenu from './MusicMenu';
 
-import kit from '../notes/PvKit.module.scss';
-import styles from './Music.module.scss';
+import sheets from '../cloud/CloudSheets.module.scss';
+import styles from './MusicLibrary.module.scss';
 
 type OwnProps = {
   info: MusicInfo;
 };
 
-type Row = {
-  kind: MusicViewKind;
-  icon: ParvaneIconName;
-  tone: string;
-  title: string;
-  hint: string;
-  count?: number;
-};
+type Tab = 'playlists' | 'albums' | 'artists';
+type AlbumSort = 'recent' | 'name';
 
-// Parvane (spec 041, доска `MusicLibrary`): вкладка «Библиотека» на телефоне — разделы строками с подписью и числом,
-// под ними плейлисты с «+ Новый плейлист»
+const TABS: Tab[] = ['playlists', 'albums', 'artists'];
+const TAB_KEYS = { playlists: 'MusicPlaylists', albums: 'MusicAlbums', artists: 'MusicArtists' } as const;
+const PAGE = 50;
+
+// Parvane (макет «Музыки» 23 ноя, доска `MusicLibrary`): вкладка «Медиатека» телефона — чипы «Плейлисты ·
+// Альбомы · Исполнители» и «…» (сортировка, сетка, «Не нравится», корзина, настройки). Плейлисты — общим списком
+// медиатеки, альбомы — сеткой по три, исполнители — кругами с числом треков
 const MusicLibraryView = ({ info }: OwnProps) => {
   const lang = useLang();
-  const playlists = useDerivedState(getPlaylists);
-  const offline = useDerivedState(getOfflineState);
+  // Ни один чип не выбран — вся медиатека списком (доска `MusicLibrary-01`); повторное нажатие снимает выбор
+  const [tab, setTab] = useState<Tab>();
+  const [albumSort, setAlbumSort] = useState<AlbumSort>('recent');
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-  const handleOpen = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    openMusicView({ kind: e.currentTarget.dataset.view as 'starred' });
+  const albums = useMusicPages<MusicAlbum>(tab === 'albums' ? `lib-albums:${albumSort}` : undefined, async (offset) => {
+    const items = albumSort === 'recent'
+      ? await callMusic('parvaneMusicRecent', { offset })
+      : (await callMusic('parvaneMusicSearch', { query: '', offset })).albums;
+    return { items, hasMore: items.length >= PAGE };
+  });
+  const artists = useMusicPages<MusicArtist>(tab === 'artists' ? 'lib-artists' : undefined, async (offset) => {
+    const page = await callMusic('parvaneMusicSearch', { query: '', offset });
+    return { items: page.artists, hasMore: page.artists.length >= PAGE };
   });
 
-  const handleNew = useLastCallback(() => openNewPlaylist());
+  const handleTab = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const value = e.currentTarget.dataset.tab as Tab;
+    setTab(value === tab ? undefined : value);
+  });
+  const handleOpenMenu = useLastCallback(() => setIsMenuOpen(true));
+  const handleCloseMenu = useLastCallback(() => setIsMenuOpen(false));
+  const handlePick = useLastCallback((key: string) => {
+    setIsMenuOpen(false);
+    if (key === 'sort') setAlbumSort(albumSort === 'recent' ? 'name' : 'recent');
+    else if (key === 'newPlaylist') openNewPlaylist();
+    else if (key === 'dislikes') openMusicView({ kind: 'dislikes' });
+    else if (key === 'settings') openMusicView({ kind: 'offline' });
+  });
+  const handleOpenAlbum = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    openMusicView({ kind: 'album', id: e.currentTarget.dataset.id! });
+  });
+  const handleOpenArtist = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    openMusicView({ kind: 'artist', id: e.currentTarget.dataset.id! });
+  });
 
-  const rows: Row[] = [
-    {
-      kind: 'starred',
-      icon: 'heart',
-      tone: styles.navToneRed,
-      title: lang('MusicStarred'),
-      hint: lang('MusicStarredHint'),
-      count: info.starredCount,
-    },
-    {
-      kind: 'playlists',
-      icon: 'list',
-      tone: styles.navToneAccent,
-      title: lang('MusicPlaylists'),
-      hint: lang('MusicPlaylistsHint'),
-      count: playlists.length,
-    },
-    {
-      kind: 'artists',
-      icon: 'mic',
-      tone: styles.navTonePurple,
-      title: lang('MusicArtists'),
-      hint: lang('MusicWholeLibrary'),
-      count: info.libraryArtists,
-    },
-    {
-      kind: 'albums',
-      icon: 'disc',
-      tone: styles.navToneGreen,
-      title: lang('MusicAlbums'),
-      hint: lang('MusicWholeLibrary'),
-      count: info.libraryAlbums,
-    },
-    {
-      kind: 'offline',
-      icon: 'downloaded',
-      tone: styles.navToneAqua,
-      title: lang('MusicOffline'),
-      hint: [lang('MusicOfflineHint'), formatMusicSize(lang, getOfflineBytes(offline))].join(' · '),
-      count: offline.entries.length,
-    },
-  ];
-  // «Добавлено мной» — функция сверх макета, строкой раздела (только со скачиванием)
-  if (info.isFetchEnabled) {
-    rows.push({
-      kind: 'added',
-      icon: 'upload',
-      tone: styles.navToneAccent,
-      title: lang('MusicAdded'),
-      hint: lang('MusicAddedToday', { today: info.addedToday, perDay: info.addPerDay }),
-    });
+  const sortName = lang(albumSort === 'recent' ? 'MusicSortRecentlyAdded' : 'MusicSortByName');
+  const icon = (name: ParvaneIconName) => <ParvaneIcon name={name} className={sheets.menuIcon} />;
+
+  function renderAlbums() {
+    if (!albums.items) return albums.isFailed ? renderFailed(albums.reload) : <PvSkeleton />;
+    return (
+      <>
+        <div className={styles.grid} data-music-library-albums>
+          {albums.items.map((album) => (
+            <button
+              key={album.id}
+              type="button"
+              className={styles.gridItem}
+              data-id={album.id}
+              data-album={album.id}
+              onClick={handleOpenAlbum}
+            >
+              <MusicCover
+                coverId={album.coverId}
+                toneId={album.id}
+                size={100}
+                glyph="disc"
+                className={styles.gridCover}
+              />
+              <span className={styles.gridTitle}>{album.title}</span>
+              <span className={styles.gridSub}>
+                {[album.artist, album.isSingle ? lang('MusicKindSingle') : undefined].filter(Boolean).join(' · ')}
+              </span>
+            </button>
+          ))}
+        </div>
+        {albums.hasMore && <MusicLoadMore onMore={albums.loadMore} />}
+      </>
+    );
+  }
+
+  function renderArtists() {
+    if (!artists.items) return artists.isFailed ? renderFailed(artists.reload) : <PvSkeleton />;
+    return (
+      <>
+        <div className={styles.list} data-music-library-artists>
+          {artists.items.map((artist) => (
+            <button
+              key={artist.id}
+              type="button"
+              className={styles.row}
+              data-id={artist.id}
+              data-artist={artist.id}
+              onClick={handleOpenArtist}
+            >
+              <MusicCover
+                coverId={artist.coverId}
+                toneId={artist.id}
+                size={46}
+                glyph="mic"
+                isRound
+                className={styles.rowCover}
+              />
+              <span className={styles.rowText}>
+                <span className={styles.rowTitle}>{artist.name}</span>
+                <span className={styles.rowSub}>
+                  {lang('MusicTracksCount', { count: artist.trackCount }, { pluralValue: artist.trackCount })}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+        {artists.hasMore && <MusicLoadMore onMore={artists.loadMore} />}
+      </>
+    );
+  }
+
+  function renderFailed(onRetry: NoneToVoidFunction) {
+    return (
+      <div className={styles.failed} role="alert">
+        {lang('MusicLoadFailed')}
+        <button type="button" className={styles.retry} onClick={onRetry}>{lang('MusicRetry')}</button>
+      </div>
+    );
   }
 
   return (
-    <>
-      <div className={styles.libraryRows} data-music-library>
-        {rows.map((row) => (
-          <button key={row.kind} type="button" className={styles.libraryRow} data-view={row.kind} onClick={handleOpen}>
-            <ParvaneIcon name={row.icon} className={row.tone} />
-            <span className={styles.trackText}>
-              <span className={styles.trackTitle}>{row.title}</span>
-              <span className={buildClassName(kit.muted, kit.small)}>{row.hint}</span>
-            </span>
-            {Boolean(row.count) && <span className={buildClassName(kit.mono, kit.muted, kit.small)}>{row.count}</span>}
-            <ParvaneIcon name="right" isSmall className={styles.chevron} />
+    <div className={styles.root} data-music-library>
+      <div className={styles.chips} role="tablist" aria-label={lang('MusicLibrary')}>
+        {TABS.map((value) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={tab === value}
+            className={buildClassName(styles.chip, tab === value && styles.chipOn)}
+            data-tab={value}
+            onClick={handleTab}
+          >
+            {lang(TAB_KEYS[value])}
           </button>
         ))}
-      </div>
-      <div className={buildClassName(kit.caps, styles.groupHead)}>
-        <span className={kit.grow}>{lang('MusicPlaylists')}</span>
         <button
           type="button"
-          className={kit.ib}
-          aria-label={lang('MusicPlaylistNew')}
-          data-music-new-playlist
-          onClick={handleNew}
+          className={styles.more}
+          aria-label={lang('MusicLibraryMore')}
+          data-music-library-more
+          onClick={handleOpenMenu}
         >
-          <ParvaneIcon name="plus" isSmall />
+          <ParvaneIcon name="dotsH" isSmall />
         </button>
       </div>
-      <MusicPlaylistList />
-    </>
+      {(!tab || tab === 'playlists') && <MusicLibraryItems info={info} isPhone />}
+      {tab === 'albums' && renderAlbums()}
+      {tab === 'artists' && renderArtists()}
+      {isMenuOpen && (
+        <MusicMenu
+          title={lang('MusicLibrary')}
+          actions={[
+            {
+              key: 'sort',
+              title: lang('MusicSortBy', { name: sortName }),
+              glyph: icon('sort'),
+            },
+            { key: 'newPlaylist', title: lang('MusicPlaylistNew'), glyph: icon('plus') },
+            { key: 'dislikes', title: lang('MusicDislikes'), glyph: icon('ban') },
+            { key: 'settings', title: lang('MusicSettings'), glyph: icon('gear') },
+          ]}
+          onPick={handlePick}
+          onClose={handleCloseMenu}
+        />
+      )}
+    </div>
   );
 };
 

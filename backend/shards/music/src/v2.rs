@@ -58,7 +58,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
         return match method {
             "music.fetch.catalog" => fetch.catalog(sub, &user, body(&req)?).await,
             "music.catalog.search" => fetch.catalog_search(sub, &user, body(&req)?).await,
-            "music.catalog.artist" => fetch.catalog_artist(body(&req)?).await,
+            "music.catalog.artist" => fetch.catalog_artist(sub, &user, body(&req)?).await,
             "music.catalog.album" => fetch.catalog_album(sub, &user, body(&req)?).await,
             "music.fetch.start" => fetch.start(sub_shared.clone(), &req.user, body(&req)?).await,
             "music.fetch.status" => fetch.status(&req.user),

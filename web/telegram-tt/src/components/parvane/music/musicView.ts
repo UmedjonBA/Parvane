@@ -13,14 +13,15 @@ export type MusicTab = 'home' | 'search' | 'library';
 export type MusicView =
   | {
     kind: MusicTab | 'starred' | 'artists' | 'albums' | 'offline' | 'added' | 'playlists' | 'uploads'
-      | 'mix' | 'mixArtists' | 'queue';
+      | 'mix' | 'mixArtists' | 'queue' | 'dislikes';
   }
-  | { kind: 'playlist' | 'album' | 'artist' | 'singles' | 'shared'; id: string };
+  | { kind: 'playlist' | 'album' | 'artist' | 'singles' | 'shared' | 'catalogArtist' | 'catalogAlbum'; id: string };
 
 export type MusicViewKind = MusicView['kind'];
 
-// «+» модуля: «Найти и скачать» (поиск с курсором в поле) либо «Новый плейлист»
-export type MusicAddRequest = 'fetch' | 'playlist';
+// «+» модуля (доска `MusicHome`): «Найти в каталоге» (поиск с курсором в поле), «Вставить ссылку», «Загрузить
+// файл», «Новый плейлист»
+export type MusicAddRequest = 'fetch' | 'link' | 'file' | 'playlist';
 
 const HOME: MusicView = { kind: 'home' };
 
