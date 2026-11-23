@@ -1418,6 +1418,9 @@ export interface LangPair {
   'MusicPause': undefined;
   'MusicNext': undefined;
   'MusicPrevious': undefined;
+  'MusicMiniDialog': undefined;
+  'MusicMiniQueue': undefined;
+  'MusicMiniOpenModule': undefined;
   'MusicShuffleOn': undefined;
   'MusicShuffleOff': undefined;
   'MusicRepeatOff': undefined;

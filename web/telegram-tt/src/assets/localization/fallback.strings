@@ -1957,6 +1957,9 @@
 "MusicPause" = "Pause";
 "MusicNext" = "Next track";
 "MusicPrevious" = "Previous track";
+"MusicMiniDialog" = "Player";
+"MusicMiniQueue" = "Queue";
+"MusicMiniOpenModule" = "Open Music";
 "MusicShuffleOn" = "Shuffle: on";
 "MusicShuffleOff" = "Shuffle: off";
 "MusicRepeatOff" = "Repeat: off";

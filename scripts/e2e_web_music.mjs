@@ -96,9 +96,10 @@ async function waitPlaying(page, title, state) {
   }, [title, state], { timeout: STEP_TIMEOUT_MS });
 }
 
-// Компьютер: управление — в полном плеере из виджета
+// Компьютер: управление — в полном плеере из виджета (виджет → окошко плеера → «Очередь», доска `DeskNotes`)
 async function withFullPlayer(page, action) {
   await page.locator('#FoldersSidebar [data-music-widget]').click();
+  await page.locator('[data-music-popup-queue]').click();
   const full = page.locator('[data-music-full]');
   await full.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await action(full);
@@ -242,7 +243,17 @@ try {
   // ── Плеер вне модуля: виджет в боковой панели ─────────────────────────────
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
   const widget = page.locator('#FoldersSidebar [data-music-widget]');
+  // Нажатие на виджет — окошко плеера рядом (доска `DeskNotes`): трек, управление, «Очередь», «Открыть «Музыку»»;
+  // Escape его закрывает
   await widget.click();
+  const popup = page.locator('[data-music-popup]');
+  await popup.getByText('Соль').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await popup.getByRole('button', { name: 'Open Music' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape');
+  await popup.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await widget.click();
+  await popup.getByRole('button', { name: 'Queue', exact: true }).click();
+  await popup.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   const full = page.locator('[data-music-full]');
   await full.getByRole('heading', { name: 'Соль' }).waitFor();
   await full.getByRole('button', { name: 'Play', exact: true }).click();

@@ -1701,6 +1701,9 @@
 "MusicPause" = "Пауза";
 "MusicNext" = "Следующий трек";
 "MusicPrevious" = "Предыдущий трек";
+"MusicMiniDialog" = "Плеер";
+"MusicMiniQueue" = "Очередь";
+"MusicMiniOpenModule" = "Открыть «Музыку»";
 "MusicShuffleOn" = "Вперемешку: включено";
 "MusicShuffleOff" = "Вперемешку: выключено";
 "MusicRepeatOff" = "Повтор: выключен";
