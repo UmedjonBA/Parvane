@@ -1,12 +1,12 @@
 import {
-  memo, useLayoutEffect, useRef, useState,
+  memo, useEffect, useLayoutEffect, useRef, useState,
 } from '@teact';
 import { getActions } from '../../../global';
 
 import type { HealthBlockId, ParvaneModuleId, ParvaneModuleState } from '../../../util/parvaneModules';
 import { SettingsScreens } from '../../../types';
 
-import { requestMutation } from '../../../lib/fasterdom/fasterdom';
+import { requestMeasure, requestMutation } from '../../../lib/fasterdom/fasterdom';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import {
@@ -59,6 +59,9 @@ const SETTINGS_LINK_KEYS = {
   health: 'ParvaneNavGoals',
   notes: 'ParvaneNavStorage',
 } as const satisfies Partial<Record<ParvaneModuleId, string>>;
+
+// Строка переезжает на новое место за это время
+const ROW_MOVE_MS = 180;
 
 const SETTINGS_LINK_PHONE_KEYS = {
   plan: 'PlannerSettings',
@@ -137,16 +140,19 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
     focusHandle(id);
   });
 
+  // Перетаскивание слушает указатель на всём окне, а не на ручке: строка при перестановке переезжает в разметке, и
+  // браузер снимает с ручки захват указателя — без этого касание «зависало» в «отпустите здесь», а остальные ручки
+  // больше не нажимались
   const handlePointerDown = useLastCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    if (e.button !== 0 || drag) return;
+    if (e.button !== 0) return;
     const id = e.currentTarget.dataset.dragHandle as ParvaneModuleId;
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
     setDrag({ id, startIndex: modules.findIndex((module) => module.id === id), pointerId: e.pointerId });
   });
 
-  const handlePointerMove = useLastCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+  const handlePointerMove = useLastCallback((e: PointerEvent) => {
     if (!drag || e.pointerId !== drag.pointerId || !listRef.current) return;
+    e.preventDefault();
     const rows = Array.from(listRef.current.querySelectorAll<HTMLElement>('[data-module-row]'));
     const middles = rows
       .filter((row) => row.dataset.moduleRow !== drag.id)
@@ -155,22 +161,70 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
         return rect.top + rect.height / 2;
       });
     const target = findDropIndex(middles, e.clientY);
-    if (modules[target]?.id !== drag.id) moveModule(drag.id, target);
+    if (modules[target]?.id === drag.id) return;
+    rememberRowTops();
+    moveModule(drag.id, target);
   });
 
   const finishDrag = useLastCallback((isCancelled?: boolean) => {
     if (!drag) return;
-    if (isCancelled) moveModule(drag.id, drag.startIndex);
+    if (isCancelled) {
+      rememberRowTops();
+      moveModule(drag.id, drag.startIndex);
+    }
     setDrag(undefined);
   });
 
-  const handlePointerUp = useLastCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+  const handlePointerUp = useLastCallback((e: PointerEvent) => {
     if (drag && e.pointerId === drag.pointerId) finishDrag();
   });
 
-  const handlePointerCancel = useLastCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+  const handlePointerCancel = useLastCallback((e: PointerEvent) => {
     if (drag && e.pointerId === drag.pointerId) finishDrag(true);
   });
+
+  const isDragging = Boolean(drag);
+  useEffect(() => {
+    if (!isDragging) return undefined;
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+    };
+  }, [isDragging, handlePointerMove, handlePointerUp, handlePointerCancel]);
+
+  // Строки разъезжаются плавно: места строк до перестановки запоминаются, после отрисовки строка едет со старого
+  // места на новое
+  const rowTopsRef = useRef<Map<string, number>>();
+  function rememberRowTops() {
+    const list = listRef.current;
+    if (!list) return;
+    rowTopsRef.current = new Map(Array.from(list.querySelectorAll<HTMLElement>('[data-module-row]'))
+      .map((row) => [row.dataset.moduleRow!, row.getBoundingClientRect().top]));
+  }
+
+  useLayoutEffect(() => {
+    const before = rowTopsRef.current;
+    rowTopsRef.current = undefined;
+    if (!before) return;
+    requestMeasure(() => {
+      const list = listRef.current;
+      if (!list) return;
+      const shifts = Array.from(list.querySelectorAll<HTMLElement>('[data-module-row]'))
+        .map((row) => ({ row, shift: (before.get(row.dataset.moduleRow!) ?? 0) - row.getBoundingClientRect().top }))
+        .filter(({ shift }) => Math.abs(shift) > 1);
+      requestMutation(() => {
+        shifts.forEach(({ row, shift }) => {
+          row.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }], {
+            duration: ROW_MOVE_MS, easing: 'ease-out',
+          });
+        });
+      });
+    });
+  }, [modules]);
 
   // Escape посреди перетаскивания возвращает строку на место (и не закрывает экран)
   useLayoutEffect(() => (drag ? captureEscKeyListener(() => finishDrag(true)) : undefined), [drag, finishDrag]);
@@ -280,9 +334,6 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
             data-drag-handle={module.id}
             onKeyDown={handleHandleKeyDown}
             onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerCancel}
           >
             <ParvaneIcon name="grip" isSmall />
           </button>

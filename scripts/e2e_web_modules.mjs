@@ -308,6 +308,17 @@ async function runServerOffPart(suffix) {
   await expectModules(mobile, RIBBON, ['chats', 'files', 'plan', 'health', 'profile'], 'касание не переставило модуль');
   console.log('OK: модуль перетаскивается касанием, лента меняется сразу');
 
+  // После касания другая ручка тоже тянется: строка при перестановке переезжает в разметке и теряет захват
+  // указателя — прежде перетаскивание «зависало», и остальные ручки не нажимались
+  await mobile.waitForTimeout(400);
+  const planFrom = centerOf(await mobile.locator('[data-drag-handle="plan"]').boundingBox());
+  const phoneFilesBox = await mobile.locator('[data-module-row="files"] > [data-module="files"]').boundingBox();
+  await touchDrag(mobile, planFrom, { x: planFrom.x, y: phoneFilesBox.y + 6 });
+  await mobile.locator('[data-module-row][data-dragging], [data-dragging]').first()
+    .waitFor({ state: 'detached', timeout: WAIT_MS });
+  await expectModules(mobile, RIBBON, ['chats', 'plan', 'files', 'health', 'profile'], 'вторая ручка не перетащилась');
+  console.log('OK: после касания следующая ручка тоже перетаскивается');
+
 }
 
 // Часть «всё включено»: семь модулей, стрелки ленты, «+» «Плана», узкое окно компьютера (доски `Main`, `Ribbon`,

@@ -43,6 +43,8 @@
 
 // Перетаскиваемая строка стоит там, куда встанет: рамка-пунктир и подпись «отпустите здесь»
 .rowDrop {
+  transform: scale(1.02);
+
   border-radius: var(--pv-radius-md);
 
   color: var(--pv-accent);
@@ -50,6 +52,9 @@
   background: var(--pv-raised);
   outline: 2px dashed var(--pv-accent);
   outline-offset: -2px;
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.3);
+
+  transition: transform 150ms ease-out, box-shadow 150ms ease-out;
 }
 
 // След на прежнем месте строки — «было здесь»
