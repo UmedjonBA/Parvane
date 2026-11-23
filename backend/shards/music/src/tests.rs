@@ -93,6 +93,14 @@ async fn fake_serve(fake: Arc<Fake>, req: Request<Incoming>) -> Response<Full<By
             {"synced": false, "line": [{"value": "Просто текст"}]},
             {"synced": true, "line": [{"start": 1500, "value": "Первая"}, {"start": 4200, "value": "Вторая"}]}]}})),
         "/rest/getLyricsBySongId" => ok(json!({"lyricsList": {}})),
+        // Жанры: «Пост-рок» — t1 и t2, «Эмбиент» — t3
+        "/rest/getGenres" => ok(json!({"genres": {"genre": [{"value": "Эмбиент", "songCount": 1, "albumCount": 1}, {"value": "Пост-рок", "songCount": 2, "albumCount": 1}, {"value": "", "songCount": 9}]}})),
+        "/rest/getSongsByGenre" => {
+            // Остальные параметры фальшивка читает как есть (поиск по ним задуман «мимо»), имя жанра — раскодированным
+            let ids: &[&str] = if q.get("genre").map(|g| percent_decode(g)).as_deref() == Some("Пост-рок") { &["t1", "t2"] } else { &["t3"] };
+            let off: usize = q.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+            ok(json!({"songsByGenre": {"song": ids.iter().skip(off).map(|t| song(t, is_starred(t))).collect::<Vec<_>>()}}))
+        }
         "/rest/getSong" if known.contains(&id.as_str()) => ok(json!({"song": song(&id, is_starred(&id))})),
         "/rest/star" => {
             fake.starred.lock().unwrap().insert((user, id));
@@ -162,9 +170,44 @@ pub(crate) async fn setup() -> (Arc<Fake>, Arc<Ctx>, String) {
     (fake, ctx, public)
 }
 
+/// Значение из строки запроса: `%XX` и `+` — как их кодирует клиент.
+fn percent_decode(v: &str) -> String {
+    let bytes = v.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+                if let Some(b) = hex {
+                    out.push(b);
+                    i += 3;
+                    continue;
+                }
+                out.push(b'%');
+            }
+            b'+' => out.push(b' '),
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub(crate) async fn call<R: Message + Default>(ctx: &Ctx, user: &str, method: &str, body: impl Message) -> Result<R, ErrorCode> {
     let req = ShardRequest { user: user.into(), body: body.encode_to_vec(), ..Default::default() };
     v2::dispatch(ctx, method, req).await.map(|b| R::decode(b.as_slice()).unwrap())
+}
+
+#[tokio::test]
+async fn genres_by_track_count_and_tracks_of_genre() {
+    let (_, ctx, alice) = setup().await;
+    let g: pb::LibraryGenresResponse = call(&ctx, &alice, "music.library.genres", pb::LibraryGenresRequest {}).await.unwrap();
+    // Больше треков — раньше; безымянный жанр пропущен
+    assert_eq!(g.genres.iter().map(|x| (x.name.as_str(), x.track_count)).collect::<Vec<_>>(), vec![("Пост-рок", 2), ("Эмбиент", 1)]);
+    let t: pb::LibraryGenreResponse = call(&ctx, &alice, "music.library.genre", pb::LibraryGenreRequest { name: "Пост-рок".into(), offset: 0 }).await.unwrap();
+    assert_eq!(t.tracks.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["t1", "t2"]);
+    assert!(call::<pb::LibraryGenreResponse>(&ctx, &alice, "music.library.genre", pb::LibraryGenreRequest { name: " ".into(), offset: 0 }).await.is_err());
 }
 
 #[tokio::test]

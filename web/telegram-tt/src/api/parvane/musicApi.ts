@@ -135,6 +135,12 @@ export type MusicCatalogTrack = {
   previewUrl?: string;
 };
 
+export type MusicGenre = {
+  name: string;
+  trackCount: number;
+  albumCount: number;
+};
+
 export type MusicCatalogArtist = {
   ref: string;
   name: string;
@@ -483,6 +489,22 @@ export function createMusicApi(deps: Deps) {
         albums: list(reply, 'albums').map(toAlbum),
         artists: list(reply, 'artists').map(toArtist),
       };
+    },
+
+    /** Жанры библиотеки (обзор поиска), больше треков — раньше. */
+    async parvaneMusicGenres(): Promise<MusicGenre[]> {
+      const reply = await deps.call('music.library.genres', {});
+      return list(reply, 'genres').map((raw) => ({
+        name: text(raw, 'name'),
+        trackCount: count(raw, 'track_count'),
+        albumCount: count(raw, 'album_count'),
+      }));
+    },
+
+    /** Треки жанра страницами по 50. */
+    async parvaneMusicGenre({ name, offset }: { name: string; offset?: number }) {
+      const reply = await deps.call('music.library.genre', { name, offset: offset || 0 });
+      return list(reply, 'tracks').map(toTrack);
     },
 
     /** «Главная» (доска `MusicHome`): популярное за неделю с числом прослушиваний, частые исполнители, новые альбомы. */

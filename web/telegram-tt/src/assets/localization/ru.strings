@@ -1713,6 +1713,15 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicRecentItems" = "Недавнее";
+"MusicKindPlaylist" = "Плейлист";
+"MusicOnServerCount_one" = "{count} на сервере";
+"MusicOnServerCount_few" = "{count} на сервере";
+"MusicOnServerCount_many" = "{count} на сервере";
+"MusicOnServerCount_other" = "{count} на сервере";
+"MusicCatalogChart" = "Чарт каталога";
+"MusicCatalogChartShort" = "популярное сейчас";
+"MusicCatalogChartSub" = "Популярное в каталоге — что уже на сервере, играет сразу";
 "MusicMixStep" = "шаг {step} из {total}";
 "MusicMixWhoTitle" = "Кого вы любите слушать?";
 "MusicMixWhoHint" = "Хотя бы трёх. Из каталога тоже можно — их треки будут играть из сети, пока их нет на сервере.";

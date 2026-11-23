@@ -144,6 +144,10 @@ http.createServer((req, res) => {
     const tracks = CATALOG.filter((track) => track.album === title);
     return reply(res, 200, { album: albumOut(title), tracks: tracks.map(trackOut) });
   }
+  // «Чарт каталога» (обзор поиска): все эталоны по порядку
+  if (url.pathname === '/catalog/chart') {
+    return reply(res, 200, { tracks: CATALOG.map(trackOut) });
+  }
   // «Микс дня»: исполнители для выбора и похожие на выбранного
   if (url.pathname === '/catalog/artists') {
     return reply(res, 200, {

@@ -283,6 +283,26 @@ try {
   await deskSearch.fill('нет такого');
   await visible(music.locator('[data-music-empty="search"]').getByText('Nothing found for “нет такого”'));
   await deskSearch.fill('');
+  // «Обзор» (доска `MusicSearch-01`): жанр сервера — его треки; «Чарт каталога»; «Недавнее» — открытый альбом
+  await music.locator('[data-music-browse-tiles] [data-genre="Пост-рок"]').click();
+  await visible(music.locator('[data-music-browse="genre"] [data-track="t1"]'));
+  await nav('search');
+  await deskSearch.fill('');
+  await music.locator('[data-music-chart]').click();
+  await visible(music.locator(`[data-music-browse="chart"] [data-catalog-track="${CATALOG_BUS}"]`));
+  await visible(music.locator('[data-music-browse="chart"] [data-track="t4"]').or(
+    music.locator('[data-music-browse="chart"] [data-catalog-track]').filter({ hasText: 'Glass Harbor' })).first());
+  // Открытый из поиска альбом — в «Недавнем» с типом
+  await nav('search');
+  await deskSearch.fill('glass');
+  const best = music.locator('[data-music-best]');
+  const [bestTitle, bestSub] = [await best.getAttribute('data-title'), await best.getAttribute('data-sub')];
+  await best.click();
+  await gone(best);
+  await nav('search');
+  await deskSearch.fill('');
+  await visible(music.locator('[data-music-history] [data-entry]').filter({ hasText: bestTitle }).filter({ hasText: bestSub })
+    .first());
   // Очередь (кнопка плеера внизу): «Сейчас играет», «Добавлено вами» и остаток альбома
   await deskPlayer.locator('[data-music-desk-queue]').click();
   const queue = music.locator('[data-music-view="queue"]');
@@ -838,7 +858,7 @@ try {
   const big = await openMusic(page);
   // «Обзор» поиска: «Исполнители» — весь список сервера
   await big.locator('[data-music-nav] [data-view="search"]').click();
-  await big.locator('[data-music-search]').getByRole('button', { name: /^Artists/ }).click();
+  await big.locator('[data-music-browse-artists]').click();
   await visible(big.locator('[data-music-title]').getByText('Artists'));
   // В библиотеке — 2 исполнителя сценария, добавленные «Найти и скачать» и 60 сингловых: больше одной страницы
   await visible(big.getByText(/\d+ in the server library/));
@@ -871,7 +891,7 @@ try {
   await visible(big.locator('[data-music-album-page] [data-track="x07"]'));
   await big.locator('[data-music-nav] [data-view="search"]').click();
   await big.locator('[data-music-desk-search]').fill('');
-  await big.locator('[data-music-search]').getByRole('button', { name: /^New on the server/ }).click();
+  await big.locator('[data-music-browse-tiles] button').filter({ hasText: 'New on the server' }).click();
   await visible(big.locator('[data-music-title]').getByText(/Albums · \d+/));
   await page.waitForFunction(() => document.querySelectorAll('#ParvaneMusic [data-music-albums] [data-id]').length >= 50,
     undefined, { timeout: STEP_TIMEOUT_MS });

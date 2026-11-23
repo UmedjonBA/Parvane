@@ -1969,6 +1969,13 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicRecentItems" = "Recent";
+"MusicKindPlaylist" = "Playlist";
+"MusicOnServerCount_one" = "{count} on the server";
+"MusicOnServerCount_other" = "{count} on the server";
+"MusicCatalogChart" = "Catalog chart";
+"MusicCatalogChartShort" = "popular now";
+"MusicCatalogChartSub" = "Popular in the catalog — what is already on the server plays right away";
 "MusicMixStep" = "step {step} of {total}";
 "MusicMixWhoTitle" = "Who do you love to listen to?";
 "MusicMixWhoHint" = "At least three. Catalog artists work too, their tracks stream until they are on the server.";

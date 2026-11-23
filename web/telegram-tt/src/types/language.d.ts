@@ -1431,6 +1431,11 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicRecentItems': undefined;
+  'MusicKindPlaylist': undefined;
+  'MusicCatalogChart': undefined;
+  'MusicCatalogChartShort': undefined;
+  'MusicCatalogChartSub': undefined;
   'MusicMixWhoTitle': undefined;
   'MusicMixWhoHint': undefined;
   'MusicMixSkip': undefined;
@@ -6934,6 +6939,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'limit': V;
   };
   'MusicTracksCount': {
+    'count': V;
+  };
+  'MusicOnServerCount': {
     'count': V;
   };
   'MusicFileVersionsMore': {

@@ -15,6 +15,8 @@ use crate::subsonic::{album_of, artist_of, list, nd_user, track_of, valid_id, Su
 use crate::token::{self, Claims, Grant};
 use crate::{now_ms, Ctx};
 
+const GENRES_MAX: usize = 200;
+const GENRE_PAGE: usize = 50;
 const PAGE_DEFAULT: u32 = 20;
 const PAGE_MAX: u32 = 50;
 const ALBUM_TRACKS_MAX: usize = 1000;
@@ -58,6 +60,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
         return match method {
             "music.fetch.catalog" => fetch.catalog(sub, &user, body(&req)?).await,
             "music.catalog.search" => fetch.catalog_search(sub, &user, body(&req)?).await,
+            "music.catalog.chart" => fetch.catalog_chart(sub, &user).await,
             "music.catalog.artist" => fetch.catalog_artist(sub, &user, body(&req)?).await,
             "music.catalog.album" => fetch.catalog_album(sub, &user, body(&req)?).await,
             "music.fetch.start" => fetch.start(sub_shared.clone(), &req.user, body(&req)?).await,
@@ -85,6 +88,8 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
         "music.library.search" => search(sub, &user, body(&req)?).await,
         "music.library.recent" => recent(sub, &user, body(&req)?).await,
         "music.library.home" => home(sub, &user).await,
+        "music.library.genres" => genres(sub, &user).await,
+        "music.library.genre" => genre(sub, &user, body(&req)?).await,
         "music.library.album" => album(sub, &user, body(&req)?).await,
         "music.library.artist" => artist(sub, &user, body(&req)?).await,
         "music.track.get" => track_get(sub, &user, body(&req)?).await,
@@ -221,6 +226,34 @@ async fn album(sub: &Subsonic, user: &str, r: pb::LibraryAlbumRequest) -> Reply 
     let mut tracks: Vec<pb::Track> = list(a, &["song"]).iter().filter_map(track_of).take(ALBUM_TRACKS_MAX).collect();
     crate::files::annotate_tracks(&mut tracks).await;
     Ok(pb::LibraryAlbumResponse { album: album_of(a), tracks }.encode_to_vec())
+}
+
+/// Жанры библиотеки по числу треков.
+async fn genres(sub: &Subsonic, user: &str) -> Reply {
+    let v = sub.call(user, "getGenres", &[]).await?;
+    let mut genres: Vec<pb::Genre> = list(&v, &["genres", "genre"])
+        .iter()
+        .filter_map(|g| {
+            let name = g.get("value").and_then(serde_json::Value::as_str).unwrap_or("").trim();
+            let count = |k: &str| g.get(k).and_then(serde_json::Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
+            (!name.is_empty() && name.len() <= 128).then(|| pb::Genre { name: name.to_string(), track_count: count("songCount"), album_count: count("albumCount") })
+        })
+        .collect();
+    genres.sort_by(|a, b| b.track_count.cmp(&a.track_count).then_with(|| a.name.cmp(&b.name)));
+    genres.truncate(GENRES_MAX);
+    Ok(pb::LibraryGenresResponse { genres }.encode_to_vec())
+}
+
+/// Треки жанра страницами по 50.
+async fn genre(sub: &Subsonic, user: &str, r: pb::LibraryGenreRequest) -> Reply {
+    let name = r.name.trim();
+    if name.is_empty() || name.len() > 128 {
+        return Err(ErrorCode::Invalid);
+    }
+    let v = sub.call(user, "getSongsByGenre", &[("genre", name.to_string()), ("count", GENRE_PAGE.to_string()), ("offset", r.offset.to_string())]).await?;
+    let mut tracks: Vec<pb::Track> = list(&v, &["songsByGenre", "song"]).iter().filter_map(track_of).collect();
+    crate::files::annotate_tracks(&mut tracks).await;
+    Ok(pb::LibraryGenreResponse { tracks }.encode_to_vec())
 }
 
 async fn artist(sub: &Subsonic, user: &str, r: pb::LibraryArtistRequest) -> Reply {

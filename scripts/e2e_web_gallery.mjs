@@ -794,7 +794,11 @@ async function galleryMusic() {
   await step(page, 'MusicHome-02', async () => {
     await music.locator('[data-music-popular]').scrollIntoViewIfNeeded({ timeout: STEP_TIMEOUT_MS });
   });
-  await step(page, 'MusicSearch-01', async () => { await tab('search').click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'MusicSearch-01', async () => {
+    await tab('search').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-search] input[type="search"]:visible').first().fill('');
+    await music.locator('[data-music-browse-tiles] [data-genre]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
   await step(page, 'MusicSearch-02', async () => {
     await music.locator('[data-music-search] input[type="search"]:visible').first().fill('harbor');
     await music.locator('[data-track]:visible').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

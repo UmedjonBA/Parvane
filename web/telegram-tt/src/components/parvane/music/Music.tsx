@@ -38,6 +38,7 @@ import MusicAddedView from './MusicAddedView';
 import MusicAlbumPage from './MusicAlbumPage';
 import MusicAlbumView from './MusicAlbumView';
 import MusicArtistPage from './MusicArtistPage';
+import MusicBrowseList from './MusicBrowseList';
 import MusicBrowseView from './MusicBrowseView';
 import MusicDeskPlayer from './MusicDeskPlayer';
 import MusicDislikesView from './MusicDislikesView';
@@ -202,6 +203,10 @@ const Music = () => {
         return <MusicAlbumPage id={current.id} {...common} />;
       case 'catalogAlbum':
         return <MusicAlbumPage catalogRef={current.id} {...common} />;
+      case 'genre':
+        return <MusicBrowseList genre={current.id} {...common} />;
+      case 'catalogChart':
+        return <MusicBrowseList {...common} />;
       case 'catalogArtist':
         return <MusicArtistPage catalogRef={current.id} {...common} />;
       case 'singles':

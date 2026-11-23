@@ -35,6 +35,13 @@ impl Fetch {
         .encode_to_vec())
     }
 
+    /// «Чарт каталога»: популярное в каталоге с пометкой «уже в библиотеке».
+    pub async fn catalog_chart(&self, sub: &Subsonic, user: &str) -> Reply {
+        let v = self.catalog_service("chart", &[]).await?;
+        let tracks = self.owned_tracks(sub, user, list(&v, "tracks")).await;
+        Ok(pb::CatalogChartResponse { tracks }.encode_to_vec())
+    }
+
     pub async fn catalog_artist(&self, sub: &Subsonic, user: &str, r: pb::CatalogArtistRequest) -> Reply {
         let v = self.catalog_service("artist", &[("ref", checked_ref(&r.r#ref)?)]).await?;
         let top = self.owned_tracks(sub, user, list(&v, "top")).await;

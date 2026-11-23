@@ -13,9 +13,13 @@ export type MusicTab = 'home' | 'search' | 'library';
 export type MusicView =
   | {
     kind: MusicTab | 'starred' | 'artists' | 'albums' | 'offline' | 'added' | 'playlists' | 'uploads'
-      | 'mix' | 'mixArtists' | 'queue' | 'dislikes' | 'trash' | 'settings' | 'serverSettings' | 'people';
+      | 'mix' | 'mixArtists' | 'queue' | 'dislikes' | 'trash' | 'settings' | 'serverSettings' | 'people'
+      | 'catalogChart';
   }
-  | { kind: 'playlist' | 'album' | 'artist' | 'singles' | 'shared' | 'catalogArtist' | 'catalogAlbum'; id: string };
+  | {
+    kind: 'playlist' | 'album' | 'artist' | 'singles' | 'shared' | 'catalogArtist' | 'catalogAlbum' | 'genre';
+    id: string;
+  };
 
 export type MusicViewKind = MusicView['kind'];
 

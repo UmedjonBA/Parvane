@@ -94,6 +94,10 @@ service MusicService {
   rpc CatalogSearch(CatalogSearchRequest) returns (CatalogSearchResponse) {
     option (parvane.core.v2.method) = {name: "music.catalog.search" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  // «Обзор» поиска (доска `MusicSearch-01`): «Чарт каталога» — популярное в каталоге с пометкой «уже на сервере».
+  rpc CatalogChart(CatalogChartRequest) returns (CatalogChartResponse) {
+    option (parvane.core.v2.method) = {name: "music.catalog.chart" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
   rpc CatalogArtist(CatalogArtistRequest) returns (CatalogArtistResponse) {
     option (parvane.core.v2.method) = {name: "music.catalog.artist" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
@@ -129,6 +133,13 @@ service MusicService {
   }
   rpc Lyrics(LyricsRequest) returns (LyricsResponse) {
     option (parvane.core.v2.method) = {name: "music.lyrics" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  // «Обзор» поиска: жанры библиотеки с числом треков и треки жанра страницами.
+  rpc LibraryGenres(LibraryGenresRequest) returns (LibraryGenresResponse) {
+    option (parvane.core.v2.method) = {name: "music.library.genres" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc LibraryGenre(LibraryGenreRequest) returns (LibraryGenreResponse) {
+    option (parvane.core.v2.method) = {name: "music.library.genre" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
   rpc LibraryHome(LibraryHomeRequest) returns (LibraryHomeResponse) {
     option (parvane.core.v2.method) = {name: "music.library.home" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
@@ -285,6 +296,25 @@ message LibraryArtistResponse {
   repeated Track popular = 3 [(parvane.core.v2.max_items) = 10];
   // «Чаще всех слушает …» (карточка «Об исполнителе» в плеере): ник за 30 дней; пусто — никто.
   string top_listener = 4 [(parvane.core.v2.max_len) = 64];
+}
+
+message Genre {
+  string name = 1 [(parvane.core.v2.max_len) = 128];
+  uint32 track_count = 2;
+  uint32 album_count = 3;
+}
+message LibraryGenresRequest {}
+message LibraryGenresResponse {
+  // По числу треков, больше — раньше.
+  repeated Genre genres = 1 [(parvane.core.v2.max_items) = 200];
+}
+message LibraryGenreRequest {
+  string name = 1 [(parvane.core.v2.max_len) = 128];
+  uint32 offset = 2;
+}
+message LibraryGenreResponse {
+  // До 50 за раз; меньше — список кончился.
+  repeated Track tracks = 1 [(parvane.core.v2.max_items) = 50];
 }
 
 message TrackGetRequest {
@@ -759,6 +789,11 @@ message CatalogSearchResponse {
   // Есть ли ещё треки и с какого места просить.
   bool has_more = 4;
   uint32 next_offset = 5;
+}
+
+message CatalogChartRequest {}
+message CatalogChartResponse {
+  repeated CatalogTrack tracks = 1 [(parvane.core.v2.max_items) = 50];
 }
 
 message CatalogArtistRequest {

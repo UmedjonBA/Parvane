@@ -383,6 +383,13 @@
   align-items: center;
 }
 
+.historyCover {
+  flex: none;
+  width: 2.875rem;
+  height: 2.875rem;
+  border-radius: 0.375rem;
+}
+
 .historyIcon {
   display: flex;
   flex: none;
@@ -420,33 +427,47 @@
 // «Обзор»: цветные плитки 2 в ряд
 .browse {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
   gap: 0.5rem;
 }
 
 .browseTile {
   cursor: pointer;
 
+  position: relative;
+
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
 
-  height: 4.875rem;
+  height: 5.375rem;
   padding: 0.625rem 0.75rem;
   border: none;
-  border-radius: 0.5rem;
+  border-radius: 0.375rem;
 
   font: inherit;
-  color: #fff;
+  color: var(--pv-panel);
   text-align: start;
-}
 
-.toneA {
-  background: var(--pv-aqua);
-}
+  background: var(--tile-tone);
 
-.toneB {
-  background: var(--pv-orange);
+  // Доска `MusicSearch-01`: светлый повёрнутый квадрат в правом нижнем углу
+  &::after {
+    content: "";
+
+    position: absolute;
+    right: -0.75rem;
+    bottom: -0.875rem;
+    transform: rotate(-20deg);
+
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 0.375rem;
+
+    opacity: 0.25;
+    background: var(--pv-panel);
+  }
 }
 
 .browseTitle {

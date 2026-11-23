@@ -204,6 +204,11 @@ def artists(query):
     return [artist_out(item) for item in data("/chart/0/artists", limit=30)]
 
 
+def chart():
+    # «Чарт каталога» (обзор поиска): популярные треки каталога
+    return {"tracks": unique([track_out(item) for item in data("/chart/0/tracks", limit=50)])}
+
+
 def related(ref):
     """Похожие исполнители."""
     return [artist_out(item) for item in data(f"/artist/{ref_id(ref)}/related", limit=RELATED_LIMIT)]

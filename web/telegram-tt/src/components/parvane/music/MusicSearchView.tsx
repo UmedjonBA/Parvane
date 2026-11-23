@@ -4,21 +4,24 @@ import {
 } from '../../../lib/teact/teact';
 
 import type { MusicInfo, MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicRecentItem } from './musicSearchHistory';
 import type { MusicSearchFound } from './musicSearchLists';
 
 import buildClassName from '../../../util/buildClassName';
 import { getSharedPlaylists } from './shared/musicShared';
 import { MUSIC_LIBRARY_CHANGED_EVENT } from './musicAdded';
+import { coverTone } from './musicFormat';
 import {
   callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
 import { getPlaylists } from './musicPlaylists';
 import { getMusicPrefs } from './musicPrefs';
-import { rememberMusicQuery } from './musicSearchHistory';
+import { parseRecent, rememberMusicItem, rememberMusicQuery } from './musicSearchHistory';
 import { buildSearchLists } from './musicSearchLists';
 import {
   getMusicQuery, openMusicView, requestMusicAdd, setMusicQuery,
 } from './musicView';
+import useMusicData from './useMusicData';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
@@ -45,6 +48,17 @@ type OwnProps = {
 type Filter = 'all' | 'tracks' | 'artists' | 'albums' | 'playlists';
 type Source = 'everywhere' | 'server' | 'catalog';
 
+// Плиток жанров в «Обзоре» (доска `MusicSearch-01`) без каталога; с каталогом — на одну меньше
+const GENRE_TILES = 4;
+const RECENT_GLYPHS = {
+  artist: 'mic',
+  catalogArtist: 'mic',
+  album: 'disc',
+  catalogAlbum: 'disc',
+  track: 'music',
+  playlist: 'list',
+  shared: 'chat',
+} as const;
 const SEARCH_DELAY_MS = 300;
 const FILTERS: Filter[] = ['all', 'tracks', 'artists', 'albums', 'playlists'];
 const FILTER_KEYS = {
@@ -85,6 +99,7 @@ const MusicSearchView = ({
   const [history, setHistory] = useState<string[]>();
   const requestRef = useRef(0);
   const prefs = useDerivedState(getMusicPrefs);
+  const { data: genres } = useMusicData('genres', () => callMusic('parvaneMusicGenres'));
   // «Искать в каталоге» — настройка «для вас»
   const hasCatalog = info.isFetchEnabled && prefs.isCatalogSearch;
 
@@ -175,10 +190,29 @@ const MusicSearchView = ({
     void callMusic('parvaneMusicSearchForget', {}).catch(() => undefined);
   });
   const handleOpen = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const { kind, id } = e.currentTarget.dataset;
-    remember();
+    const {
+      kind, id, title, sub,
+    } = e.currentTarget.dataset;
+    rememberMusicItem({
+      kind: kind as MusicRecentItem['kind'], id: id!, title: title || '', sub,
+    });
     openMusicView({ kind: kind as 'album', id: id! });
   });
+  // «Недавнее»: открыть снова — исполнителя, альбом, плейлист; трек — играть
+  const handleOpenRecent = useLastCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
+    const { item } = parseRecent(e.currentTarget.dataset.entry!);
+    if (!item) return;
+    if (item.kind !== 'track') {
+      openMusicView({ kind: item.kind, id: item.id });
+      return;
+    }
+    const [track] = await callMusic('parvaneMusicTracks', { trackIds: [item.id] }).catch(() => []);
+    if (track) playTracks([track], 0, { source: { kind: 'search', name: track.title } });
+  });
+  const handleOpenGenre = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    openMusicView({ kind: 'genre', id: e.currentTarget.dataset.genre! });
+  });
+  const handleOpenChart = useLastCallback(() => openMusicView({ kind: 'catalogChart' }));
   const handleOpenAlbums = useLastCallback(() => openMusicView({ kind: 'albums' }));
   const handleOpenArtists = useLastCallback(() => openMusicView({ kind: 'artists' }));
   const handleFilterArtists = useLastCallback(() => setFilter('artists'));
@@ -206,7 +240,10 @@ const MusicSearchView = ({
   }, [effective, playlists, shared]);
 
   const handlePlay = useLastCallback((index: number) => {
-    remember();
+    const track = serverTracks[index];
+    rememberMusicItem({
+      kind: 'track', id: track.id, title: track.title, sub: [lang('MusicKindTrack'), track.artist].join(' · '),
+    });
     playTracks(serverTracks, index, { source: { kind: 'search', name: effective } });
   });
   const handleStar = useLastCallback((track: MusicTrack) => {
@@ -221,44 +258,85 @@ const MusicSearchView = ({
     void setTrackStarred(track, isStarred);
   });
 
+  function renderRecent(entry: string) {
+    const { item, query: text } = parseRecent(entry);
+    const glyph = !item ? 'search' : RECENT_GLYPHS[item.kind];
+    return (
+      <div key={entry} className={styles.historyRow}>
+        <button
+          type="button"
+          className={styles.historyMain}
+          data-query={text}
+          data-entry={entry}
+          onClick={item ? handleOpenRecent : handlePickHistory}
+        >
+          {item ? (
+            <MusicCover
+              toneId={item.id}
+              size={46}
+              glyph={glyph}
+              isRound={glyph === 'mic'}
+              className={styles.historyCover}
+            />
+          ) : (
+            <span className={styles.historyIcon}><ParvaneIcon name="search" isSmall /></span>
+          )}
+          <span className={styles.listText}>
+            <span className={styles.listTitle}>{item ? item.title : text}</span>
+            {item?.sub && <span className={styles.listSub}>{item.sub}</span>}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.historyForget}
+          aria-label={lang('MusicForgetQuery', { query: item ? item.title : text! })}
+          data-query={entry}
+          onClick={handleForget}
+        >
+          <ParvaneIcon name="close" isSmall />
+        </button>
+      </div>
+    );
+  }
+
   function renderStart() {
+    // Шесть плиток: жанры, «Новое на сервере», «Чарт каталога» (есть каталог), «Исполнители» (весь список сервера)
+    const tiles = (genres || []).slice(0, hasCatalog ? GENRE_TILES - 1 : GENRE_TILES);
     return (
       <>
         {Boolean(history?.length) && (
           <section className={styles.section}>
             <div className={styles.head}>
-              <h2 className={styles.headTitle}>{lang('MusicRecent')}</h2>
+              <h2 className={styles.headTitle}>{lang('MusicRecentItems')}</h2>
               <button type="button" className={styles.headAction} onClick={handleClearHistory}>
                 {lang('MusicClear')}
               </button>
             </div>
-            <div className={styles.list} data-music-history>
-              {history.map((item) => (
-                <div key={item} className={styles.historyRow}>
-                  <button type="button" className={styles.historyMain} data-query={item} onClick={handlePickHistory}>
-                    <span className={styles.historyIcon}><ParvaneIcon name="search" isSmall /></span>
-                    <span className={styles.listTitle}>{item}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.historyForget}
-                    aria-label={lang('MusicForgetQuery', { query: item })}
-                    data-query={item}
-                    onClick={handleForget}
-                  >
-                    <ParvaneIcon name="close" isSmall />
-                  </button>
-                </div>
-              ))}
-            </div>
+            <div className={styles.list} data-music-history>{history.map(renderRecent)}</div>
           </section>
         )}
         <section className={styles.section}>
           <h2 className={styles.headTitle}>{lang('MusicBrowse')}</h2>
-          <div className={styles.browse}>
+          <div className={styles.browse} data-music-browse-tiles>
+            {tiles.map((genre) => (
+              <button
+                key={genre.name}
+                type="button"
+                className={styles.browseTile}
+                style={`--tile-tone: ${coverTone(genre.name)}`}
+                data-genre={genre.name}
+                onClick={handleOpenGenre}
+              >
+                <span className={styles.browseTitle}>{genre.name}</span>
+                <span className={styles.browseSub}>
+                  {lang('MusicOnServerCount', { count: genre.trackCount }, { pluralValue: genre.trackCount })}
+                </span>
+              </button>
+            ))}
             <button
               type="button"
-              className={buildClassName(styles.browseTile, styles.toneA)}
+              className={styles.browseTile}
+              style={`--tile-tone: ${coverTone('new-on-server')}`}
               onClick={handleOpenAlbums}
             >
               <span className={styles.browseTitle}>{lang('MusicNewOnServer')}</span>
@@ -266,9 +344,23 @@ const MusicSearchView = ({
                 {lang('MusicTracksCount', { count: info.libraryTracks }, { pluralValue: info.libraryTracks })}
               </span>
             </button>
+            {hasCatalog && (
+              <button
+                type="button"
+                className={styles.browseTile}
+                style={`--tile-tone: ${coverTone('catalog-chart')}`}
+                data-music-chart
+                onClick={handleOpenChart}
+              >
+                <span className={styles.browseTitle}>{lang('MusicCatalogChart')}</span>
+                <span className={styles.browseSub}>{lang('MusicCatalogChartShort')}</span>
+              </button>
+            )}
             <button
               type="button"
-              className={buildClassName(styles.browseTile, styles.toneB)}
+              className={styles.browseTile}
+              style={`--tile-tone: ${coverTone('artists')}`}
+              data-music-browse-artists
               onClick={handleOpenArtists}
             >
               <span className={styles.browseTitle}>{lang('MusicArtists')}</span>
@@ -283,6 +375,8 @@ const MusicSearchView = ({
   function renderBest() {
     const { best } = lists;
     if (!best) return undefined;
+    const bestSub = [lang(best.glyph === 'mic' ? 'MusicKindArtist' : 'MusicKindAlbum'), best.sub]
+      .filter(Boolean).join(' · ');
     return (
       <section className={styles.section}>
         <h2 className={styles.headTitle}>{lang('MusicBestResult')}</h2>
@@ -291,6 +385,8 @@ const MusicSearchView = ({
           className={styles.best}
           data-kind={best.kind}
           data-id={best.id}
+          data-title={best.title}
+          data-sub={bestSub}
           data-music-best
           onClick={handleOpen}
         >
@@ -305,10 +401,7 @@ const MusicSearchView = ({
           />
           <span className={styles.bestText}>
             <span className={styles.bestTitle}>{best.title}</span>
-            <span className={styles.bestSub}>
-              {[lang(best.glyph === 'mic' ? 'MusicKindArtist' : 'MusicKindAlbum'), best.sub]
-                .filter(Boolean).join(' · ')}
-            </span>
+            <span className={styles.bestSub}>{bestSub}</span>
           </span>
           <span className={styles.bestPlay} aria-hidden><ParvaneIcon name="play" /></span>
         </button>
@@ -355,6 +448,8 @@ const MusicSearchView = ({
             className={buildClassName(styles.tile, styles.tileRound)}
             data-kind={artist.kind}
             data-id={artist.id}
+            data-title={artist.name}
+            data-sub={lang('MusicKindArtist')}
             onClick={handleOpen}
           >
             <MusicCover
@@ -387,6 +482,8 @@ const MusicSearchView = ({
             className={styles.tile}
             data-kind={album.kind}
             data-id={album.id}
+            data-title={album.title}
+            data-sub={[lang('MusicKindAlbum'), album.artist].join(' · ')}
             onClick={handleOpen}
           >
             <MusicCover
@@ -416,6 +513,8 @@ const MusicSearchView = ({
             className={styles.listRow}
             data-kind={item.kind}
             data-id={item.id}
+            data-title={item.name}
+            data-sub={lang('MusicKindPlaylist')}
             onClick={handleOpen}
           >
             <MusicCover

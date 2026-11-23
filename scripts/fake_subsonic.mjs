@@ -18,8 +18,8 @@ const ARTISTS = [
   { id: 'ar-2', name: 'Kora Mesh' },
 ];
 const ALBUMS = [
-  { id: 'al-1', name: 'Берег', artist: 'Тихий порт', artistId: 'ar-1', year: 2024 },
-  { id: 'al-2', name: 'Static Bloom', artist: 'Kora Mesh', artistId: 'ar-2', year: 2025 },
+  { id: 'al-1', name: 'Берег', artist: 'Тихий порт', artistId: 'ar-1', year: 2024, genre: 'Пост-рок' },
+  { id: 'al-2', name: 'Static Bloom', artist: 'Kora Mesh', artistId: 'ar-2', year: 2025, genre: 'Эмбиент' },
 ];
 const SONGS = [
   { id: 't1', title: 'Северный ветер', albumId: 'al-1', duration: 4 },
@@ -201,6 +201,22 @@ http.createServer((req, res) => {
       return reply(res, {
         album: { ...albumOf(id), song: SONGS.filter((song) => song.albumId === id).map((song) => songOf(song, user)) },
       });
+    // Жанры (обзор поиска): у каждого альбома свой
+    case '/rest/getGenres':
+      return reply(res, {
+        genres: {
+          genre: [...new Set(ALBUMS.map((album) => album.genre || 'Инди'))].map((value) => ({
+            value,
+            songCount: SONGS.filter((song) => (ALBUMS.find((album) => album.id === song.albumId)?.genre || 'Инди') === value).length,
+            albumCount: ALBUMS.filter((album) => (album.genre || 'Инди') === value).length,
+          })),
+        },
+      });
+    case '/rest/getSongsByGenre': {
+      const genre = q.get('genre');
+      const songs = SONGS.filter((song) => (ALBUMS.find((album) => album.id === song.albumId)?.genre || 'Инди') === genre);
+      return reply(res, { songsByGenre: { song: page(songs, q.get('offset'), q.get('count')).map((song) => songOf(song, user)) } });
+    }
     // Все исполнители одним указателем (подсказки исполнителей микса)
     case '/rest/getArtists':
       return reply(res, {

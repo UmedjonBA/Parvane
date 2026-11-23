@@ -65,6 +65,12 @@ export function createMusicCatalogApi(deps: Deps) {
       };
     },
 
+    /** «Чарт каталога» (обзор поиска): популярное в каталоге с пометкой «уже на сервере». */
+    async parvaneMusicCatalogChart(): Promise<MusicCatalogTrack[]> {
+      const reply = await deps.call('music.catalog.chart', {});
+      return list(reply, 'tracks').map(toCatalogTrack);
+    },
+
     /** Исполнитель каталога: альбомы, синглы и сборники, новые первыми. */
     async parvaneMusicCatalogArtist({ ref }: { ref: string }) {
       const reply = await deps.call('music.catalog.artist', { ref });
