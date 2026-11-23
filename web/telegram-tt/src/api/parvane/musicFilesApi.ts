@@ -60,6 +60,68 @@ export type MusicTrashItem = {
   version: number;
 };
 
+export type MusicServerSettings = {
+  perDay: number;
+  quotaBytes: number;
+  uploadMaxBytes: number;
+  hasLinks: boolean;
+  hasUploads: boolean;
+  isOnlyAdminsDelete: boolean;
+  isConfirmAlbumDelete: boolean;
+};
+
+export type MusicScanStatus = { isScanning: boolean; lastScanMs: number; tracks: number };
+
+export type MusicPerson = {
+  address: string;
+  nick: string;
+  isAdmin: boolean;
+  today: number;
+  bytes: number;
+  perDay: number;
+  hasOwnLimit: boolean;
+  isNoCatalog: boolean;
+};
+
+export type MusicServerField = 'per_day' | 'quota_bytes' | 'upload_max_bytes' | 'links' | 'uploads'
+  | 'only_admins_delete' | 'confirm_album_delete';
+
+function toSettings(raw: Json): MusicServerSettings {
+  return {
+    perDay: count(raw, 'per_day'),
+    quotaBytes: count(raw, 'quota_bytes'),
+    uploadMaxBytes: count(raw, 'upload_max_bytes'),
+    hasLinks: Boolean(field(raw, 'links')),
+    hasUploads: Boolean(field(raw, 'uploads')),
+    isOnlyAdminsDelete: Boolean(field(raw, 'only_admins_delete')),
+    isConfirmAlbumDelete: Boolean(field(raw, 'confirm_album_delete')),
+  };
+}
+
+function toScan(raw: Json): MusicScanStatus {
+  return {
+    isScanning: Boolean(field(raw, 'scanning')), lastScanMs: count(raw, 'last_scan_ms'), tracks: count(raw, 'tracks'),
+  };
+}
+
+function toPerson(raw: Json): MusicPerson {
+  return {
+    address: text(raw, 'address'),
+    nick: text(raw, 'nick'),
+    isAdmin: Boolean(field(raw, 'admin')),
+    today: count(raw, 'today'),
+    bytes: count(raw, 'bytes'),
+    perDay: count(raw, 'per_day'),
+    hasOwnLimit: Boolean(field(raw, 'own_limit')),
+    isNoCatalog: Boolean(field(raw, 'no_catalog')),
+  };
+}
+
+function sub(raw: Json, name: string): Json {
+  const value = field(raw, name);
+  return value && typeof value === 'object' ? value as Json : {};
+}
+
 function toTags(raw: Json): MusicTags {
   return {
     title: text(raw, 'title'),
@@ -155,6 +217,59 @@ export function createMusicFilesApi(deps: Deps) {
     async parvaneMusicTrashPurge({ id, isAll }: { id?: string; isAll?: boolean }) {
       await deps.call('music.trash.purge', { id: id || '', all: Boolean(isAll) });
       return true;
+    },
+
+    /** «Музыка на сервере»: настройки, папка, сканирование, дубликаты (читать может каждый, менять — администратор). */
+    async parvaneMusicAdminGet() {
+      const raw = await deps.call('music.admin.get', {});
+      return {
+        settings: toSettings(sub(raw, 'settings')),
+        isAdmin: Boolean(field(raw, 'admin')),
+        libraryDir: text(raw, 'library_dir'),
+        scan: toScan(sub(raw, 'scan')),
+        duplicates: count(raw, 'duplicates'),
+        people: count(raw, 'people'),
+        parallel: count(raw, 'parallel'),
+        isFetchEnabled: Boolean(field(raw, 'fetch_enabled')),
+      };
+    },
+
+    async parvaneMusicAdminSet(
+      { settings, fields }: { settings: Partial<MusicServerSettings>; fields: MusicServerField[] },
+    ) {
+      const raw = await deps.call('music.admin.set', {
+        settings: {
+          per_day: settings.perDay || 0,
+          quota_bytes: settings.quotaBytes || 0,
+          upload_max_bytes: settings.uploadMaxBytes || 0,
+          links: Boolean(settings.hasLinks),
+          uploads: Boolean(settings.hasUploads),
+          only_admins_delete: Boolean(settings.isOnlyAdminsDelete),
+          confirm_album_delete: Boolean(settings.isConfirmAlbumDelete),
+        },
+        fields,
+      });
+      return toSettings(sub(raw, 'settings'));
+    },
+
+    async parvaneMusicAdminPeople(): Promise<MusicPerson[]> {
+      const raw = await deps.call('music.admin.people', {});
+      return list(raw, 'people').map(toPerson);
+    },
+
+    /** Свой лимит человека; `isReset` — снова общий; `isNoCatalog` — только слушать. */
+    async parvaneMusicAdminPersonSet({
+      address, perDay, isReset, isNoCatalog,
+    }: { address: string; perDay?: number; isReset?: boolean; isNoCatalog?: boolean }) {
+      const raw = await deps.call('music.admin.person_set', {
+        address, per_day: perDay || 0, reset: Boolean(isReset), no_catalog: Boolean(isNoCatalog),
+      });
+      return toPerson(sub(raw, 'person'));
+    },
+
+    async parvaneMusicAdminScan() {
+      const raw = await deps.call('music.admin.scan', {});
+      return toScan(sub(raw, 'scan'));
     },
 
     /** «Вставить ссылку» (YouTube, SoundCloud, Bandcamp); `asVersion` — вторая версия трека, что уже на сервере. */

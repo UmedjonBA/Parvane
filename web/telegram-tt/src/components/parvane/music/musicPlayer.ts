@@ -14,6 +14,7 @@ import { engineStatic, loadProtocol } from '../../../api/parvane/v2/engine';
 // «вперемешку», повтор, правка очереди) считает движок (`musicQueue*`, правило MUSIC-1); здесь — элемент
 // `<audio>`, ссылки на поток и память устройства (очередь, недавно прослушанное)
 import { loadOfflineUrl } from './musicOffline';
+import { getMusicPrefs } from './musicPrefs';
 
 // Методы «Музыки»: библиотека и плейлисты (`musicApi.ts`), каталог, история поиска и тексты (`musicCatalogApi.ts`)
 type MusicMethods = ReturnType<typeof createMusicApi> & ReturnType<typeof createMusicCatalogApi>
@@ -140,7 +141,16 @@ function queueCall(name: string, args: Record<string, unknown> = {}) {
 // Мобильная сеть либо режим экономии — перекодированный поток, иначе файл как есть
 function pickQuality(): MusicStreamQuality {
   const connection = (navigator as Navigator & { connection?: { saveData?: boolean; type?: string } }).connection;
-  return connection?.saveData || connection?.type === 'cellular' ? 'opus' : 'original';
+  const prefs = getMusicPrefs();
+  if (connection?.saveData) return 'opus';
+  return connection?.type === 'cellular' ? prefs.cellQuality : prefs.wifiQuality;
+}
+
+/** Громкость с выравниванием (ReplayGain трека): тише громких, громче тихих — но не выше ползунка. */
+function applyVolume(track = getCurrentTrack()) {
+  if (!audio) return;
+  const gainDb = getMusicPrefs().isNormalized ? (track?.replayGainDb || 0) : 0;
+  audio.volume = Math.min(1, Math.max(0, getMusicVolume() * 10 ** (Math.min(gainDb, 0) / 20)));
 }
 
 export function getCurrentTrack(state = getMusicPlayer()) {
@@ -246,6 +256,7 @@ async function loadCurrent(shouldPlay: boolean) {
       // Пока шёл запрос ссылки, выбрали другой трек
       if (loadedTrackId !== track.id) return;
       player.src = url;
+      applyVolume(track);
     } catch {
       setMusicPlayer({ ...getMusicPlayer(), isPlaying: false, hasError: true });
       return;
@@ -356,7 +367,7 @@ export function setMusicVolume(volume: number) {
   const value = Math.min(1, Math.max(0, volume));
   setMusicVolumeSignal(value);
   writeJson(VOLUME_KEY, value);
-  if (audio) audio.volume = value;
+  applyVolume();
 }
 
 export function seekTo(positionSecs: number) {

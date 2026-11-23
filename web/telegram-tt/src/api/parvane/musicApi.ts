@@ -56,6 +56,8 @@ export type MusicTrack = {
   version?: number;
   isCopy?: boolean;
   adder?: string;
+  // Выравнивание громкости (ReplayGain трека), дБ
+  replayGainDb?: number;
 };
 
 export type MusicAlbum = {
@@ -286,6 +288,7 @@ export function toTrack(raw: Json): MusicTrack {
     version: count(raw, 'version') || undefined,
     isCopy: Boolean(field(raw, 'copy')) || undefined,
     adder: text(raw, 'adder') || undefined,
+    replayGainDb: Number(field(raw, 'replay_gain_cdb')) / 100 || undefined,
   };
 }
 
@@ -435,7 +438,7 @@ export function createMusicApi(deps: Deps) {
           libraryAlbums: count(reply, 'library_albums'),
           starredCount: count(reply, 'starred_count'),
           isAdmin: Boolean(field(reply, 'admin')),
-        fetchParallel: count(reply, 'fetch_parallel'),
+          fetchParallel: count(reply, 'fetch_parallel'),
         };
       } catch (err) {
         deps.log(`музыка: сведения не получены: ${String(err)}`);

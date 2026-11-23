@@ -1433,6 +1433,58 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicFavFromCatalog': undefined;
+  'MusicPeopleLimits': undefined;
+  'MusicServerTitle': undefined;
+  'MusicForAdmin': undefined;
+  'MusicForYou': undefined;
+  'MusicForYouTitle': undefined;
+  'MusicQualityOriginal': undefined;
+  'MusicQualityLight': undefined;
+  'MusicSound': undefined;
+  'MusicQuality': undefined;
+  'MusicNormalize': undefined;
+  'MusicCatalogCaps': undefined;
+  'MusicSearchCatalog': undefined;
+  'MusicSearchCatalogHint': undefined;
+  'MusicMixesCaps': undefined;
+  'MusicMixModeTime': undefined;
+  'MusicOnPhone': undefined;
+  'MusicOnComputer': undefined;
+  'MusicOfflineSpace': undefined;
+  'MusicByWifi': undefined;
+  'MusicByCellular': undefined;
+  'MusicServerAdminTitle': undefined;
+  'MusicSourcesCaps': undefined;
+  'MusicSourcesCatalog': undefined;
+  'MusicSourcesCatalogOn': undefined;
+  'MusicSourcesCatalogOff': undefined;
+  'MusicSourcesLinks': undefined;
+  'MusicSourcesUploads': undefined;
+  'MusicLater': undefined;
+  'MusicDefaultLimits': undefined;
+  'MusicTracksPerDay': undefined;
+  'MusicPeopleOwnLimits': undefined;
+  'MusicLibraryCaps': undefined;
+  'MusicFolder': undefined;
+  'MusicScanTitle': undefined;
+  'MusicScanning': undefined;
+  'MusicScanNever': undefined;
+  'MusicScanNow': undefined;
+  'MusicDuplicates': undefined;
+  'MusicTrashDays': undefined;
+  'MusicChangeLimit': undefined;
+  'MusicLimitSpaceGb': undefined;
+  'MusicLimitFileMb': undefined;
+  'MusicPeopleNote': undefined;
+  'MusicAdminRole': undefined;
+  'MusicNoCatalog': undefined;
+  'MusicWhoDeletes': undefined;
+  'MusicOnlyAdmins': undefined;
+  'MusicConfirmAlbumDelete': undefined;
+  'MusicOwnLimit': undefined;
+  'MusicNoCatalogTitle': undefined;
+  'MusicNoCatalogHint': undefined;
   'MusicAddedToFavorites': undefined;
   'MusicOwnFileShort': undefined;
   'MusicExistingStarred': undefined;
@@ -3400,7 +3452,6 @@ export interface LangPair {
   'MusicOfflinePaused': undefined;
   'MusicOfflineProgressLabel': undefined;
   'MusicOfflineQuality': undefined;
-  'MusicQualityOriginal': undefined;
   'MusicQualityOpus': undefined;
   'MusicOfflineRelease': undefined;
   'MusicOfflineRemovePlaylist': undefined;
@@ -5043,6 +5094,32 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'MusicSortBy': {
     'name': V;
+  };
+  'MusicPeopleCount': {
+    'count': V;
+  };
+  'MusicQualityValue': {
+    'wifi': V;
+    'cell': V;
+  };
+  'MusicClearDownloaded': {
+    'size': V;
+  };
+  'MusicUpToPerFile': {
+    'size': V;
+  };
+  'MusicScanLast': {
+    'date': V;
+  };
+  'MusicDuplicatesFound': {
+    'count': V;
+  };
+  'MusicPersonUsage': {
+    'today': V;
+    'size': V;
+  };
+  'MusicCommonLimit': {
+    'count': V;
   };
   'MusicWaitingAhead': {
     'count': V;

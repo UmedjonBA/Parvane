@@ -65,7 +65,7 @@ const MusicLibraryView = ({ info }: OwnProps) => {
     else if (key === 'newPlaylist') openNewPlaylist();
     else if (key === 'dislikes') openMusicView({ kind: 'dislikes' });
     else if (key === 'trash') openMusicView({ kind: 'trash' });
-    else if (key === 'settings') openMusicView({ kind: 'offline' });
+    else if (key === 'settings') openMusicView({ kind: 'settings' });
   });
   const handleOpenAlbum = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     openMusicView({ kind: 'album', id: e.currentTarget.dataset.id! });

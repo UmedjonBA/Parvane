@@ -864,6 +864,12 @@ async function galleryMusic() {
     await page.waitForTimeout(1500);
   });
   await musicBack();
+  await step(page, 'MusicSettings-01', async () => {
+    await music.locator('[data-music-library-more]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-action="settings"]').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-settings="mine"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await musicBack();
   await step(page, 'MusicLibrary-10', async () => {
     await music.locator('[data-music-library-more]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('[data-action="trash"]').click({ timeout: STEP_TIMEOUT_MS });

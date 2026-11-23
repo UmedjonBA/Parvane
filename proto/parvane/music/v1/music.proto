@@ -188,6 +188,8 @@ message Track {
   bool copy = 16;
   // Кто добавил на сервер (ник); пусто — файл лежал в библиотеке до учёта.
   string adder = 17 [(parvane.core.v2.max_len) = 64];
+  // Выравнивание громкости (ReplayGain трека), сотые доли дБ; 0 — нет сведений.
+  sint32 replay_gain_cdb = 18;
 }
 
 message Album {

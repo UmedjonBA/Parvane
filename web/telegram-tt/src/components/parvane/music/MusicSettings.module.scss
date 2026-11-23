@@ -1,0 +1,285 @@
+// Настройки «Музыки» (доски `MusicSettings`, `ZdMusicX-06`): группы капсом, строки 52 px, значения справа
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: -0.75rem;
+}
+
+.columns {
+  display: flex;
+  gap: 2rem;
+}
+
+.column {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  min-width: 0;
+}
+
+.columnTitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.caps {
+  margin: 0 -1rem;
+  padding: 1rem 1rem 0.5rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  font-size: 0.6875rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+
+  background: var(--pv-raised);
+}
+
+.card {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  margin: 0 -1rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+}
+
+.column {
+  gap: 0;
+}
+
+.row {
+  cursor: pointer;
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: 3.25rem;
+  padding: 0.375rem 1rem;
+  border: none;
+  border-top: 1px solid var(--pv-line);
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  &:first-child {
+    border-top: none;
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+div.row {
+  cursor: default;
+}
+
+.text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  min-width: 0;
+}
+
+.label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9375rem;
+}
+
+.text .label {
+  flex: none;
+}
+
+.sub {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.value {
+  overflow: hidden;
+
+  max-width: 50%;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--pv-font-mono, monospace);
+}
+
+.chevron {
+  flex: none;
+  color: var(--pv-muted);
+}
+
+.danger {
+  color: var(--pv-red);
+}
+
+.later {
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.3125rem;
+
+  font-size: 0.6875rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+
+  background: var(--pv-purple);
+}
+
+.pill {
+  cursor: pointer;
+
+  flex: none;
+
+  height: 2.25rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 1.125rem;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+.avatar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+  color: #fff;
+
+  background: var(--pv-aqua);
+}
+
+.note {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.sheetGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.segment {
+  display: flex;
+  gap: 0.25rem;
+
+  padding: 0.1875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.75rem;
+
+  background: var(--pv-bg);
+}
+
+.segmentItem {
+  cursor: pointer;
+
+  flex: 1;
+
+  height: 2.25rem;
+  border: none;
+  border-radius: 0.5625rem;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+
+  background: none;
+}
+
+.segmentOn {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+  background: var(--pv-panel);
+}
+
+.input {
+  height: 2.75rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.625rem;
+
+  font: inherit;
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+  outline: none;
+}
+
+.primary {
+  cursor: pointer;
+
+  height: 3rem;
+  border: none;
+  border-radius: 0.75rem;
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+}
+
+.rootDesk .caps,
+.rootDesk .card {
+  margin: 0;
+}
+
+.rootDesk .card {
+  border: 1px solid var(--pv-line);
+  border-radius: 0.625rem;
+}
+
+.rootDesk .caps {
+  padding: 1rem 0 0.375rem;
+  border: none;
+  background: none;
+}
+
+.rootDesk .columnTitle {
+  margin-bottom: 0.25rem;
+}
+
+@media (max-width: 600px) {
+  .columns {
+    flex-direction: column;
+    gap: 0;
+  }
+}

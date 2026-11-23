@@ -175,6 +175,8 @@ pub fn track_of(v: &Value) -> Option<Track> {
         year: num32(v, "year"),
         bitrate_kbps: num32(v, "bitRate"),
         starred: v.get("starred").is_some_and(|s| !s.is_null()),
+        // OpenSubsonic: `replayGain.trackGain`, дБ
+        replay_gain_cdb: v.get("replayGain").and_then(|g| g.get("trackGain")).and_then(Value::as_f64).filter(|g| g.is_finite() && g.abs() < 60.0).map_or(0, |g| (g * 100.0).round() as i32),
         // Пометки «кто добавил», «[v2]», «копия» — из учёта шарда (`files::annotate`)
         ..Default::default()
     })

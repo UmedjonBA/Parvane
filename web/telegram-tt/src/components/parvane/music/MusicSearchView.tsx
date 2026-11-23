@@ -12,6 +12,7 @@ import {
   callMusic, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
 import { getPlaylists } from './musicPlaylists';
+import { getMusicPrefs } from './musicPrefs';
 import { buildSearchLists } from './musicSearchLists';
 import {
   getMusicQuery, openMusicView, requestMusicAdd, setMusicQuery,
@@ -81,7 +82,9 @@ const MusicSearchView = ({
   const [found, setFound] = useState<MusicSearchFound>();
   const [history, setHistory] = useState<string[]>();
   const requestRef = useRef(0);
-  const hasCatalog = info.isFetchEnabled;
+  const prefs = useDerivedState(getMusicPrefs);
+  // «Искать в каталоге» — настройка «для вас»
+  const hasCatalog = info.isFetchEnabled && prefs.isCatalogSearch;
 
   useLayoutEffect(() => {
     if (isPhone) inputRef.current?.focus();
