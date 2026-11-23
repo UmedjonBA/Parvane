@@ -14,6 +14,7 @@ import {
 } from './musicPlayer';
 import { getPlaylists } from './musicPlaylists';
 import { getMusicPrefs } from './musicPrefs';
+import { rememberMusicQuery } from './musicSearchHistory';
 import { buildSearchLists } from './musicSearchLists';
 import {
   getMusicQuery, openMusicView, requestMusicAdd, setMusicQuery,
@@ -146,10 +147,7 @@ const MusicSearchView = ({
     } : previous));
   });
 
-  const remember = useLastCallback(() => {
-    if (effective.length < 2) return;
-    void callMusic('parvaneMusicSearchRemember', { query: effective }).catch(() => undefined);
-  });
+  const remember = useLastCallback(() => rememberMusicQuery(effective));
 
   const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => setMusicQuery(e.currentTarget.value));
   const handleKeyDown = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {

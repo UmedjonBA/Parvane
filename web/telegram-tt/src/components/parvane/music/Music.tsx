@@ -17,6 +17,7 @@ import {
 } from './musicPlayer';
 import { getIsMusicPlayerOpen } from './musicPlayerView';
 import { refreshPlaylists } from './musicPlaylists';
+import { rememberMusicQuery } from './musicSearchHistory';
 import {
   consumeMusicAddRequest, getIsMusicPage, getMusicAddRequest, getMusicQuery, getMusicTab, getMusicView, goBackMusic,
   openMusicView, openNewPlaylist, openUploadsWith, setMusicQuery,
@@ -167,6 +168,9 @@ const Music = () => {
   const handleDeskQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setMusicQuery(e.currentTarget.value);
     if (view.kind !== 'search') openMusicView({ kind: 'search' }, true);
+  });
+  const handleDeskKeyDown = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') rememberMusicQuery();
   });
   const handleLibraryMore = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -355,6 +359,7 @@ const Music = () => {
                         aria-label={lang('MusicSearchWhat')}
                         data-music-desk-search
                         onChange={handleDeskQuery}
+                        onKeyDown={handleDeskKeyDown}
                       />
                     </div>
                     <span className={styles.deskTopGap} />

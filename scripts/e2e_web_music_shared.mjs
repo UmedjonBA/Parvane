@@ -3,9 +3,9 @@
 // («Позвать», роль «Добавляет»), bob видит приглашение в списке и открывает плейлист (отметка снимается), alice
 // видит «добавил(а) …» у трека bob, меняет его роль на «Слушает» — сервер больше не даёт bob править; alice убирает
 // bob и шлёт плейлист в чат карточкой — bob вступает «Открыть» по ключу из карточки и снова «Добавляет»; «Закрыть
-// для всех» делает плейлист личным. «Найти и скачать»: кнопка по запросу (эталон берёт сервер), ход в процентах и
-// «Отменить», отказ сервиса с причиной словами сервера, «Недавние запросы», экран «Загрузки на сервер». «Загрузить
-// свои файлы»: свой MP3 с тегами уходит на сервер, второй раз — «уже есть в библиотеке».
+// для всех» делает плейлист личным. Трек каталога на сервер: ход в процентах в «Загрузках на сервер» и «Отменить»,
+// отказ сервиса с причиной словами сервера, «Недавние запросы». «Загрузить свои файлы»: свой MP3 с тегами уходит на
+// сервер, второй раз — «уже есть в библиотеке».
 // Запуск: scripts/run_web_music_shared_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -54,9 +54,9 @@ function callApi(page, name, args) {
   }, [name, args]);
 }
 
-// Открыть общий плейлист из навигации (группа «Плейлисты»)
+// Открыть общий плейлист из медиатеки слева
 async function openShared(music, id) {
-  const item = music.locator(`[data-music-nav] [data-shared="${id}"]`);
+  const item = music.locator(`[data-music-nav] [data-item="shared:${id}"]`);
   await item.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   await item.click();
   const page = music.locator(`[data-music-shared="${id}"]`);
@@ -64,17 +64,22 @@ async function openShared(music, id) {
   return page;
 }
 
-// Поиск «Музыки» с запросом
-async function search(music, query) {
+// Поиск «Музыки» (строка поиска компьютера): строка трека каталога
+async function searchCatalog(music, query, ref) {
   await music.locator('[data-music-nav] [data-view="search"]').click();
-  const input = music.locator('[data-music-search] input[type="search"]');
-  await input.fill(query);
-  // Блок перерисовывается после задержки поиска: ждём кнопку именно этого запроса
-  const block = music.locator('[data-music-fetch]');
-  await block.locator('[data-fetch-by-query]').filter({ hasText: query })
-    .or(block.locator('[data-fetch-job]').filter({ hasText: query }))
-    .first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  return block;
+  await music.locator('[data-music-desk-search]').fill(query);
+  const row = music.locator(`[data-catalog-track="${ref}"]`);
+  await row.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  return row;
+}
+
+// «Загрузки на сервер» — через «+ → Вставить ссылку» (поле ссылки там же)
+async function openUploads(page, music) {
+  await page.locator('#FoldersSidebar [data-add-for="music"]').click();
+  await page.getByRole('menuitem', { name: /Paste a link/ }).click();
+  const uploads = music.locator('[data-music-uploads]');
+  await uploads.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  return uploads;
 }
 
 // Небольшой MP3 с тегами ID3v2.3 (название, исполнитель) и кадром звука
@@ -110,7 +115,8 @@ try {
 
   // ── Общий плейлист: окно «Новый плейлист», «Кто видит: Выбранные люди» ──
   const aMusic = await openMusic(a.page);
-  await aMusic.locator('[data-music-nav] [data-music-new-playlist]').click();
+  await a.page.locator('#FoldersSidebar [data-add-for="music"]').click();
+  await a.page.getByRole('menuitem', { name: /New playlist/ }).click();
   const form = a.page.locator('[data-music-new-playlist-form]');
   await form.getByRole('textbox', { name: 'Name' }).fill(SHARED_NAME);
   await form.locator('[data-music-access]').getByRole('button', { name: 'Selected people' }).click();
@@ -141,10 +147,10 @@ try {
 
   // ── bob: приглашение в списке, открыл — отметка снята, добавил трек ──
   const bMusic = await openMusic(b.page);
-  // Приглашение — в группе «Плейлисты» навигации с отметкой «позван»
-  await bMusic.locator(`[data-music-nav] [data-shared="${sharedId}"][data-shared-invited]`)
+  // Приглашение — в медиатеке слева
+  await bMusic.locator(`[data-music-nav] [data-item="shared:${sharedId}"]`)
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await bMusic.locator(`[data-music-nav] [data-shared="${sharedId}"]`).click();
+  await bMusic.locator(`[data-music-nav] [data-item="shared:${sharedId}"]`).click();
   const bPage = bMusic.locator(`[data-music-shared="${sharedId}"][data-role="editor"]`);
   await bPage.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const t4 = { trackId: 't4', title: 'Glass Harbor', artist: 'Kora Mesh', durationSecs: 30 };
@@ -195,47 +201,54 @@ try {
   assert.match(String(closed.error), /NOT_FOUND/, 'общий плейлист удалён у всех');
   console.log('OK: «Закрыть для всех» — треки в личном плейлисте, общий удалён');
 
-  // ── «Найти и скачать «запрос»»: ход в процентах и отмена ──
-  let fetchBlock = await search(aMusic, 'медленный берег');
-  await fetchBlock.getByText('Not on the server').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await fetchBlock.locator('[data-fetch-by-query]').click();
-  const slowJob = fetchBlock.locator('[data-fetch-job][data-fetch-state="downloading"]').first();
-  await slowJob.locator('[data-fetch-percent]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await slowJob.getByText(/The server is downloading · [\d.,]+ of 8[.,]0 MB/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await slowJob.locator('[data-fetch-cancel]').click();
-  await fetchBlock.locator('[data-fetch-by-query]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: «Найти и скачать» по запросу — ход в процентах, отмена');
+  // ── Трек каталога на сервер: ход в процентах в «Загрузках на сервер», отмена ──
+  const slowRow = await searchCatalog(aMusic, 'медленный берег', 'dz:105');
+  await slowRow.locator('[data-catalog-add]').click();
+  await aMusic.locator('[data-catalog-track="dz:105"][data-catalog-state="adding"]')
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  // Идущее скачивание — чип «Добавляем N» сверху; он открывает «Загрузки на сервер»
+  await aMusic.locator('[data-music-uploading="1"]').click();
+  const uploads = aMusic.locator('[data-music-uploads]');
+  // Строка «Сейчас»: «исполнитель · NN%» (доска `MusicUploads`)
+  const slowJob = uploads.locator('[data-fetch-job="downloading"]').filter({ hasText: 'Медленный берег' });
+  await slowJob.getByText(/Тихий порт · \d+%/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  // Кадр «Загрузок на сервер» с задачей для сверки с доской `MusicUploads`
+  if (process.env.PARVANE_E2E_SHOT_DIR) await a.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-uploads-jobs.png` });
+  await slowJob.getByRole('button', { name: 'Cancel download' }).click();
+  await slowJob.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: трек каталога на сервер — ход в процентах в «Загрузках на сервер», отмена');
 
   // ── Отказ сервиса с причиной словами сервера ──
-  fetchBlock = await search(aMusic, 'закрытый берег');
-  await fetchBlock.locator('[data-fetch-by-query]').click();
-  await fetchBlock.getByText('The server cannot download: источник закрыт администратором')
+  const refusedRow = await searchCatalog(aMusic, 'закрытый берег', 'dz:106');
+  await refusedRow.locator('[data-catalog-add]').click();
+  await aMusic.locator('[data-catalog-track="dz:106"][data-catalog-state="failed"]')
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  console.log('OK: причина отказа — словами сервера');
-
-  // ── «Недавние запросы» и «Загрузки на сервер» ──
-  await aMusic.locator('[data-music-search] input[type="search"]').fill('');
-  const recent = aMusic.locator('[data-music-recent]');
-  await recent.getByRole('button', { name: 'закрытый берег', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await recent.getByRole('button', { name: 'медленный берег', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await aMusic.locator('[data-fetch-uploads]').first().click();
-  const uploads = aMusic.locator('[data-music-uploads]');
-  await uploads.locator('[data-fetch-job][data-fetch-state="failed"]').getByText(/The server cannot download/)
+  await aMusic.locator('[data-music-desk-search]').press('Enter');
+  await openUploads(a.page, aMusic);
+  const failedJob = uploads.locator('[data-fetch-job="failed"]');
+  await failedJob.getByText('Тихий порт · источник закрыт администратором')
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Кадр «Загрузок на сервер» с задачами для сверки с доской `ZpMusicX-02`
-  if (process.env.PARVANE_E2E_SHOT_DIR) await a.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-uploads-jobs.png` });
-  await uploads.locator('[data-fetch-job][data-fetch-state="failed"] [data-fetch-remove]').click();
-  await uploads.locator('[data-music-empty="uploads"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: «Недавние запросы» и «Загрузки на сервер» («Убрать»)');
+  await failedJob.getByRole('button', { name: 'Remove' }).click();
+  await failedJob.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: причина отказа — словами сервера; «Убрать»');
+
+  // ── «Недавние запросы»: запросы, по которым что-то сделали ──
+  await aMusic.locator('[data-music-nav] [data-view="search"]').click();
+  await aMusic.locator('[data-music-desk-search]').fill('');
+  const recent = aMusic.locator('[data-music-history]');
+  await recent.locator('[data-query="закрытый берег"]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await recent.locator('[data-query="медленный берег"]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: «Недавние запросы»');
 
   // ── «Загрузить свои файлы»: MP3 с тегами; тот же файл второй раз — «уже есть» ──
+  await openUploads(a.page, aMusic);
   const mp3 = buildMp3('Своя песня', 'Тихий порт');
   await uploads.locator('[data-music-upload-input]').setInputFiles({ name: 'своя.mp3', mimeType: 'audio/mpeg', buffer: mp3 });
-  const ownJob = uploads.locator('[data-fetch-job][data-fetch-state="done"]').filter({ hasText: 'своя.mp3' });
+  const ownJob = uploads.locator('[data-fetch-job="done"]').filter({ hasText: 'своя.mp3' });
   await ownJob.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 3 });
-  await ownJob.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await ownJob.getByRole('button', { name: 'Listen' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await uploads.locator('[data-music-upload-input]').setInputFiles({ name: 'копия.mp3', mimeType: 'audio/mpeg', buffer: mp3 });
-  await uploads.locator('[data-fetch-job][data-fetch-failure="duplicate"]').filter({ hasText: 'копия.mp3' })
+  await uploads.locator('[data-fetch-job="failed"][data-fetch-failure="duplicate"]').filter({ hasText: 'копия.mp3' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   console.log('OK: свой файл загружен на сервер, повтор — «уже есть в библиотеке»');
 
@@ -291,7 +304,7 @@ try {
   console.log('OK: общий плейлист группы — привязка владельцем, участник входит из сведений группы');
 
   sessions.forEach((session) => assertNoPageErrors({ session }));
-  console.log('OK: общие плейлисты, «Найти и скачать» и свои файлы');
+  console.log('OK: общие плейлисты, трек каталога на сервер и свои файлы');
 } catch (error) {
   const shotDir = process.env.PARVANE_E2E_SHOT_DIR || process.env.PARVANE_E2E_BACKEND_LOG_DIR;
   for (const [index, session] of sessions.entries()) {

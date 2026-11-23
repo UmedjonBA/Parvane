@@ -95,7 +95,7 @@ const FILE_TAGS = new Map();
 const PROGRESS = new Map();
 const CANCELLED = new Set();
 const SLOW_BYTES = 8 * 1024 * 1024;
-const SLOW_STEPS = 40;
+const SLOW_STEPS = 120;
 const SLOW_STEP_MS = 500;
 
 function readBody(req, handle) {

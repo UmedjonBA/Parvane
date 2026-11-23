@@ -12,6 +12,7 @@ import {
   cancelFetchJob, catalogKey, getFetchJobs, getJobPercent, retryFetchJob, startFetch,
 } from './fetch/musicFetch';
 import { callMusic, catalogPreviewTrack, playTracks } from './musicPlayer';
+import { rememberMusicQuery } from './musicSearchHistory';
 import { openMusicView } from './musicView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -52,6 +53,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
   const percent = job && getJobPercent(job);
 
   const handleAdd = useLastCallback(async () => {
+    rememberMusicQuery();
     const result = await startFetch(track);
     if (result === 'limit') showNotification({ message: lang('MusicFetchLimit') });
     else if (result === 'duplicate') showNotification({ message: lang('MusicFetchDuplicate') });

@@ -34,6 +34,15 @@ type OwnProps = {
   isPhone?: boolean;
 };
 
+// Причина отказа без слов сервера — по виду отказа
+const FAILURE_KEYS = {
+  notFound: 'MusicFetchNotFoundAnywhere',
+  limit: 'MusicFetchNoSpace',
+  library: 'MusicFetchLibraryPending',
+  format: 'MusicUploadNotAudio',
+  duplicate: 'MusicUploadDuplicate',
+} as const;
+
 const LINK_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(youtube\.com|youtu\.be|soundcloud\.com|bandcamp\.com)\//i;
 const MINUTE_MS = 60_000;
 
@@ -143,7 +152,8 @@ const MusicUploadsView = ({ info, isPhone }: OwnProps) => {
         icon: 'warn' as const,
         tone: styles.iconFailed,
         name,
-        sub: [artist, job.failureDetail || lang('MusicStateFailed')],
+        sub: [artist, job.failureDetail || lang(job.failure && job.failure in FAILURE_KEYS
+          ? FAILURE_KEYS[job.failure as keyof typeof FAILURE_KEYS] : 'MusicStateFailed')],
       };
     }
     if (job.state === 'queued') {
@@ -170,7 +180,12 @@ const MusicUploadsView = ({ info, isPhone }: OwnProps) => {
     }
     const status = renderStatus(job);
     return (
-      <div key={job.jobId} className={styles.row} data-fetch-job={job.state}>
+      <div
+        key={job.jobId}
+        className={styles.row}
+        data-fetch-job={job.state}
+        data-fetch-failure={job.state === 'failed' ? job.failure : undefined}
+      >
         <MusicCover
           coverUrl={job.track.coverUrl}
           toneId={job.track.ref || job.jobId}
