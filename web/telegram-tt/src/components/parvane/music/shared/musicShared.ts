@@ -10,6 +10,7 @@ import { callApi } from '../../../../api/gramjs';
 import {
   actOnPlaylists, addTracksToPlaylist, getPlaylistsStatus, refreshPlaylists,
 } from '../musicPlaylists';
+import { goToMusicView } from '../musicView';
 
 // Parvane (spec 041, MUSIC-3): общие плейлисты на экране — список (свои и открытые всем на сервере), открытый
 // плейлист с треками и участниками, действия. Плейлист хранит сервер и проверяет права; экран перечитывает его
@@ -232,6 +233,15 @@ export async function joinSharedPlaylist(id: string, joinKey: string) {
   const playlist = await callShared('parvaneMusicSharedJoin', { id, joinKey }).catch(() => undefined);
   if (playlist) await afterChange(id, playlist);
   return playlist;
+}
+
+/** Плейлист группы (сведения группы, шапка чата): вступить по ключу из журнала группы, если ещё не участник, и
+ * открыть в «Музыке»; не вышло — `false`. */
+export async function openGroupPlaylist(id: string, joinKey: string) {
+  const isMember = getSharedPlaylists().some((playlist) => playlist.id === id);
+  const joined = isMember ? { id } : await joinSharedPlaylist(id, joinKey);
+  if (joined) goToMusicView({ kind: 'shared', id: joined.id });
+  return Boolean(joined);
 }
 
 /** Ключ вступления для карточки в чате: у владельца выдаётся при первой отправке. */

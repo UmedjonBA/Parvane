@@ -15,7 +15,7 @@ import {
 } from './fetch/musicFetch';
 import { callMusic, catalogPreviewTrack, playTracks } from './musicPlayer';
 import { rememberMusicQuery } from './musicSearchHistory';
-import { openMusicView, setMusicQuery } from './musicView';
+import { openCatalogSend, openMusicView, setMusicQuery } from './musicView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
@@ -104,6 +104,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     else if (action === 'star') void handleFollowUp({ isStar: true });
     else if (action === 'queue') void handleFollowUp({ isQueue: true });
     else if (action === 'playlist') setIsPicking(true);
+    else if (action === 'chat') openCatalogSend(track);
     else if (action === 'first' && job) void moveFetchFirst(job.jobId);
     else if (action === 'cancel' && job) void cancelFetchJob(job.jobId);
     else if (action === 'artist') {
@@ -139,6 +140,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
   ] : [
     { key: 'add', title: lang('MusicAddToServer'), glyph: icon('cloudAdd') },
     ...(track.previewUrl ? [{ key: 'preview', title: lang('MusicListenPreview'), glyph: icon('play') }] : []),
+    { key: 'chat', title: lang('MusicSendToChat'), glyph: icon('send') },
     { key: 'artist', title: lang('MusicGoToArtist'), glyph: icon('mic') },
     ...(track.albumRef ? [{ key: 'album', title: lang('MusicGoToAlbum'), glyph: icon('disc') }] : []),
     { key: 'dislike', title: lang('MusicDislike'), glyph: icon('ban') },

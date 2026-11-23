@@ -19,8 +19,8 @@ import { getIsMusicPlayerOpen } from './musicPlayerView';
 import { refreshPlaylists } from './musicPlaylists';
 import { rememberMusicQuery } from './musicSearchHistory';
 import {
-  consumeMusicAddRequest, getIsMusicPage, getMusicAddRequest, getMusicQuery, getMusicTab, getMusicView, goBackMusic,
-  openMusicView, openNewPlaylist, openUploadsWith, setMusicQuery,
+  consumeMusicAddRequest, getCatalogSend, getIsMusicPage, getMusicAddRequest, getMusicQuery, getMusicTab, getMusicView,
+  goBackMusic, openCatalogSend, openMusicView, openNewPlaylist, openUploadsWith, setMusicQuery,
 } from './musicView';
 
 import useAppLayout from '../../../hooks/useAppLayout';
@@ -160,7 +160,11 @@ const Music = () => {
   const handleTab = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     openMusicView({ kind: e.currentTarget.dataset.value as MusicTab }, true);
   });
-  const handleCloseSend = useLastCallback(() => setSentTrack(undefined));
+  const catalogSend = useDerivedState(getCatalogSend);
+  const handleCloseSend = useLastCallback(() => {
+    setSentTrack(undefined);
+    openCatalogSend(undefined);
+  });
   const handleOpenSearch = useLastCallback(() => {
     openMusicView({ kind: 'search' }, true);
     deskSearchRef.current?.focus();
@@ -385,7 +389,7 @@ const Music = () => {
     >
       {!isOnline && <PvOfflineBar text={lang('PvOfflineMusic')} onRetry={handleRetry} />}
       {renderBody()}
-      <MusicSendDialog track={sentTrack} onClose={handleCloseSend} />
+      <MusicSendDialog track={sentTrack} catalog={catalogSend} onClose={handleCloseSend} />
       <MusicNewPlaylist />
       <MusicFileSheets />
       <MusicMixSettingsSheet />

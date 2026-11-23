@@ -438,6 +438,11 @@ export interface ApiMusicTrackCard {
   title: string;
   artist: string;
   durationSecs: number;
+  // Трек каталога, которого нет на сервере (`trackId` пуст, доска `MusicChat-01`)
+  catalogRef?: string;
+  album?: string;
+  coverUrl?: string;
+  previewUrl?: string;
 }
 
 // Parvane (CLOUD-1): приглашение в совместную папку «Файлов» — карточка с правами и ответом

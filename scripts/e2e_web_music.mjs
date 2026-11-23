@@ -730,7 +730,7 @@ try {
   await page.locator('#LeftColumn .chat-list').getByText('Saved Messages').first().click();
   const card = page.locator('[data-music-track-card="t2"]');
   await visible(card.getByText('Harbor Lights'));
-  await visible(card.getByText('Server music'));
+  await visible(card.getByText('Тихий порт · 0:30'));
   // Телефон: карточка трека во всю ширину ленты, без переполнения (доска `MusicChat`)
   await page.setViewportSize(PHONE);
   await visible(card);
@@ -745,6 +745,29 @@ try {
   await card.getByRole('button', { name: 'Play track', exact: true }).click();
   await waitPlaying(page, 'Harbor Lights', 'playing');
   console.log('OK: трек отправлен в чат карточкой и играет из неё');
+
+  // ── Трек каталога в чат (доска `MusicChat-01`): карточка «каталог» с «Добавить на сервер» ─────
+  const catalogMusic = await openMusic(page);
+  await catalogMusic.locator('[data-music-nav] [data-view="search"]').click();
+  await catalogMusic.locator('[data-music-desk-search]').fill('медленный');
+  const slowCatalog = catalogMusic.locator(`[data-catalog-track="${CATALOG_SLOW}"]`);
+  await visible(slowCatalog);
+  await slowCatalog.locator('[data-music-menu]').click();
+  await page.locator('[role="menu"]:visible').first().getByRole('menuitem', { name: 'Send to chat', exact: true }).click();
+  // Окно «Кому отправить» — то, что на экране (у плеера своё такое же, скрытое)
+  // Окно открывается переходом: выбор до его конца сбрасывается открытием
+  await page.waitForTimeout(800);
+  await page.locator('[data-send-row]:visible').filter({ hasText: 'Saved Messages' }).first()
+    .locator('input[type="checkbox"]').check();
+  await page.locator('[data-send-submit]:visible').click();
+  await visible(page.getByText('Track sent').first());
+  await catalogMusic.locator('[data-music-desk-search]').fill('');
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+  await page.locator('#LeftColumn .chat-list').getByText('Saved Messages').first().click();
+  const catalogCard = page.locator(`[data-music-track-card="${CATALOG_SLOW}"][data-music-catalog-card]`);
+  await visible(catalogCard.getByText('Медленный берег'));
+  await visible(catalogCard.locator('[data-music-card-add]'));
+  console.log('OK: трек каталога отправлен в чат карточкой «каталог» с «Добавить на сервер»');
 
   // ── Плейлист в чат: карточка, «Открыть», «Сохранить к себе», «Слушать» ────
   const backInMusic = await openMusic(page);

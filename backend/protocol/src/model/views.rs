@@ -434,6 +434,11 @@ pub fn content_to_wire(c: &Content) -> Option<Value> {
             put(&mut o, "artist", json!(char_prefix(&t.artist, 600)));
             put(&mut o, "duration_secs", json!(t.duration_secs));
             put(&mut o, "text", json!(char_prefix(&t.text, 600)));
+            // Трек каталога (`track_id` пуст): ссылка каталога, альбом, обложка, отрывок
+            put(&mut o, "catalog_ref", json!(t.catalog_ref));
+            put(&mut o, "album", json!(char_prefix(&t.album, 600)));
+            put(&mut o, "cover_url", json!(t.cover_url));
+            put(&mut o, "preview_url", json!(t.preview_url));
             o
         }
         // PLAYLIST-1: плейлист — название и треки по порядку; трек без id не показывается
@@ -811,7 +816,7 @@ pub fn wire_to_content_json(c: &Map<String, Value>, reply_to: Option<&str>) -> R
             let mut t = Map::new();
             set(&mut t, "track_id", c.get("track_id"));
             set(&mut t, "server", c.get("track_server"));
-            for k in ["title", "artist", "duration_secs", "text"] {
+            for k in ["title", "artist", "duration_secs", "text", "catalog_ref", "album", "cover_url", "preview_url"] {
                 set(&mut t, k, c.get(k));
             }
             ("music_track", Value::Object(t))
@@ -1381,6 +1386,20 @@ mod tests {
         let body = wire_to_body(wire.as_object().unwrap(), &|_| true).unwrap();
         let Some(view_body::Kind::Text(text)) = body.kind else { panic!("не текст") };
         assert_eq!(text.text, "Lampa — Ночной автобус");
+    }
+
+    /// Трек каталога (доска `MusicChat-01`): без id трека, со ссылкой каталога, альбомом, обложкой и отрывком.
+    #[test]
+    fn music_catalog_track_roundtrip() {
+        let wire = json!({
+            "kind": "music_track", "track_id": "", "track_server": "music.example", "title": "Терминал", "artist": "Кассета",
+            "duration_secs": 200, "text": "Кассета — Терминал", "catalog_ref": "dz:101", "album": "Лента",
+            "cover_url": "https://e-cdns-images.dzcdn.net/c.jpg", "preview_url": "https://cdns-preview-1.dzcdn.net/p.mp3",
+        });
+        let content = wire_to_content(wire.as_object().unwrap(), None).unwrap();
+        let Some(content::Kind::MusicTrack(t)) = &content.kind else { panic!("не трек: {content:?}") };
+        assert_eq!((t.catalog_ref.as_str(), t.album.as_str()), ("dz:101", "Лента"));
+        assert_eq!(content_to_wire(&content).unwrap(), wire);
     }
 
     /// PLAYLIST-1: плейлист проходит туда и обратно с порядком треков; клиент без раздела получает текст.

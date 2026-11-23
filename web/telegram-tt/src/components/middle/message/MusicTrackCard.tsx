@@ -1,14 +1,16 @@
 import {
   memo, useEffect, useMemo, useState,
 } from '../../../lib/teact/teact';
+import { getActions } from '../../../global';
 
-import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicCatalogTrack, MusicTrack } from '../../../api/parvane/musicApi';
 import type { ApiMusicTrackCard } from '../../../api/types';
 
 import buildClassName from '../../../util/buildClassName';
+import { startFetch } from '../../parvane/music/fetch/musicFetch';
 import { formatTrackTime } from '../../parvane/music/musicFormat';
 import {
-  callMusic, getMusicInfo, loadMusicInfo, playTracks,
+  callMusic, catalogPreviewTrack, getMusicInfo, loadMusicInfo, playTracks,
 } from '../../parvane/music/musicPlayer';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -17,11 +19,10 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useModuleGate from '../../../hooks/useModuleGate';
 
 import Icon from '../../common/icons/Icon';
-import ParvaneIcon from '../../main/ParvaneIcon';
+import MusicCover from '../../parvane/music/MusicCover';
 import MusicOfflineButton from '../../parvane/music/MusicOfflineButton';
 import PvModuleOff from '../../parvane/notes/PvModuleOff';
 
-import kit from '../../parvane/notes/PvKit.module.scss';
 import styles from './MusicTrackCard.module.scss';
 
 type OwnProps = {
@@ -31,6 +32,7 @@ type OwnProps = {
 // Parvane (TRACK-1): трек «Музыки» в чате — карточка с названием и исполнителем. Играет из библиотеки своего
 // сервера: байтов трека в сообщении нет. Трек чужого сервера либо убранный из библиотеки только показывается
 const MusicTrackCard = ({ track }: OwnProps) => {
+  const { showNotification } = getActions();
   const lang = useLang();
   const gate = useModuleGate('music');
   const [problem, setProblem] = useState<'missing' | 'failed'>();
@@ -81,15 +83,60 @@ const MusicTrackCard = ({ track }: OwnProps) => {
     });
   });
 
+  // Трек каталога (доска `MusicChat-01`): «Слушать из сети» — отрывок каталога, «Добавить на сервер» — скачать
+  const catalogTrack = useMemo<MusicCatalogTrack | undefined>(() => (track.catalogRef ? {
+    artist: track.artist,
+    title: track.title,
+    album: track.album || '',
+    durationSecs: track.durationSecs,
+    year: 0,
+    ref: track.catalogRef,
+    coverUrl: track.coverUrl,
+    previewUrl: track.previewUrl,
+  } : undefined), [track]);
+  const handleListenCatalog = useLastCallback(() => {
+    if (catalogTrack?.previewUrl) playTracks([catalogPreviewTrack(catalogTrack)], 0, { source: { kind: 'chat' } });
+  });
+  const handleAddCatalog = useLastCallback(async () => {
+    if (!catalogTrack) return;
+    const result = await startFetch(catalogTrack);
+    const key = result === 'ok' ? 'MusicFetchStarted'
+      : result === 'limit' ? 'MusicFetchLimit' : 'MusicFetchFailedShort';
+    showNotification({ message: lang(key) });
+  });
+  const isCatalog = Boolean(catalogTrack);
+  const canListenCatalog = Boolean(isCatalog && catalogTrack?.previewUrl && info?.isEnabled && isMusicOn);
+  const canAddCatalog = Boolean(isCatalog && info?.isFetchEnabled && isMusicOn);
+  const isPlayable = isCatalog ? canListenCatalog : canPlay || gate.canEnable;
+
   return (
-    <div className={styles.root} data-music-track-card={track.trackId}>
+    <div
+      className={styles.root}
+      data-music-track-card={track.trackId || track.catalogRef}
+      data-music-catalog-card={isCatalog || undefined}
+    >
       <div className={styles.head}>
-        {canPlay || gate.canEnable ? (
+        <MusicCover
+          coverUrl={track.coverUrl}
+          toneId={track.trackId || track.catalogRef || track.title}
+          size={52}
+          className={buildClassName(styles.cover, isCatalog && styles.coverCatalog)}
+        />
+        <div className={styles.titles}>
+          <div className={styles.title}>{track.title}</div>
+          <div className={styles.artist}>
+            {isCatalog && <span className={styles.tag}>{lang('MusicInCatalogShort')}</span>}
+            {[track.artist, !isCatalog && track.durationSecs ? formatTrackTime(track.durationSecs) : undefined]
+              .filter(Boolean).join(' · ')}
+          </div>
+        </div>
+        {canPlay && !isCatalog && <MusicOfflineButton track={offlineTrack} />}
+        {isPlayable ? (
           <button
             type="button"
             className={styles.play}
             aria-label={lang('MusicTrackCardPlay')}
-            onClick={handlePlayClick}
+            onClick={isCatalog ? handleListenCatalog : handlePlayClick}
           >
             <Icon name="play" />
           </button>
@@ -98,20 +145,22 @@ const MusicTrackCard = ({ track }: OwnProps) => {
             <Icon name="play" />
           </span>
         )}
-        <div className={styles.titles}>
-          <div className={styles.title}>{track.title}</div>
-          {track.artist && <div className={styles.artist}>{track.artist}</div>}
+      </div>
+      {isCatalog && (canListenCatalog || canAddCatalog) && (
+        <div className={styles.actions}>
+          {canListenCatalog && (
+            <button type="button" className={styles.action} onClick={handleListenCatalog}>
+              {lang('MusicListenFromWeb')}
+            </button>
+          )}
+          {canAddCatalog && (
+            <button type="button" className={styles.action} data-music-card-add onClick={handleAddCatalog}>
+              {lang('MusicAddToServer')}
+            </button>
+          )}
         </div>
-        {canPlay && <MusicOfflineButton track={offlineTrack} />}
-      </div>
-      <div className={styles.source}>
-        <ParvaneIcon name="music" isSmall className={styles.sourceIcon} />
-        <span>
-          {`${lang('MusicTrackCardLabel')} · `}
-          <span className={kit.mono}>{formatTrackTime(track.durationSecs)}</span>
-        </span>
-      </div>
-      {isOwnServer === false && (
+      )}
+      {isOwnServer === false && !isCatalog && (
         <p className={styles.note}>{lang('MusicTrackCardOtherServer', { server: track.server })}</p>
       )}
       {problem && (

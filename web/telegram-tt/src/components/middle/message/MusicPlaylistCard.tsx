@@ -92,6 +92,41 @@ const MusicPlaylistCard = ({ playlist }: OwnProps) => {
   });
 
   const isActionable = canPlay || gate.canEnable;
+  // Общий плейлист (доска `MusicChat-01`): строкой — обложка, название, «общий плейлист · N треков», шеврон
+  if (playlist.sharedId) {
+    return (
+      <div className={styles.root} data-music-playlist-card={playlist.name} data-music-shared-card={playlist.sharedId}>
+        <button type="button" className={styles.compact} onClick={handleOpenClick}>
+          <span className={styles.cover} style={`--cover-tone: ${coverTone(playlist.name)}`}>
+            <ParvaneIcon name="list" />
+          </span>
+          <span className={styles.titles}>
+            <span className={styles.name}>{playlist.name}</span>
+            <span className={styles.label}>
+              {[
+                lang('MusicPlaylistCardShared'),
+                lang('MusicTracksCount', { count }, { pluralValue: count }),
+              ].join(' · ')}
+            </span>
+          </span>
+          <ParvaneIcon name="right" className={styles.chevron} />
+        </button>
+        {problem && (
+          <p className={styles.note} role="status" data-playlist-problem={problem}>
+            {lang(problem === 'shared' ? 'MusicSharedJoinFailed' : 'MusicTrackCardFailed')}
+          </p>
+        )}
+        <PvModuleOff
+          isOpen={gate.isAsked}
+          module="music"
+          hint={lang('ModuleOffHintPlaylist')}
+          onEnable={gate.enable}
+          onClose={gate.dismiss}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className={styles.root} data-music-playlist-card={playlist.name} data-music-shared-card={playlist.sharedId}>
       <div className={styles.head}>

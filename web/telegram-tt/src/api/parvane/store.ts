@@ -955,15 +955,19 @@ function buildMessageContent(
     }
     // TRACK-1: трек «Музыки» — карточка; играет, если библиотека — на сервере этого аккаунта
     case 'music_track':
-      return content.track_id
+      return content.track_id || content.catalog_ref
         ? {
           musicTrack: {
             mediaType: 'musicTrack',
-            trackId: content.track_id,
+            trackId: content.track_id || '',
             server: content.track_server || '',
             title: content.title || '',
             artist: content.artist || '',
             durationSecs: content.duration_secs || 0,
+            catalogRef: content.catalog_ref || undefined,
+            album: content.album || undefined,
+            coverUrl: content.cover_url || undefined,
+            previewUrl: content.preview_url || undefined,
           },
         }
         : { text: { text: content.text || `🎵 ${content.title || ''}` } };

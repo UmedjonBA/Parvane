@@ -152,6 +152,11 @@ export type WireMessageContent = {
   track_id?: string;
   track_server?: string;
   artist?: string;
+  // Трек каталога (доска `MusicChat-01`): ссылка каталога, альбом, обложка, отрывок 30 с
+  catalog_ref?: string;
+  album?: string;
+  cover_url?: string;
+  preview_url?: string;
   // kind=music_playlist (spec 041 C4, PLAYLIST-1): плейлист — `name`, домен сервера библиотеки (`track_server`),
   // треки по порядку; `text` — для клиентов без «Музыки»
   playlist_tracks?: WirePlaylistTrack[];

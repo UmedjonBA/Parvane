@@ -1866,7 +1866,6 @@
 "MusicTrackSent" = "Track sent";
 "MusicTrackNotSent" = "Could not send the track";
 "MusicTrackSummary" = "Track: {title}";
-"MusicTrackCardLabel" = "Server music";
 "MusicTrackCardPlay" = "Play track";
 "MusicTrackCardMissing" = "This track is no longer in the server library";
 "MusicTrackCardFailed" = "Could not start the track. Try again";
@@ -1969,6 +1968,9 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicGroupPlaylistOpen" = "Group playlist";
+"MusicListenFromWeb" = "Listen from the web";
+"MusicFetchStarted" = "Adding to the server — see “Uploads to the server”";
 "MusicArtistFavorite" = "Add to favorite artists";
 "MusicArtistUnfavorite" = "Remove from favorite artists";
 "MusicReleaseAlbums" = "Albums";

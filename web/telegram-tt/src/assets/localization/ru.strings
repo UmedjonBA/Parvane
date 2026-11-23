@@ -1608,7 +1608,6 @@
 "MusicTrackSent" = "Трек отправлен";
 "MusicTrackNotSent" = "Не удалось отправить трек";
 "MusicTrackSummary" = "Трек: {title}";
-"MusicTrackCardLabel" = "Музыка сервера";
 "MusicTrackCardPlay" = "Играть трек";
 "MusicTrackCardMissing" = "Этого трека больше нет в библиотеке сервера";
 "MusicTrackCardFailed" = "Не удалось включить трек. Попробуйте ещё раз";
@@ -1713,6 +1712,9 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicGroupPlaylistOpen" = "Плейлист группы";
+"MusicListenFromWeb" = "Слушать из сети";
+"MusicFetchStarted" = "Добавляем на сервер — появится в «Загрузках на сервер»";
 "MusicArtistFavorite" = "В любимые исполнители";
 "MusicArtistUnfavorite" = "Убрать из любимых исполнителей";
 "MusicReleaseAlbums" = "Альбомы";

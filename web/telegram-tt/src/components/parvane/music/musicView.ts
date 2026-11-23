@@ -1,4 +1,4 @@
-import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicCatalogTrack, MusicTrack } from '../../../api/parvane/musicApi';
 
 import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
 import { setParvaneSection } from '../../../util/parvaneSection';
@@ -112,4 +112,13 @@ export function openNewPlaylist(track?: MusicTrack) {
 
 export function closeNewPlaylist() {
   setNewPlaylist(undefined);
+}
+
+// «Отправить в чат» трека каталога (доска `MusicChat-01`): окно «Кому отправить» одно на модуль
+const [getCatalogSend, setCatalogSend] = createSignal<MusicCatalogTrack | undefined>(undefined);
+
+export { getCatalogSend };
+
+export function openCatalogSend(track: MusicCatalogTrack | undefined) {
+  setCatalogSend(track);
 }

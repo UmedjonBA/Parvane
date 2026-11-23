@@ -1342,7 +1342,6 @@ export interface LangPair {
   'MusicSendToChat': undefined;
   'MusicTrackSent': undefined;
   'MusicTrackNotSent': undefined;
-  'MusicTrackCardLabel': undefined;
   'MusicTrackCardPlay': undefined;
   'MusicTrackCardMissing': undefined;
   'MusicTrackCardFailed': undefined;
@@ -1431,6 +1430,9 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicGroupPlaylistOpen': undefined;
+  'MusicListenFromWeb': undefined;
+  'MusicFetchStarted': undefined;
   'MusicArtistFavorite': undefined;
   'MusicArtistUnfavorite': undefined;
   'MusicReleaseAlbums': undefined;

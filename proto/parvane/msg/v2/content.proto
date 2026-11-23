@@ -482,6 +482,12 @@ message MusicTrack {
   uint32 duration_secs = 5;
   // «Исполнитель — название» для клиентов без «Музыки».
   string text = 6 [(parvane.core.v2.max_len) = 600];
+  // Трек каталога, которого нет на сервере (`track_id` пуст): ссылка каталога (`dz:<id>`), альбом, обложка и отрывок
+  // 30 с — карточка «каталог» со «Слушать из сети» и «Добавить на сервер» (макет «Музыки» 23 ноя, доска `MusicChat-01`).
+  string catalog_ref = 7 [(parvane.core.v2.max_len) = 64];
+  string album = 8 [(parvane.core.v2.max_len) = 600];
+  string cover_url = 9 [(parvane.core.v2.max_len) = 512];
+  string preview_url = 10 [(parvane.core.v2.max_len) = 512];
 }
 
 // Плейлист в чат (spec 041 C4, PLAYLIST-1): снимок плейлиста отправителя — название и треки по порядку. Байтов треков

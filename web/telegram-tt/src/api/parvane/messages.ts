@@ -181,6 +181,7 @@ const V2_GROUP_PREFIX = 'v2g:';
 // TRACK-1: содержимое карточки трека; `text` — «исполнитель — название» для клиентов без «Музыки»
 function musicTrackContent(track: {
   trackId: string; server: string; title: string; artist: string; durationSecs: number;
+  catalogRef?: string; album?: string; coverUrl?: string; previewUrl?: string;
 }): WireMessageContent {
   return {
     kind: 'music_track',
@@ -190,6 +191,10 @@ function musicTrackContent(track: {
     artist: track.artist.slice(0, MUSIC_LABEL_MAX),
     duration_secs: track.durationSecs,
     text: `🎵 ${[track.artist, track.title].filter(Boolean).join(' — ')}`.slice(0, MUSIC_LABEL_MAX),
+    catalog_ref: track.catalogRef,
+    album: track.album?.slice(0, MUSIC_LABEL_MAX),
+    cover_url: track.coverUrl,
+    preview_url: track.previewUrl,
   };
 }
 
@@ -1970,11 +1975,15 @@ export function createMessageController(deps: MessageDependencies) {
     // Трек «Музыки» в чат (TRACK-1): карточка трека библиотеки своего сервера, байтов трека сообщение не несёт
     async parvaneSendMusicTrack({ chatId, track }: {
       chatId: string;
-      track: { id: string; title: string; artist: string; durationSecs: number };
+      track: {
+        id: string; title: string; artist: string; durationSecs: number;
+        // Трек каталога (доска `MusicChat-01`): без id, со ссылкой каталога
+        catalogRef?: string; album?: string; coverUrl?: string; previewUrl?: string;
+      };
     }) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(chatId);
-      if (!toAddress || !track.id) return false;
+      if (!toAddress || !(track.id || track.catalogRef)) return false;
       const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
       const uuid = newMessageId();
       const content: WireMessageContent = {
@@ -1984,6 +1993,10 @@ export function createMessageController(deps: MessageDependencies) {
           title: track.title,
           artist: track.artist,
           durationSecs: track.durationSecs,
+          catalogRef: track.catalogRef,
+          album: track.album,
+          coverUrl: track.coverUrl,
+          previewUrl: track.previewUrl,
         }),
         ttl_secs: ttlSecs || undefined,
       };

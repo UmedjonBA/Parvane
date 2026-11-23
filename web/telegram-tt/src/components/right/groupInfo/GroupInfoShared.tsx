@@ -12,9 +12,8 @@ import { callApi } from '../../../api/gramjs';
 import {
   getCloudData, getContainer, getNodes, loadCloud, setCloudPlace,
 } from '../../parvane/cloud/cloudStore';
-import { goToMusicView } from '../../parvane/music/musicView';
 import {
-  ensureJoinKey, getSharedPlaylists, joinSharedPlaylist, refreshSharedPlaylists,
+  ensureJoinKey, getSharedPlaylists, openGroupPlaylist, refreshSharedPlaylists,
 } from '../../parvane/music/shared/musicShared';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -91,13 +90,9 @@ const GroupInfoShared = ({
       setPicker('playlist');
       return;
     }
-    const isMember = playlists.some(({ id }) => id === playlistId);
-    const joined = isMember ? { id: playlistId } : await joinSharedPlaylist(playlistId, shared?.playlistKey || '');
-    if (!joined) {
+    if (!await openGroupPlaylist(playlistId, shared?.playlistKey || '')) {
       showNotification({ message: lang('ParvaneGroupSharedFailed') });
-      return;
     }
-    goToMusicView({ kind: 'shared', id: joined.id });
   });
 
   const closePicker = useLastCallback(() => setPicker(undefined));

@@ -188,7 +188,8 @@ try {
   await b.page.locator('#LeftColumn .chat-list').getByText(alice.split('@')[0]).first().click();
   const card = b.page.locator(`[data-music-shared-card="${sharedId}"]`);
   await card.getByText('Shared playlist').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
-  await card.getByRole('button', { name: 'Open', exact: true }).click();
+  // Общий плейлист строкой (доска `MusicChat-01`): нажатие открывает его
+  await card.getByRole('button').first().click();
   await b.page.locator(`#ParvaneMusic [data-music-shared="${sharedId}"][data-role="editor"]`)
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   console.log('OK: плейлист чата — bob вступил по карточке и снова «Добавляет»');

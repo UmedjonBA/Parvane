@@ -1,7 +1,7 @@
 import { memo, useMemo } from '../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../global';
 
-import type { MusicPlaylist, MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicCatalogTrack, MusicPlaylist, MusicTrack } from '../../../api/parvane/musicApi';
 import type { PlaylistShareTrack } from '../../../api/parvane/musicPlaylistContent';
 import type { SendPreview } from '../../main/SendRecipientScreen';
 
@@ -14,6 +14,8 @@ import SendRecipientScreen from '../../main/SendRecipientScreen';
 
 type OwnProps = {
   track?: MusicTrack;
+  // Трек каталога (доска `MusicChat-01`): уходит карточкой «каталог»
+  catalog?: MusicCatalogTrack;
   playlist?: MusicPlaylist;
   onClose: NoneToVoidFunction;
 };
@@ -24,7 +26,10 @@ type OwnProps = {
 type SendMusic = {
   (name: 'parvaneSendMusicTrack', args: {
     chatId: string;
-    track: { id: string; title: string; artist: string; durationSecs: number };
+    track: {
+      id: string; title: string; artist: string; durationSecs: number;
+      catalogRef?: string; album?: string; coverUrl?: string; previewUrl?: string;
+    };
   }): Promise<boolean | undefined>;
   (name: 'parvaneSendMusicPlaylist', args: {
     chatId: string;
@@ -35,7 +40,9 @@ type SendMusic = {
 const callSend = callApi as unknown as SendMusic;
 const callText = callApi as unknown as (name: 'sendMessage', args: { chat: unknown; text: string }) => Promise<unknown>;
 
-const MusicSendDialog = ({ track, playlist, onClose }: OwnProps) => {
+const MusicSendDialog = ({
+  track, catalog, playlist, onClose,
+}: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
 
@@ -43,8 +50,9 @@ const MusicSendDialog = ({ track, playlist, onClose }: OwnProps) => {
     if (playlist) {
       return { title: playlist.name, subtitle: lang('MusicSendPlaylistPreview', { count: playlist.items.length }) };
     }
-    return track && { title: track.title, subtitle: lang('MusicSendTrackPreview', { artist: track.artist }) };
-  }, [track, playlist, lang]);
+    const shown = track || catalog;
+    return shown && { title: shown.title, subtitle: lang('MusicSendTrackPreview', { artist: shown.artist }) };
+  }, [track, catalog, playlist, lang]);
 
   const handleSend = useLastCallback((chatIds: string[], caption: string) => {
     onClose();
@@ -61,11 +69,19 @@ const MusicSendDialog = ({ track, playlist, onClose }: OwnProps) => {
       sendPlaylist(chatId, playlist);
       return;
     }
-    const sent = track!;
     void callSend('parvaneSendMusicTrack', {
       chatId,
-      track: {
-        id: sent.id, title: sent.title, artist: sent.artist, durationSecs: sent.durationSecs,
+      track: catalog ? {
+        id: '',
+        title: catalog.title,
+        artist: catalog.artist,
+        durationSecs: catalog.durationSecs,
+        catalogRef: catalog.ref,
+        album: catalog.album,
+        coverUrl: catalog.coverUrl,
+        previewUrl: catalog.previewUrl,
+      } : {
+        id: track!.id, title: track!.title, artist: track!.artist, durationSecs: track!.durationSecs,
       },
     }).then((isSent) => {
       showNotification({ message: { key: isSent ? 'MusicTrackSent' : 'MusicTrackNotSent' } });
@@ -92,7 +108,7 @@ const MusicSendDialog = ({ track, playlist, onClose }: OwnProps) => {
 
   return (
     <SendRecipientScreen
-      isOpen={Boolean(track || playlist)}
+      isOpen={Boolean(track || catalog || playlist)}
       preview={preview}
       onSend={handleSend}
       onClose={onClose}

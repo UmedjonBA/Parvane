@@ -100,3 +100,27 @@
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
 }
+
+// Общий плейлист строкой (доска `MusicChat-01`)
+.compact {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  color: inherit;
+  text-align: start;
+
+  background: none;
+}
+
+.chevron {
+  flex: none;
+  color: var(--pv-muted);
+}

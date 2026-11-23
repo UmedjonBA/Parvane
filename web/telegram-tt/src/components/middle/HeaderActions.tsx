@@ -36,6 +36,7 @@ import {
 import { ARE_CALLS_SUPPORTED, IS_APP } from '../../util/browser/windowEnvironment';
 import { isUserId } from '../../util/entities/ids';
 import focusNoScroll from '../../util/focusNoScroll';
+import { openGroupPlaylist } from '../parvane/music/shared/musicShared';
 
 import { useHotkeys } from '../../hooks/useHotkeys';
 import useLang from '../../hooks/useLang';
@@ -43,6 +44,7 @@ import useLastCallback from '../../hooks/useLastCallback';
 import useOldLang from '../../hooks/useOldLang';
 
 import Icon from '../common/icons/Icon';
+import ParvaneIcon from '../main/ParvaneIcon';
 import Button from '../ui/Button';
 import DropdownMenu from '../ui/DropdownMenu';
 import MenuItem from '../ui/MenuItem';
@@ -80,6 +82,8 @@ interface StateProps {
   canCreateVoiceChat?: boolean;
   channelMonoforumId?: string;
   pendingJoinRequests?: number;
+  // Parvane: общий плейлист, привязанный к группе
+  groupPlaylist?: { playlistId?: string; playlistKey?: string };
   shouldJoinToSend?: boolean;
   shouldSendJoinRequest?: boolean;
   noAnimation?: boolean;
@@ -115,6 +119,7 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
   canCreateVoiceChat,
   channelMonoforumId,
   pendingJoinRequests,
+  groupPlaylist,
   isRightColumnShown,
   isForForum,
   canExpandActions,
@@ -152,6 +157,11 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
   const menuButtonRef = useRef<HTMLButtonElement>();
   const oldLang = useOldLang();
   const lang = useLang();
+
+  const handleOpenGroupPlaylist = useLastCallback(() => {
+    if (!groupPlaylist?.playlistId) return;
+    void openGroupPlaylist(groupPlaylist.playlistId, groupPlaylist.playlistKey || '');
+  });
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<IAnchorPosition | undefined>(undefined);
@@ -432,6 +442,18 @@ const HeaderActions: FC<OwnProps & StateProps> = ({
               iconName="phone"
             />
           )}
+          {/* Parvane (доска `MusicChat-01`): плейлист группы — значком в шапке */}
+          {groupPlaylist?.playlistId && (
+            <Button
+              round
+              color="translucent"
+              size="smaller"
+              onClick={handleOpenGroupPlaylist}
+              ariaLabel={lang('MusicGroupPlaylistOpen')}
+            >
+              <ParvaneIcon name="music" />
+            </Button>
+          )}
         </>
       )}
       {!isForForum && Boolean(pendingJoinRequests) && (
@@ -581,6 +603,7 @@ export default memo(withGlobal<OwnProps>(
       canEnterVoiceChat,
       canCreateVoiceChat,
       pendingJoinRequests,
+      groupPlaylist: chatFullInfo?.parvaneShared,
       shouldJoinToSend,
       shouldSendJoinRequest,
       noAnimation,
