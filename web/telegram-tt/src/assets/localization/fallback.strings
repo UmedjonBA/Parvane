@@ -1968,6 +1968,9 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicAddingAlbum" = "Adding the album to the server";
+"MusicFetchFailedMany_one" = "{count} track was not added to the library";
+"MusicFetchFailedMany_other" = "{count} tracks were not added to the library";
 "MusicNoticeAdded" = "{user} added “{track}” to the group playlist";
 "MusicNoticeAddedYou" = "You added “{track}” to the group playlist";
 "SendPickerWhom" = "To whom";
@@ -2279,8 +2282,6 @@
 "MusicPickerDone" = "Done";
 "MusicPickerShared_one" = "shared · {count}";
 "MusicPickerShared_other" = "shared · {count}";
-"MusicAddingToServer_one" = "Adding {count} track to the server";
-"MusicAddingToServer_other" = "Adding {count} tracks to the server";
 "MusicOwnedOf" = "{owned} of {total} on the server";
 "MusicAlbumCatalog" = "Album · catalog";
 "MusicAddAllToServer" = "Add everything to the server";
@@ -4685,7 +4686,6 @@
 "MusicFetchUploadsCount_other" = "Uploads · {count}";
 "MusicFetchUploadsTitle" = "Uploads to the server";
 "MusicFetchUploadsEmpty" = "Nothing is being downloaded. Tracks found with “Find and download” and your own files show up here.";
-"MusicFetchDoneNotice" = "“{name}” is in the library";
 "MusicFetchFailedNotice" = "“{name}” was not added to the library";
 "MusicRecentQueries" = "Recent searches";
 "MusicRecentForget" = "Remove “{query}” from recent searches";

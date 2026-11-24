@@ -615,6 +615,8 @@ try {
   await busTrack.getByRole('button').first().click();
   await waitPlaying(page, 'Ночной автобус', 'playing');
   await pause(page);
+  // Готовый трек не объявляется всплывающим оповещением: ход видно на строке и в «Добавляем на сервер»
+  assert.equal(await page.getByText('“Ночной автобус” is in the library').count(), 0, 'оповещение о готовом треке');
   console.log('OK: трек каталога добавлен на сервер без вопросов и играет');
 
   // ── Трек, который уже есть в библиотеке, в каталоге не повторяется ────────

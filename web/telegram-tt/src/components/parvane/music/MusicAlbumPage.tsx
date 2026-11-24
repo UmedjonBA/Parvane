@@ -5,7 +5,9 @@ import type { MusicCatalogTrack, MusicTrack } from '../../../api/parvane/musicAp
 import type { CloudMenuAnchor } from '../cloud/CloudMenu';
 
 import buildClassName from '../../../util/buildClassName';
-import { startFetchAlbum } from './fetch/musicFetch';
+import {
+  catalogKey, getFetchJobs, isJobActive, startFetchAlbum,
+} from './fetch/musicFetch';
 import { openMusicFileSheet } from './musicFiles';
 import { coverTone } from './musicFormat';
 import { saveTracksOffline } from './musicOffline';
@@ -73,6 +75,13 @@ const MusicAlbumPage = ({
   const serverTracks = (data?.rows || []).map((row) => row.track).filter(Boolean);
   const missing = (data?.rows || []).filter((row) => row.catalog).length;
   const total = data?.rows.length || 0;
+  // Ход «Добавить на сервер» альбомом — на самой кнопке: кольцо и «готово / всего» вместо оповещений
+  const jobs = useDerivedState(getFetchJobs);
+  const [isStarting, setIsStarting] = useState(false);
+  const albumKeys = new Set((data?.rows || []).filter((row) => row.catalog).map((row) => catalogKey(row.catalog!)));
+  const albumJobs = jobs.filter((job) => albumKeys.has(catalogKey(job.track)));
+  const activeCount = albumJobs.filter(isJobActive).length;
+  const isAdding = isStarting || activeCount > 0;
 
   const handlePlay = useLastCallback((index: number) => {
     if (serverTracks.length) playTracks(serverTracks, index, { source: { kind: 'album', name: data!.title } });
@@ -99,12 +108,12 @@ const MusicAlbumPage = ({
     }));
   });
   const handleAddAll = useLastCallback(async () => {
-    if (!data?.albumRef) return;
+    if (!data?.albumRef || isAdding) return;
+    setIsStarting(true);
     const result = await startFetchAlbum(data.albumRef);
-    showNotification({
-      message: result === 'ok' ? lang('MusicAddingToServer', { count: missing }, { pluralValue: missing })
-        : result === 'limit' ? lang('MusicFetchLimit') : lang('MusicFetchFailedShort'),
-    });
+    setIsStarting(false);
+    if (result === 'ok') return;
+    showNotification({ message: lang(result === 'limit' ? 'MusicFetchLimit' : 'MusicFetchFailedShort') });
   });
   const handleOpenArtist = useLastCallback(() => {
     if (data?.artistId) openMusicView({ kind: 'artist', id: data.artistId });
@@ -195,12 +204,20 @@ const MusicAlbumPage = ({
         {missing > 0 && Boolean(data.albumRef) && (
           <button
             type="button"
-            className={styles.action}
-            aria-label={lang('MusicAddAllToServer')}
-            data-music-add-album
+            className={buildClassName(styles.action, isAdding && styles.actionBusy)}
+            aria-label={lang(isAdding ? 'MusicAddingAlbum' : 'MusicAddAllToServer')}
+            aria-busy={isAdding}
+            data-music-add-album={isAdding ? 'adding' : 'idle'}
             onClick={handleAddAll}
           >
-            <ParvaneIcon name="cloudAdd" />
+            {isAdding ? (
+              <>
+                <span className={styles.actionRing} aria-hidden />
+                {albumJobs.length > 0 && (
+                  <span className={styles.actionCount}>{`${albumJobs.length - activeCount}/${albumJobs.length}`}</span>
+                )}
+              </>
+            ) : <ParvaneIcon name="cloudAdd" />}
           </button>
         )}
         <button

@@ -98,32 +98,44 @@ export async function refreshFetchJobs() {
   schedulePoll();
 }
 
+// Готовый трек всплывающим оповещением не объявляется: кнопка, которой начали, и строка «Добавляем на сервер»
+// показывают ход сами, а альбом давал двадцать оповещений подряд. Неудачи за один опрос — одним оповещением
 function notifyFinished(jobs: MusicFetchJob[]) {
+  const lang = getTranslationFn();
+  const failed: string[] = [];
+  let doneCount = 0;
   jobs.forEach((job) => {
     if (isJobActive(job)) {
       seenActive.add(job.jobId);
       return;
     }
     if (!seenActive.delete(job.jobId) || job.state === 'choice') return;
-    const lang = getTranslationFn();
     const name = job.uploadName || job.track.title || job.query || '';
-    const text = job.state === 'done'
-      ? lang('MusicFetchDoneNotice', { name })
-      : lang('MusicFetchFailedNotice', { name });
-    getActions().showNotification({ message: text });
     if (job.state === 'done') {
-      // Трек на сервере: «Добавлено мной» и экраны «Музыки» (поиск, альбом) перечитывают библиотеку
-      void refreshOwnAdded();
+      doneCount++;
       void runFollowUp(job);
-      window.dispatchEvent(new Event(MUSIC_LIBRARY_CHANGED_EVENT));
-      // Доска `ZpSystem`: «Parvane · Музыка — Трек скачан на сервер» с «Слушать»
+      // Доска `ZpSystem`: «Parvane · Музыка — Трек скачан на сервер» с «Слушать» (только когда окно скрыто)
       showMusicTrackNotification({
         jobId: job.jobId, trackId: job.trackId, title: name, artist: job.uploadName ? undefined : job.track.artist,
       });
       return;
     }
-    void showSystemNotice(buildNotifyTitle(APP_NAME, lang('MusicFetchUploadsTitle')), text, job.jobId);
+    failed.push(name);
+    void showSystemNotice(buildNotifyTitle(APP_NAME, lang('MusicFetchUploadsTitle')),
+      lang('MusicFetchFailedNotice', { name }), job.jobId);
   });
+  if (doneCount) {
+    // Треки на сервере: «Добавлено мной» и экраны «Музыки» перечитывают библиотеку — один раз на опрос
+    void refreshOwnAdded();
+    window.dispatchEvent(new Event(MUSIC_LIBRARY_CHANGED_EVENT));
+  }
+  if (failed.length === 1) {
+    getActions().showNotification({ message: lang('MusicFetchFailedNotice', { name: failed[0] }) });
+  } else if (failed.length > 1) {
+    getActions().showNotification({
+      message: lang('MusicFetchFailedMany', { count: failed.length }, { pluralValue: failed.length }),
+    });
+  }
 }
 
 // Окно скрыто — системное уведомление (если разрешены); на экране хватает строки в приложении

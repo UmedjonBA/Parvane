@@ -1430,6 +1430,7 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicAddingAlbum': undefined;
   'SendPickerWhom': undefined;
   'MusicSendNote': undefined;
   'MusicNetworkOnly': undefined;
@@ -6430,9 +6431,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicFetchByQuery': {
     'query': V;
   };
-  'MusicFetchDoneNotice': {
-    'name': V;
-  };
   'MusicFetchFailedNotice': {
     'name': V;
   };
@@ -7005,6 +7003,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   'MusicTracksCount': {
     'count': V;
   };
+  'MusicFetchFailedMany': {
+    'count': V;
+  };
   'MusicReleasesCount': {
     'count': V;
   };
@@ -7064,9 +7065,6 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'MusicPickerShared': {
-    'count': V;
-  };
-  'MusicAddingToServer': {
     'count': V;
   };
   'MusicPlaysWeek': {

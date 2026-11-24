@@ -1712,6 +1712,11 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicAddingAlbum" = "Добавляем альбом на сервер";
+"MusicFetchFailedMany_one" = "{count} трек не добавлен в библиотеку";
+"MusicFetchFailedMany_few" = "{count} трека не добавлены в библиотеку";
+"MusicFetchFailedMany_many" = "{count} треков не добавлены в библиотеку";
+"MusicFetchFailedMany_other" = "{count} трека не добавлены в библиотеку";
 "MusicNoticeAdded" = "{user} добавил(а) «{track}» в плейлист группы";
 "MusicNoticeAddedYou" = "Вы добавили «{track}» в плейлист группы";
 "SendPickerWhom" = "Кому";
@@ -2061,10 +2066,6 @@
 "MusicPickerShared_few" = "общий · {count}";
 "MusicPickerShared_many" = "общий · {count}";
 "MusicPickerShared_other" = "общий · {count}";
-"MusicAddingToServer_one" = "Добавляем на сервер {count} трек";
-"MusicAddingToServer_few" = "Добавляем на сервер {count} трека";
-"MusicAddingToServer_many" = "Добавляем на сервер {count} треков";
-"MusicAddingToServer_other" = "Добавляем на сервер {count} трека";
 "MusicOwnedOf" = "{owned} из {total} на сервере";
 "MusicAlbumCatalog" = "Альбом · каталог";
 "MusicAddAllToServer" = "Добавить на сервер всё";
@@ -4639,7 +4640,6 @@
 "MusicFetchUploadsCount_other" = "Загрузки · {count}";
 "MusicFetchUploadsTitle" = "Загрузки на сервер";
 "MusicFetchUploadsEmpty" = "Сейчас ничего не скачивается. Здесь появятся треки из «Найти и скачать» и ваши файлы.";
-"MusicFetchDoneNotice" = "«{name}» в библиотеке";
 "MusicFetchFailedNotice" = "«{name}» не добавлен в библиотеку";
 "MusicRecentQueries" = "Недавние запросы";
 "MusicRecentForget" = "Убрать «{query}» из недавних запросов";
