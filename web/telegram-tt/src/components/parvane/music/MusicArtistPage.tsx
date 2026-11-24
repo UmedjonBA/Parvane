@@ -132,7 +132,10 @@ const MusicArtistPage = ({
     data.isInCatalog ? lang('MusicArtistCatalog') : undefined,
     data.catalogTracks > data.serverTracks
       ? lang('MusicArtistOwnedOf', { owned: data.serverTracks, total: data.catalogTracks })
-      : lang('MusicTracksCount', { count: data.serverTracks }, { pluralValue: data.serverTracks }),
+      // Исполнитель только из каталога: на сервере ничего — число выпусков, а не «0 треков»
+      : !data.serverTracks && data.releases.length
+        ? lang('MusicReleasesCount', { count: data.releases.length }, { pluralValue: data.releases.length })
+        : lang('MusicTracksCount', { count: data.serverTracks }, { pluralValue: data.serverTracks }),
   ].filter(Boolean).join(' · ');
   let trackIndex = -1;
 

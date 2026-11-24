@@ -129,7 +129,9 @@ const VERSION_KINDS: [(&str, &str); 22] = [
     ("8d", "tempo"),
 ];
 const UNCENSORED_MARKS: [&str; 4] = ["без цензуры", "uncensored", "нецензур", "без купюр"];
-const CENSORED_MARKS: [&str; 4] = ["цензур", "clean", "radio edit", "censored"];
+// «без матов» и «запикано» — тоже правка: такую копию русского трека с ненормативной лексикой не берём первой
+const CENSORED_MARKS: [&str; 11] =
+    ["цензур", "clean", "radio edit", "censored", "без мата", "без матов", "запикан", "bleeped", "radio version", "радио версия", "чистая версия"];
 
 /// Название, приведённое для сравнения.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -420,6 +422,17 @@ pub fn pick_reference(query: &str, catalog: &[Query]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+
+    /// «без матов» в названии копии — отредактированная версия (копия YouTube «Всё что мы любим - без матов (Snd)»)
+    #[test]
+    fn no_swearing_copy_counts_as_censored() {
+        for title in ["Всё что мы любим - без матов  (Snd) Jah Khalib", "Трек (без мата)", "Трек [запикано]", "Song (Radio Version)"] {
+            let n = normalize(title);
+            assert!(n.censored && !n.uncensored, "{title}: {n:?}");
+        }
+        assert!(normalize("Трек (без цензуры)").uncensored);
+    }
+
     use super::*;
 
     #[test]

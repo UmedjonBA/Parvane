@@ -10,15 +10,17 @@ import buildClassName from '../../../util/buildClassName';
 import { startFetch } from '../../parvane/music/fetch/musicFetch';
 import { formatTrackTime } from '../../parvane/music/musicFormat';
 import {
-  callMusic, catalogNetworkTrack, getMusicInfo, loadMusicInfo, playTracks,
+  callMusic, catalogNetworkTrack, getMusicInfo, loadMusicInfo, playTracks, setTrackStarred,
 } from '../../parvane/music/musicPlayer';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useModuleGate from '../../../hooks/useModuleGate';
 
 import Icon from '../../common/icons/Icon';
+import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicCover from '../../parvane/music/MusicCover';
 import MusicOfflineButton from '../../parvane/music/MusicOfflineButton';
 import PvModuleOff from '../../parvane/notes/PvModuleOff';
@@ -55,6 +57,21 @@ const MusicTrackCard = ({ track }: OwnProps) => {
     year: 0,
     isStarred: false,
   }), [track]);
+
+  // Компьютер: у карточки ♡ «В любимое» (скачивать на компьютер из чата незачем); телефон — «Скачать на телефон»
+  const { isMobile } = useAppLayout();
+  const isStarShown = canPlay && !isMobile && Boolean(track.trackId) && !track.catalogRef;
+  const [isStarred, setIsStarred] = useState<boolean>();
+  useEffect(() => {
+    if (!isStarShown) return;
+    void callMusic('parvaneMusicTracks', { trackIds: [track.trackId] })
+      .then((found) => setIsStarred(Boolean(found[0]?.isStarred)), () => undefined);
+  }, [isStarShown, track.trackId]);
+  const handleStar = useLastCallback(async () => {
+    const next = !isStarred;
+    setIsStarred(next);
+    if (!await setTrackStarred({ ...offlineTrack, isStarred: !next }, next)) setIsStarred(!next);
+  });
 
   useEffect(() => {
     if (isMusicOn && !getMusicInfo()) void loadMusicInfo().catch(() => undefined);
@@ -132,7 +149,18 @@ const MusicTrackCard = ({ track }: OwnProps) => {
               .filter(Boolean).join(' · ')}
           </div>
         </div>
-        {canPlay && !isCatalog && <MusicOfflineButton track={offlineTrack} />}
+        {isStarShown ? (
+          <button
+            type="button"
+            className={buildClassName(styles.star, isStarred && styles.starOn)}
+            aria-label={lang(isStarred ? 'MusicUnstar' : 'MusicStar')}
+            aria-pressed={Boolean(isStarred)}
+            data-music-card-star
+            onClick={handleStar}
+          >
+            <ParvaneIcon name={isStarred ? 'heart' : 'heartPlus'} isSmall />
+          </button>
+        ) : canPlay && !isCatalog && <MusicOfflineButton track={offlineTrack} />}
         {isPlayable ? (
           <button
             type="button"

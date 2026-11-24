@@ -121,3 +121,31 @@
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
 }
+
+// ♡ «В любимое» на компьютере
+.star {
+  cursor: pointer;
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+
+  color: var(--pv-muted);
+
+  background: transparent;
+
+  &:hover {
+    background: var(--pv-raised);
+  }
+}
+
+.starOn {
+  color: var(--pv-red);
+}

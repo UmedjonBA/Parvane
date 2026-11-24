@@ -236,6 +236,8 @@ const MusicSearchView = ({
   const handleOpenChart = useLastCallback(() => openMusicView({ kind: 'catalogChart' }));
   const handleOpenAlbums = useLastCallback(() => openMusicView({ kind: 'albums' }));
   const handleOpenArtists = useLastCallback(() => openMusicView({ kind: 'artists' }));
+  // «Треки» в «Всё» — первые четыре; «Показать все» — вкладка «Треки» со всем списком и подгрузкой
+  const handleFilterTracks = useLastCallback(() => setFilter('tracks'));
   const handleFilterArtists = useLastCallback(() => setFilter('artists'));
   const handleFilterAlbums = useLastCallback(() => setFilter('albums'));
   const handleLink = useLastCallback(() => requestMusicAdd('link'));
@@ -442,7 +444,10 @@ const MusicSearchView = ({
       .filter(Boolean).join(' · ');
     return (
       <section className={styles.section}>
-        <h2 className={styles.headTitle}>{lang('MusicBestResult')}</h2>
+        {/* Заголовок — той же строкой, что «Треки» рядом: голый `h2` со своими отступами опускал карточку вниз */}
+        <div className={styles.head}>
+          <h2 className={styles.headTitle}>{lang('MusicBestResult')}</h2>
+        </div>
         <button
           type="button"
           className={styles.best}
@@ -675,7 +680,7 @@ const MusicSearchView = ({
           <>
             <div className={styles.top}>
               {renderBest()}
-              {renderSection(lang('MusicFilterTracks'), renderTracks(ALL_TRACKS))}
+              {renderSection(lang('MusicFilterTracks'), renderTracks(ALL_TRACKS), handleFilterTracks)}
             </div>
             {renderSection(lang('MusicArtists'), renderArtists(true), handleFilterArtists)}
             {renderSection(lang('MusicAlbums'), renderAlbums(true), handleFilterAlbums)}

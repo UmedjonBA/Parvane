@@ -776,6 +776,14 @@ try {
   const card = page.locator('[data-music-track-card="t2"]');
   await visible(card.getByText('Harbor Lights'));
   await visible(card.getByText('Тихий порт · 0:30'));
+  // Компьютер: у карточки ♡ «В любимое», а не «Скачать на телефон»
+  assert.equal(await card.locator('[data-music-offline-track]').count(), 0, 'на компьютере у карточки «Скачать на телефон»');
+  const cardStar = card.locator('[data-music-card-star]');
+  const wasStarred = await cardStar.getAttribute('aria-pressed');
+  await cardStar.click();
+  await visible(card.locator(`[data-music-card-star][aria-pressed="${wasStarred === 'true' ? 'false' : 'true'}"]`));
+  await cardStar.click();
+  await visible(card.locator(`[data-music-card-star][aria-pressed="${wasStarred}"]`));
   // Телефон: карточка трека во всю ширину ленты, без переполнения (доска `MusicChat`)
   await page.setViewportSize(PHONE);
   await visible(card);

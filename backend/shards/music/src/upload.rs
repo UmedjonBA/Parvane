@@ -202,6 +202,9 @@ async fn store_file(fetch: &Fetch, job: &Job, mut body: Incoming) -> Result<(Str
 }
 
 async fn finish(fetch: &Fetch, sub: &Subsonic, id: &str, user: &str, path: &str, tags: music_tags::FileTags) {
+    if repair_file_tags(fetch, path).await {
+        let _ = store::mark_upload_checked(&fetch.pool, path, &fix_text(&tags.tags.artist), &fix_text(&tags.tags.title)).await;
+    }
     let query = Query { artist: tags.tags.artist, title: tags.tags.title, album: tags.tags.album, duration_secs: tags.tags.duration_secs, explicit: None, ..Default::default() };
     fetch.update(id, |j| j.query = query.clone());
     match find_uploaded(sub, &nd_user(user), &query, id).await {
@@ -213,6 +216,59 @@ async fn finish(fetch: &Fetch, sub: &Subsonic, id: &str, user: &str, path: &str,
             });
         }
         None => fetch.fail_with(id, pb::FetchFailure::Library, String::new()),
+    }
+}
+
+/// Русские теги в Windows-1251 (ID3 «Latin-1»): музыкальный сервер показал бы «Ýíäøïèëü» — до пересканирования
+/// файл переписывается в UTF-8. Сбой — файл остаётся как был.
+/// `false` — сервис недоступен (проверить в другой раз).
+pub(crate) async fn repair_file_tags(fetch: &Fetch, path: &str) -> bool {
+    let Ok(service) = fetch.service() else { return false };
+    let Ok(v) = service.read_tags(path).await else { return false };
+    let Some(tags) = v.get("tags").and_then(serde_json::Value::as_object) else { return true };
+    let fixed: serde_json::Map<String, serde_json::Value> = ["title", "artist", "album", "album_artist", "genre"]
+        .into_iter()
+        .filter_map(|key| tags.get(key).and_then(serde_json::Value::as_str).and_then(music_tags::repair_cp1251).map(|text| (key.to_string(), text.into())))
+        .collect();
+    if fixed.is_empty() {
+        return true;
+    }
+    match service.write_tags(path, &serde_json::Value::Object(fixed), "", "").await {
+        Ok(_) => {
+            info!("музыка: теги своего файла переписаны из Windows-1251");
+            true
+        }
+        Err(_) => {
+            warn!("музыка: теги своего файла не переписаны");
+            false
+        }
+    }
+}
+
+fn fix_text(text: &str) -> String {
+    music_tags::repair_cp1251(text).unwrap_or_else(|| text.to_string())
+}
+
+/// Свои файлы, загруженные до проверки кодировки: теги в Windows-1251 переписываются (раз на файл).
+pub(crate) async fn repair_uploaded(fetch: &Fetch, sub: &Subsonic) {
+    let mut checked = 0;
+    loop {
+        let rows = match store::unchecked_uploads(&fetch.pool, 20).await {
+            Ok(rows) if !rows.is_empty() => rows,
+            _ => break,
+        };
+        for row in rows {
+            if !repair_file_tags(fetch, &row.path).await {
+                return;
+            }
+            if store::mark_upload_checked(&fetch.pool, &row.path, &fix_text(&row.artist), &fix_text(&row.title)).await.is_err() {
+                return;
+            }
+            checked += 1;
+        }
+    }
+    if checked > 0 {
+        let _ = sub.call(crate::subsonic::SERVICE_USER, "startScan", &[]).await;
     }
 }
 

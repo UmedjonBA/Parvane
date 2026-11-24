@@ -171,6 +171,8 @@ def search(query, offset):
 
 
 ARTIST_TOP_LIMIT = 10
+# Сколько треков поиска смотреть, добирая «Популярное» исполнителя
+ARTIST_SEARCH_LIMIT = 50
 
 
 def artist_page(ref):
@@ -181,7 +183,23 @@ def artist_page(ref):
     albums.sort(key=lambda item: item.get("release_date") or "", reverse=True)
     # «Популярное» исполнителя (доска `XpMusic`): его самые слушаемые треки в каталоге
     top = [track_out(item, item.get("album") or {}) for item in data(f"/artist/{artist_id}/top", limit=ARTIST_TOP_LIMIT)]
+    if len(top) < ARTIST_TOP_LIMIT:
+        top = unique(top + popular_by_search(artist_id, artist.get("name", "")))[:ARTIST_TOP_LIMIT]
     return {"artist": artist_out(artist), "albums": [album_out(item, artist) for item in albums], "top": top}
+
+
+def popular_by_search(artist_id, name):
+    """Добор «Популярного»: у части исполнителей Deezer отдаёт в `/top` один-два трека при десятках выпусков. Треки
+    этого исполнителя из обычного поиска по имени — по убыванию популярности (`rank`)."""
+    if not name:
+        return []
+    try:
+        found = data("/search", q=name, limit=ARTIST_SEARCH_LIMIT)
+    except (OSError, CatalogError):
+        return []
+    own = [item for item in found if (item.get("artist") or {}).get("id") == artist_id]
+    own.sort(key=lambda item: -int(item.get("rank") or 0))
+    return [track_out(item) for item in own]
 
 
 LIVE_WORDS = ("live", "concert", "unplugged", "концерт")

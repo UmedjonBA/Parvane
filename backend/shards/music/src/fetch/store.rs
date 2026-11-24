@@ -73,6 +73,19 @@ pub async fn untagged(pool: &SqlitePool, limit: u32) -> sqlx::Result<Vec<Added>>
         .await
 }
 
+/// Свои загруженные файлы, у которых ещё не проверена кодировка тегов (`tagged` 0; 3 — проверена).
+pub async fn unchecked_uploads(pool: &SqlitePool, limit: u32) -> sqlx::Result<Vec<Added>> {
+    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE tagged = 0 AND sha256 != '' AND deleted_ms = 0 ORDER BY added_ms LIMIT ?")
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+}
+
+/// Кодировка тегов своего файла проверена; исполнитель и название — уже прочитанные правильно.
+pub async fn mark_upload_checked(pool: &SqlitePool, path: &str, artist: &str, title: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE added_tracks SET tagged = 3, artist = ?, title = ? WHERE path = ?").bind(artist).bind(title).bind(path).execute(pool).await.map(|_| ())
+}
+
 /// Отметить, что теги переписаны (`tagged`: 1 — да, 2 — в каталоге не нашёлся). Файл переехал (Opus из WebM) —
 /// новый путь, номер трека узнается заново.
 pub async fn mark_tagged(pool: &SqlitePool, path: &str, new_path: &str, tagged: i64) -> sqlx::Result<()> {

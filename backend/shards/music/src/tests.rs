@@ -649,6 +649,26 @@ async fn backfill_retags_downloads_but_not_uploads() {
 }
 
 #[tokio::test]
+async fn uploaded_windows_1251_tags_are_rewritten_once() {
+    // Свой файл с русскими тегами в Windows-1251: музыкальный сервер показал бы «Ýíäøïèëü» — теги переписываются
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let fetch = ctx.fetch.as_ref().unwrap();
+    let sub = ctx.sub.as_ref().unwrap();
+    fake.file_tags.lock().unwrap().insert("a/own.mp3".into(), json!({"artist": "MiyaGi & Ýíäøïèëü", "title": "Ïîëîâèíà ìîÿ", "album": "Hajime"}));
+    let row = crate::fetch::store::Added {
+        path: "a/own.mp3".into(), adder: "alice@local".into(), bytes: 1, added_ms: 1, track_id: "t9".into(),
+        artist: "MiyaGi & Ýíäøïèëü".into(), title: "Ïîëîâèíà ìîÿ".into(), duration_secs: 215, sha256: "ab".into(),
+    };
+    crate::fetch::store::insert(&fetch.pool, &row).await.unwrap();
+    crate::upload::repair_uploaded(fetch, sub).await;
+    let tags = fake.file_tags.lock().unwrap().get("a/own.mp3").cloned().unwrap();
+    assert_eq!((tags["artist"].as_str(), tags["title"].as_str(), tags["album"].as_str()), (Some("MiyaGi & Эндшпиль"), Some("Половина моя"), Some("Hajime")));
+    let stored: (i64, String, String) = sqlx::query_as("SELECT tagged, artist, title FROM added_tracks WHERE path = 'a/own.mp3'").fetch_one(&fetch.pool).await.unwrap();
+    assert_eq!(stored, (3, "MiyaGi & Эндшпиль".to_string(), "Половина моя".to_string()), "проверен — второй раз не трогается");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn added_list_learns_track_ids_the_scan_missed() {
     // Скачано, но музыкальный сервер не пересканировал вовремя: номера трека в записи нет — список узнаёт его сам и
     // запоминает (иначе трек не сыграть из «Добавлено мной» и не удалить)

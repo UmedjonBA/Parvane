@@ -110,8 +110,43 @@ fn clip(s: &str) -> String {
     out
 }
 
+/// Однобайтовый текст тега. По стандарту — Latin-1, но русские файлы часто записаны в Windows-1251 («Ýíäøïèëü» вместо
+/// «Эндшпиль»): когда больше половины букв лежат в верхней половине таблицы, текст читается как Windows-1251
+/// (у западного текста такие буквы — редкие «é», «ü» среди обычных латинских).
 fn latin1(b: &[u8]) -> String {
+    if looks_cp1251(b) {
+        return b.iter().map(|&c| cp1251_char(c)).collect();
+    }
     b.iter().map(|&c| char::from(c)).collect()
+}
+
+fn looks_cp1251(b: &[u8]) -> bool {
+    let high = b.iter().filter(|&&c| c >= 0xC0 || c == 0xA8 || c == 0xB8).count();
+    let letters = high + b.iter().filter(|c| c.is_ascii_alphabetic()).count();
+    high > 0 && high * 2 > letters
+}
+
+fn cp1251_char(c: u8) -> char {
+    match c {
+        0xC0..=0xFF => char::from_u32(0x0410 + u32::from(c - 0xC0)).unwrap_or('?'),
+        0xA8 => 'Ё',
+        0xB8 => 'ё',
+        0xB9 => '№',
+        0x96 => '–',
+        0x97 => '—',
+        0x85 => '…',
+        0x93 | 0xAB => '«',
+        0x94 | 0xBB => '»',
+        _ => char::from(c),
+    }
+}
+
+/// Текст тега уже прочитан как Latin-1 (`Ýíäøïèëü`, так его покажет и музыкальный сервер): вернуть Windows-1251,
+/// если это она; иначе `None`.
+pub fn repair_cp1251(text: &str) -> Option<String> {
+    let bytes: Option<Vec<u8>> = text.chars().map(|c| u8::try_from(u32::from(c)).ok()).collect();
+    let bytes = bytes?;
+    looks_cp1251(&bytes).then(|| bytes.iter().map(|&c| cp1251_char(c)).collect())
 }
 
 fn utf16(b: &[u8], big: bool) -> String {
@@ -419,6 +454,21 @@ pub fn read_json(head: &[u8], tail: &[u8], file_name: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+
+    /// Русский тег в Windows-1251 (ID3 «Latin-1») читается по-русски; западный с одной «é» — как был.
+    #[test]
+    fn single_byte_tags_in_windows_1251() {
+        let cp1251: Vec<u8> = vec![0xDD, 0xED, 0xE4, 0xF8, 0xEF, 0xE8, 0xEB, 0xFC];
+        assert_eq!(latin1(&cp1251), "Эндшпиль");
+        let mut mixed = b"MiyaGi & ".to_vec();
+        mixed.extend_from_slice(&cp1251);
+        assert_eq!(latin1(&mixed), "MiyaGi & Эндшпиль");
+        assert_eq!(latin1(&[b'C', b'a', b'f', 0xE9]), "Café");
+        assert_eq!(repair_cp1251("Ýíäøïèëü").as_deref(), Some("Эндшпиль"));
+        assert_eq!(repair_cp1251("Эндшпиль"), None);
+        assert_eq!(repair_cp1251("Café"), None);
+    }
+
     use super::*;
 
     fn id3_frame(id: &[u8], text: &str) -> Vec<u8> {

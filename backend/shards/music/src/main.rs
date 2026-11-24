@@ -177,6 +177,7 @@ async fn main() -> Result<()> {
             }
             loop {
                 fetch.backfill_tags(&sub).await;
+                crate::upload::repair_uploaded(&fetch, &sub).await;
                 // Корзина старше 30 дней — стирается
                 fetch.purge_expired().await;
                 tokio::time::sleep(BACKFILL_EVERY).await;
