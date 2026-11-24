@@ -14,6 +14,7 @@ import { canDeleteTrack, deleteLibraryTrack, getOwnAdded } from './musicAdded';
 import { openMusicFileSheet } from './musicFiles';
 import { formatTrackTime } from './musicFormat';
 import { goToMusic } from './musicGoTo';
+import { getMusicMix, loadMusicMix } from './musicMix';
 import {
   getOfflineState, isTrackSaving, removeOffline, saveTracksOffline,
 } from './musicOffline';
@@ -174,6 +175,8 @@ const MusicTrackMenu = ({
   async function dislike(target: { trackId?: string; artist: string; title?: string }) {
     const isDone = await callMusic('parvaneMusicDislike', target).then(() => true, () => false);
     showNotification({ message: lang(isDone ? 'MusicDisliked' : 'MusicPlaylistFailed') });
+    // Отмеченное сразу выпадает из сегодняшнего микса
+    if (isDone && getMusicMix()) void loadMusicMix();
   }
 
   const item = (

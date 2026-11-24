@@ -1854,7 +1854,7 @@
 "ParvaneHealthBlockWater" = "Water";
 "ParvaneHealthBlockWorkouts" = "Workouts";
 "MusicOffline" = "Downloaded";
-"MusicOfflineEmpty" = "Nothing is downloaded yet. Open an album or a playlist and download it to listen without a connection";
+"MusicOfflineEmpty" = "Tracks saved on this device live here and play without the internet. To save one, use ⤓ on an album or playlist, or “Download…” in a track menu";
 "MusicOfflineProgress" = "Downloading: {done} of {total}";
 "MusicOfflineLimit" = "There is no room left for downloads on this device";
 "MusicOfflineFailed" = "Could not download: no connection to the server";

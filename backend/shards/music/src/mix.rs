@@ -204,6 +204,16 @@ async fn today(ctx: &Ctx, sub: &Subsonic, address: &str, r: pb::MixTodayRequest)
         let gone = crate::files::trashed_ids(pool, &ids).await;
         tracks.retain(|t| t.track.as_ref().is_none_or(|x| !gone.contains(&x.id)));
     }
+    // «Не нравится» действует сразу и на уже собранный сегодняшний микс: трек и исполнитель выпадают
+    let (disliked_tracks, disliked_artists) = dislike_sets(address).await?;
+    tracks.retain(|t| {
+        let (id, artist) = match (&t.track, &t.catalog) {
+            (Some(x), _) => (x.id.as_str(), x.artist.as_str()),
+            (None, Some(c)) => (c.r#ref.as_str(), c.artist.as_str()),
+            (None, None) => return true,
+        };
+        !disliked_tracks.contains(id) && !disliked_artists.contains(&music_mix::norm(artist))
+    });
     let mix = pb::Mix { next_ms: next_build_ms(&day, &s), day, built_ms, mode, tracks };
     let is_building = building().lock().map(|b| b.contains(&(address.to_string(), mix.day.clone()))).unwrap_or(false);
     Ok(pb::MixTodayResponse { mix: Some(mix), settings: Some(settings_pb(&s)), building: is_building, needs_artists: false }.encode_to_vec())

@@ -680,3 +680,39 @@
 
   background: none;
 }
+
+// Компьютер: слева обложка с управлением, под ними очередь и сведения; справа — текст песни во всю высоту
+.deskGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.deskGridLyrics {
+  grid-template-columns: minmax(0, 3fr) minmax(18rem, 2fr);
+}
+
+.deskMain {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.deskLyrics {
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+  max-height: calc(100vh - 12rem);
+}
+
+// В сетке компьютера обложка не центруется по высоте экрана: под ней очередь, справа текст
+.screenDesk .deskMain .stage {
+  min-height: 0;
+  padding: 1rem 0 0;
+}
+
+.screenDesk .deskGrid .card {
+  max-width: none;
+}

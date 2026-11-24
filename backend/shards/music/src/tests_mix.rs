@@ -75,6 +75,9 @@ async fn mix_needs_artists_then_builds_from_library_and_related() {
     let _: pb::DislikeSetResponse = call(&ctx, user, "music.dislike.set", pb::DislikeSetRequest { artist: "Соседи".into(), ..Default::default() }).await.unwrap();
     let list: pb::DislikeListResponse = call(&ctx, user, "music.dislike.list", pb::DislikeListRequest {}).await.unwrap();
     assert_eq!((list.items.len(), list.items[0].kind.as_str()), (1, "artist"));
+    // …и сразу выпадает из уже собранного сегодняшнего микса
+    let now: pb::MixTodayResponse = call(&ctx, user, "music.mix.today", pb::MixTodayRequest { tz_offset_min: 180 }).await.unwrap();
+    assert!(!now.mix.unwrap().tracks.iter().any(|t| t.catalog.as_ref().is_some_and(|c| c.artist == "Соседи")), "отмеченный остался в сегодняшнем миксе");
     let _: pb::MixRebuildResponse = call(&ctx, user, "music.mix.rebuild", pb::MixRebuildRequest { tz_offset_min: 180 }).await.unwrap();
     let mut rebuilt = None;
     for _ in 0..50 {

@@ -71,7 +71,7 @@ const MusicQueue = ({ isSheet, onClose, onToPlaylist }: OwnProps) => {
           key={`${track.id}:${position}`}
           track={track}
           index={position}
-          rank={isSheet ? undefined : position - index}
+          rank={isSheet || position === index ? undefined : position - index}
           isCurrent={position === index}
           isPlaying={player.isPlaying}
           columns={isSheet ? undefined : ['album']}

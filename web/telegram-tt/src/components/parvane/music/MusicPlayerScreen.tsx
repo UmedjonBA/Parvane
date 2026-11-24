@@ -122,6 +122,7 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
   const sourceName = source?.name || (source?.kind === 'starred' ? lang('MusicStarred') : track.album);
   const nextId = player.queue.upcoming[player.queue.index + 1];
   const next = nextId ? player.tracksById[nextId] : undefined;
+  const hasUpcoming = Boolean(nextId);
   const tone = coverTone(track.albumId || track.id);
   const lines = lyrics?.lines || [];
   const positionMs = positionSecs * 1000;
@@ -210,6 +211,54 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
     );
   }
 
+  // Обложка, название, управление, «Далее» — общее для телефона и компьютера
+  function renderStage(playing: MusicTrack) {
+    return (
+      <div className={styles.stage}>
+        <MusicCover
+          coverId={playing.coverId}
+          toneId={playing.albumId || playing.id}
+          size={isPhone ? 320 : 300}
+          className={styles.art}
+          isLarge
+        />
+        <div className={styles.side}>
+          <div className={styles.info}>
+            <div className={styles.infoText}>
+              <h2 className={styles.title}>{playing.title}</h2>
+              <button type="button" className={styles.artist} onClick={handleOpenArtist}>
+                {isPhone ? playing.artist : [playing.artist, playing.album].filter(Boolean).join(' · ')}
+              </button>
+            </div>
+            <button
+              type="button"
+              className={buildClassName(styles.star, playing.isStarred && styles.starOn)}
+              aria-label={lang(playing.isStarred ? 'MusicUnstar' : 'MusicStar')}
+              aria-pressed={playing.isStarred}
+              data-music-player-star
+              onClick={handleStar}
+            >
+              <ParvaneIcon name={playing.isStarred ? 'heart' : 'heartPlus'} />
+            </button>
+          </div>
+          <MusicControls isFullScreen />
+          {player.hasError && <span className={styles.error} role="alert">{lang('MusicPlayError')}</span>}
+          {/* Доска `MusicPlayer-05`: трек каталога — только отрывок */}
+          {(playing.previewUrl || playing.isNetwork) && (
+            <div className={styles.previewRow}>
+              <span className={styles.previewNote} data-music-preview={playing.isNetwork ? 'network' : 'preview'}>
+                {lang(playing.isNetworkFallback ? 'MusicNetworkPreviewOnly'
+                  : playing.isNetwork ? 'MusicNetworkOnly' : 'MusicPreviewOnly')}
+              </span>
+              {renderPreviewAction()}
+            </div>
+          )}
+          {renderNext()}
+        </div>
+      </div>
+    );
+  }
+
   function renderScreen() {
     const playing = track!;
     return (
@@ -273,50 +322,27 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
           )}
         </header>
         <div className={styles.body} onScroll={isPhone ? handleScroll : undefined}>
-          <div className={styles.stage}>
-            <MusicCover
-              coverId={playing.coverId}
-              toneId={playing.albumId || playing.id}
-              size={isPhone ? 320 : 300}
-              className={styles.art}
-              isLarge
-            />
-            <div className={styles.side}>
-              <div className={styles.info}>
-                <div className={styles.infoText}>
-                  <h2 className={styles.title}>{playing.title}</h2>
-                  <button type="button" className={styles.artist} onClick={handleOpenArtist}>
-                    {isPhone ? playing.artist : [playing.artist, playing.album].filter(Boolean).join(' · ')}
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  className={buildClassName(styles.star, playing.isStarred && styles.starOn)}
-                  aria-label={lang(playing.isStarred ? 'MusicUnstar' : 'MusicStar')}
-                  aria-pressed={playing.isStarred}
-                  data-music-player-star
-                  onClick={handleStar}
-                >
-                  <ParvaneIcon name={playing.isStarred ? 'heart' : 'heartPlus'} />
-                </button>
+          {isPhone ? (
+            <>
+              {renderStage(playing)}
+              {renderLyrics()}
+              <MusicPlayerAbout track={playing} />
+            </>
+          ) : (
+            // Компьютер: текст песни — справа от обложки; очередь (если в ней что-то есть) — под обложкой
+            <div className={buildClassName(styles.deskGrid, lines.length > 0 && styles.deskGridLyrics)}>
+              <div className={styles.deskMain}>
+                {renderStage(playing)}
+                {hasUpcoming && (
+                  <section className={styles.card} data-music-player-queue>
+                    <MusicQueue onToPlaylist={handleQueueToPlaylist} />
+                  </section>
+                )}
+                <MusicPlayerAbout track={playing} />
               </div>
-              <MusicControls isFullScreen />
-              {player.hasError && <span className={styles.error} role="alert">{lang('MusicPlayError')}</span>}
-              {/* Доска `MusicPlayer-05`: трек каталога — только отрывок */}
-              {(playing.previewUrl || playing.isNetwork) && (
-                <div className={styles.previewRow}>
-                  <span className={styles.previewNote} data-music-preview={playing.isNetwork ? 'network' : 'preview'}>
-                    {lang(playing.isNetworkFallback ? 'MusicNetworkPreviewOnly'
-                      : playing.isNetwork ? 'MusicNetworkOnly' : 'MusicPreviewOnly')}
-                  </span>
-                  {renderPreviewAction()}
-                </div>
-              )}
-              {renderNext()}
+              {lines.length > 0 && <aside className={styles.deskLyrics}>{renderLyrics()}</aside>}
             </div>
-          </div>
-          {renderLyrics()}
-          <MusicPlayerAbout track={playing} />
+          )}
         </div>
         {isQueueOpen && (
           <div className={styles.queueSheet} role="dialog" aria-label={lang('MusicQueue')} data-music-queue-sheet>

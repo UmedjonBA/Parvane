@@ -13,6 +13,7 @@ import {
   addFetchFollowUp, cancelFetchJob, catalogKey, getFetchJobs, getJobPercent, isJobActive, moveFetchFirst,
   retryFetchJob, startFetch,
 } from './fetch/musicFetch';
+import { getMusicMix, loadMusicMix } from './musicMix';
 import {
   callMusic, catalogNetworkTrack, catalogPreviewTrack, getMusicInfo, playTracks,
 } from './musicPlayer';
@@ -38,6 +39,9 @@ type OwnProps = {
   rank?: number;
   // Вторая строка вместо исполнителя (альбом на странице исполнителя)
   sub?: string;
+  // «Микс дня»: подпись строки для сценариев и своё нажатие — играть микс с этого трека
+  mixTag?: string;
+  onListen?: NoneToVoidFunction;
 };
 
 type State = 'catalog' | 'waiting' | 'adding' | 'processing' | 'failed' | 'choice';
@@ -47,7 +51,9 @@ const PHONE_MAX_WIDTH = 925;
 // Parvane (макет «Музыки» 23 ноя, доски `MusicOverview`, `RpMusicA`): трек каталога, которого нет на сервере, —
 // серое название и облачко под ним, справа «Добавить на сервер». Пока добавляется — кольцо (идёт), часики (ждёт
 // очереди), ↻ (теги и обложка), ⚠ с «Повторить» (не удалось). Меню — «Добавить на сервер», переходы, «Не нравится»
-const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
+const MusicCatalogRow = ({
+  track, rank, sub, mixTag, onListen,
+}: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
   const jobs = useDerivedState(getFetchJobs);
@@ -83,6 +89,10 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
   // Нажатие строки — трек целиком потоком из сети («Слушать из сети», доска `MusicPlayer-04`): отрывок 30 с вместо
   // песни раздражал; уверенного файла у источника нет — плеер сам играет отрывок каталога
   const handleListen = useLastCallback(() => {
+    if (onListen) {
+      onListen();
+      return;
+    }
     playTracks([catalogNetworkTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
   });
   // Отрывок 30 с — пунктом меню (доски `RpMusicA-05`, `MusicPlayer-05`)
@@ -122,7 +132,11 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     } else if (action === 'album' && track.albumRef) openMusicView({ kind: 'catalogAlbum', id: track.albumRef });
     else if (action === 'dislike') {
       void callMusic('parvaneMusicDislike', { ref: track.ref, artist: track.artist, title: track.title })
-        .then(() => showNotification({ message: lang('MusicDisliked') }));
+        .then(() => {
+          showNotification({ message: lang('MusicDisliked') });
+          // Отмеченное сразу выпадает из сегодняшнего микса
+          if (getMusicMix()) void loadMusicMix();
+        });
     } else if (action === 'share') {
       copyTextToClipboard(`${track.title} — ${track.artist}`);
       showNotification({ message: lang('MusicShareCopied') });
@@ -164,6 +178,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
       className={buildClassName(styles.track, styles.trackCatalog)}
       data-catalog-track={track.ref || key}
       data-catalog-state={state}
+      data-music-mix-catalog={mixTag}
       onContextMenu={handleContextMenu}
     >
       <button type="button" className={styles.trackMain} onClick={handleListen}>

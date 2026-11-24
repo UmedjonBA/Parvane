@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useState,
+  memo, useEffect, useMemo,
 } from '../../../lib/teact/teact';
 
 import type {
@@ -7,12 +7,12 @@ import type {
 } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
-import { startFetch } from './fetch/musicFetch';
 import { formatTrackTime } from './musicFormat';
 import {
   getIsMusicMixFailed, getMusicMix, loadMusicMix, openMixSettings, rebuildMusicMix,
 } from './musicMix';
-import { getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
+import {
+  catalogNetworkTrack, getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
 } from './musicPlayer';
 import { goBackMusic, openMusicView } from './musicView';
 
@@ -23,6 +23,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import PvEmpty from '../notes/PvEmpty';
 import PvSkeleton from '../notes/PvSkeleton';
+import MusicCatalogRow from './MusicCatalogRow';
 import MusicSectionHead from './MusicSectionHead';
 import MusicTrackRow from './MusicTrackRow';
 
@@ -43,14 +44,16 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
   const isFailed = useDerivedState(getIsMusicMixFailed);
   const player = useDerivedState(getMusicPlayer);
   const current = getCurrentTrack(player);
-  const [queued, setQueued] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     void loadMusicMix();
   }, []);
 
   const mix = today?.mix;
-  const playable = useMemo(() => (mix?.tracks || []).map((row) => row.track).filter(Boolean), [mix]);
+  // Микс играет целиком: трек сервера — с сервера, трек каталога — потоком из сети (не отрывок)
+  const playable = useMemo(() => (mix?.tracks || [])
+    .map((row) => row.track || (row.catalog ? catalogNetworkTrack(row.catalog) : undefined))
+    .filter(Boolean), [mix]);
 
   const handlePlay = useLastCallback((index: number) => {
     playTracks(playable, index, { source: { kind: 'home' } });
@@ -60,13 +63,6 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
   const handleArtists = useLastCallback(() => openMusicView({ kind: 'mixArtists' }));
   const handleStar = useLastCallback((track: MusicTrack) => void setTrackStarred(track, !track.isStarred));
   const handleRetry = useLastCallback(() => void loadMusicMix());
-
-  const handleDownload = useLastCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
-    const index = Number(e.currentTarget.dataset.index);
-    const catalog = mix?.tracks[index]?.catalog;
-    if (!catalog) return;
-    if (await startFetch(catalog) === 'ok') setQueued((previous) => ({ ...previous, [catalogKey(catalog)]: true }));
-  });
 
   if (today?.needsArtists) {
     return (
@@ -89,7 +85,6 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
 
   const next = mix ? new Date(mix.nextMs) : undefined;
   const nextText = next ? next.toLocaleString(lang.code, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-  let libraryIndex = -1;
 
   return (
     <div className={styles.view} data-music-mix-view={today?.isBuilding ? 'building' : 'ready'}>
@@ -143,12 +138,11 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
         <ul className={styles.tracks} data-music-mix-tracks>
           {mix.tracks.map((row, index) => {
             if (row.track) {
-              libraryIndex += 1;
               return (
                 <MusicTrackRow
                   key={`lib:${row.track.id}`}
                   track={row.track}
-                  index={libraryIndex}
+                  index={index}
                   isCurrent={row.track.id === current?.id}
                   isPlaying={player.isPlaying}
                   trailing="offline"
@@ -161,36 +155,14 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
               );
             }
             const catalog = row.catalog!;
-            const isQueued = queued[catalogKey(catalog)];
             return (
-              <li
+              <MusicCatalogRow
                 key={`cat:${catalogKey(catalog)}`}
-                className={styles.mixCatalogRow}
-                data-music-mix-catalog={catalog.title}
-              >
-                {catalog.coverUrl ? (
-                  <img className={styles.mixCatalogCover} src={catalog.coverUrl} alt="" loading="lazy" />
-                ) : <span className={styles.mixCatalogCover} aria-hidden />}
-                <span className={styles.trackText}>
-                  <span className={styles.trackTitle}>{catalog.title}</span>
-                  <span className={buildClassName(kit.muted, kit.small, styles.trackArtist)}>
-                    {catalogLine(catalog, row.becauseOf ? lang('MusicMixBecause', { name: row.becauseOf }) : '')}
-                  </span>
-                </span>
-                {isQueued ? (
-                  <span className={buildClassName(kit.muted, kit.small)}>{lang('MusicMixQueued')}</span>
-                ) : (
-                  <button
-                    type="button"
-                    className={kit.btn}
-                    data-index={index}
-                    data-music-mix-download
-                    onClick={handleDownload}
-                  >
-                    {lang('MusicEmptyFind')}
-                  </button>
-                )}
-              </li>
+                track={catalog}
+                sub={catalogLine(catalog, row.becauseOf ? lang('MusicMixBecause', { name: row.becauseOf }) : '')}
+                mixTag={catalog.title}
+                onListen={() => handlePlay(index)}
+              />
             );
           })}
         </ul>
