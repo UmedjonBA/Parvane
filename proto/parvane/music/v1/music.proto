@@ -993,6 +993,13 @@ message DislikeListResponse {
 
 message LyricsRequest {
   string track_id = 1 [(parvane.core.v2.max_len) = 64];
+  // Трек не на сервере («Слушать из сети»): текст ищется по исполнителю и названию, `track_id` пуст.
+  string artist = 2 [(parvane.core.v2.max_len) = 512];
+  string title = 3 [(parvane.core.v2.max_len) = 512];
+  string album = 4 [(parvane.core.v2.max_len) = 512];
+  uint32 duration_secs = 5;
+  // «Текст не от этой песни»: найденный текст убрать и больше этому треку не подставлять; ответ — пустой.
+  bool wrong = 6;
 }
 message LyricsLine {
   // Начало строки от начала трека, мс; у простого (несинхронного) текста — 0.

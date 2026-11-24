@@ -1430,6 +1430,9 @@ export interface LangPair {
   'MusicRecentlyPlayed': undefined;
   'MusicNewOnServer': undefined;
   'MusicMadeForYou': undefined;
+  'MusicLyricsWrong': undefined;
+  'MusicLyricsNone': undefined;
+  'MusicLyricsSearching': undefined;
   'MusicNetworkPreviewOnly': undefined;
   'MusicAddingAlbum': undefined;
   'SendPickerWhom': undefined;

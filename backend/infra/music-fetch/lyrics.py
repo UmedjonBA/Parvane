@@ -51,8 +51,13 @@ def find(artist, title, album, duration):
     if exact and (exact.get("syncedLyrics") or exact.get("plainLyrics")):
         return exact.get("syncedLyrics") or exact.get("plainLyrics")
     # Точного совпадения нет — поиск: та же длительность (± допуск), синхронный — первым
+    # Найденное должно быть той же песней: название совпадает, исполнитель — тот же (один входит в другого, «А & Б»).
+    # Без этой сверки общие названия («без названия», «Intro») давали текст чужой песни
     found = call("search", track_name=title, artist_name=artist) or []
+    want_title, want_artist = norm(title), norm(artist)
     fits = [item for item in found if isinstance(item, dict) and not item.get("instrumental")
+            and norm(item.get("trackName") or "") == want_title
+            and same_artist(want_artist, norm(item.get("artistName") or ""))
             and (not duration or abs(float(item.get("duration") or 0) - duration) <= DURATION_TOLERANCE_SECS)]
     fits.sort(key=lambda item: not item.get("syncedLyrics"))
     for item in fits:
@@ -60,6 +65,15 @@ def find(artist, title, album, duration):
         if text:
             return text
     return None
+
+
+def norm(text):
+    """Для сравнения: строчные буквы и цифры, ё как е."""
+    return "".join(c for c in str(text).casefold().replace("ё", "е") if c.isalnum())
+
+
+def same_artist(want, got):
+    return bool(want) and bool(got) and (want in got or got in want)
 
 
 def write_sidecar(audio_path, artist, title, album, duration):

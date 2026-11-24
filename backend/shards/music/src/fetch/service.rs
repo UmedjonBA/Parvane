@@ -141,6 +141,14 @@ impl FetchService {
         Ok((clip(&v, "path"), v.get("matched").and_then(Value::as_bool).unwrap_or(false)))
     }
 
+    /// Текст песни по исполнителю и названию (LRCLIB): LRC либо простой; пусто — не нашлось.
+    pub async fn lyrics(&self, artist: &str, title: &str, album: &str, duration_secs: u32) -> Result<String, ServiceError> {
+        let duration = duration_secs.to_string();
+        let rq = self.http.get(format!("{}/lyrics", self.base)).query(&[("artist", artist), ("title", title), ("album", album), ("duration", duration.as_str())]);
+        let v = self.json(rq, SEARCH_TIMEOUT).await?;
+        Ok(v.get("text").and_then(Value::as_str).unwrap_or("").to_string())
+    }
+
     /// Теги и сведения файла библиотеки: `{tags, file: {codec, bitrate, sample_rate, bits, duration, bytes}, has_cover}`.
     pub async fn read_tags(&self, path: &str) -> Result<Value, ServiceError> {
         let rq = self.http.get(format!("{}/tags", self.base)).query(&[("path", path)]);

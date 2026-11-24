@@ -120,9 +120,23 @@ export function createMusicCatalogApi(deps: Deps) {
       return true;
     },
 
-    /** Текст песни трека библиотеки; синхронный — строки со временем начала. Текста нет — пусто. */
-    async parvaneMusicLyrics({ trackId }: { trackId: string }): Promise<MusicLyrics> {
-      const reply = await deps.call('music.lyrics', { track_id: trackId });
+    /** Текст песни: трека библиотеки по id, трека не на сервере — по исполнителю и названию (сервер ищет его сам,
+     * если рядом с файлом нет). Синхронный — строки со временем начала. Не нашёлся — пусто. */
+    async parvaneMusicLyrics({
+      trackId, artist, title, album, durationSecs, isWrong,
+    }: {
+      trackId?: string; artist?: string; title?: string; album?: string; durationSecs?: number;
+      // «Текст не от этой песни»: убрать и больше не подставлять
+      isWrong?: boolean;
+    }): Promise<MusicLyrics> {
+      const reply = await deps.call('music.lyrics', {
+        track_id: trackId || '',
+        artist: artist || '',
+        title: title || '',
+        album: album || '',
+        duration_secs: durationSecs || 0,
+        wrong: isWrong || undefined,
+      });
       return {
         isSynced: Boolean(field(reply, 'synced')),
         lines: list(reply, 'lines').map((raw) => ({ startMs: count(raw, 'start_ms'), text: text(raw, 'text') })),

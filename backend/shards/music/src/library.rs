@@ -3,7 +3,7 @@
 //! прослушивания считает сам (музыкальный сервер ведёт их по пользователю, а «популярное» — по всему серверу).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use parvane_protocol::pb::parvane::core::v2::ErrorCode;
@@ -30,11 +30,13 @@ pub(crate) struct Stats {
 }
 
 static STATS: Mutex<Option<(Instant, Arc<Stats>)>> = Mutex::new(None);
-static PLAYS: OnceLock<SqlitePool> = OnceLock::new();
+// База прослушиваний — одна на процесс; открытие заменяет её (в работе — один раз при старте, в тестах — свою на
+// каждый тест). Пул живёт до конца процесса
+static PLAYS: std::sync::RwLock<Option<&'static SqlitePool>> = std::sync::RwLock::new(None);
 
 /// База прослушиваний (та же, что у учёта добавленного): микс, «не нравится», история поиска.
 pub(crate) fn plays_pool() -> Option<&'static SqlitePool> {
-    PLAYS.get()
+    PLAYS.read().ok().and_then(|pool| *pool)
 }
 
 fn stats_ttl() -> Duration {
@@ -83,7 +85,9 @@ pub(crate) async fn stats(sub: &Subsonic, user: &str) -> Result<Arc<Stats>, Erro
 pub(crate) async fn open_plays(db_path: &str) {
     match crate::fetch::store::open(db_path).await {
         Ok(pool) => {
-            let _ = PLAYS.set(pool);
+            if let Ok(mut slot) = PLAYS.write() {
+                *slot = Some(Box::leak(Box::new(pool)));
+            }
         }
         Err(e) => warn!("музыка: база прослушиваний не открыта — «Популярное» будет пустым: {e:#}"),
     }
@@ -91,7 +95,7 @@ pub(crate) async fn open_plays(db_path: &str) {
 
 /// Прослушивание: один человек — одно прослушивание трека в сутки.
 pub(crate) async fn record_play(user: &str, track: &Track) {
-    let Some(pool) = PLAYS.get() else { return };
+    let Some(pool) = plays_pool() else { return };
     let day = crate::now_ms() / DAY_MS;
     let r = sqlx::query("INSERT OR IGNORE INTO plays (track_id, artist_id, user, day) VALUES (?, ?, ?, ?)")
         .bind(&track.id)
@@ -107,7 +111,7 @@ pub(crate) async fn record_play(user: &str, track: &Track) {
 
 /// «Популярное на сервере»: треки исполнителя по числу прослушиваний; треков, которых уже нет, не будет.
 pub(crate) async fn popular(sub: &Subsonic, user: &str, artist_id: &str) -> Vec<Track> {
-    let Some(pool) = PLAYS.get() else { return vec![] };
+    let Some(pool) = plays_pool() else { return vec![] };
     let ids: Vec<(String,)> = match sqlx::query_as("SELECT track_id FROM plays WHERE artist_id = ? GROUP BY track_id ORDER BY COUNT(*) DESC, track_id LIMIT ?")
         .bind(artist_id)
         .bind(POPULAR_MAX as i64)
@@ -133,7 +137,7 @@ pub(crate) async fn popular(sub: &Subsonic, user: &str, artist_id: &str) -> Vec<
 
 /// «Популярное на сервере» за неделю (доска `MusicHome`): id трека и число прослушиваний всех людей за 7 суток.
 pub(crate) async fn popular_week(limit: usize) -> Vec<(String, u32)> {
-    let Some(pool) = PLAYS.get() else { return vec![] };
+    let Some(pool) = plays_pool() else { return vec![] };
     let since = crate::now_ms() / DAY_MS - 6;
     let r: Result<Vec<(String, i64)>, _> =
         sqlx::query_as("SELECT track_id, COUNT(*) AS n FROM plays WHERE day >= ? GROUP BY track_id ORDER BY n DESC, track_id LIMIT ?")
@@ -153,7 +157,7 @@ pub(crate) async fn popular_week(limit: usize) -> Vec<(String, u32)> {
 /// «Частое у вас»: исполнители, которых человек слушал больше всего дней за 30 суток.
 /// Кто чаще всех слушал исполнителя за 30 дней (ник); никто — пусто.
 pub(crate) async fn top_listener(artist_id: &str) -> String {
-    let Some(pool) = PLAYS.get() else { return String::new() };
+    let Some(pool) = plays_pool() else { return String::new() };
     let since = crate::now_ms() / DAY_MS - 29;
     let r: Result<Option<(String,)>, _> =
         sqlx::query_as("SELECT user FROM plays WHERE artist_id = ? AND day >= ? GROUP BY user ORDER BY COUNT(*) DESC, user LIMIT 1").bind(artist_id).bind(since).fetch_optional(pool).await;
@@ -168,7 +172,7 @@ pub(crate) async fn top_listener(artist_id: &str) -> String {
 }
 
 pub(crate) async fn frequent_artists(user: &str, limit: usize) -> Vec<String> {
-    let Some(pool) = PLAYS.get() else { return vec![] };
+    let Some(pool) = plays_pool() else { return vec![] };
     let since = crate::now_ms() / DAY_MS - 29;
     let r: Result<Vec<(String,)>, _> = sqlx::query_as(
         "SELECT artist_id FROM plays WHERE user = ? AND day >= ? AND artist_id != '' GROUP BY artist_id ORDER BY COUNT(*) DESC, artist_id LIMIT ?",

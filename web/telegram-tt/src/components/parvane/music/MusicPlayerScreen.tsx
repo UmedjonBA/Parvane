@@ -1,12 +1,16 @@
 import { memo, useLayoutEffect, useState } from '../../../lib/teact/teact';
+import { getActions } from '../../../global';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
 import type { MusicQueueSource } from './musicPlayer';
 
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
-import { catalogKey, getFetchJobs, startFetch } from './fetch/musicFetch';
+import {
+  addFetchFollowUp, catalogKey, getFetchJobs, isJobActive, startFetch,
+} from './fetch/musicFetch';
 import { coverTone } from './musicFormat';
+import { getMusicMix, loadMusicMix } from './musicMix';
 import {
   callMusic, getCurrentTrack, getMusicInfo, getMusicPlayer, getMusicPosition, getPreviewCatalogTrack, playQueueItem,
   setTrackStarred, togglePlay,
@@ -62,6 +66,7 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
   const { isMobile: isPhone } = useAppLayout();
   const player = useDerivedState(getMusicPlayer);
   const info = useDerivedState(getMusicInfo);
+  const { showNotification } = getActions();
   const jobs = useDerivedState(getFetchJobs);
   const { positionSecs } = useDerivedState(getMusicPosition);
   const track = getCurrentTrack(player);
@@ -70,9 +75,22 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
   const [menu, setMenu] = useState<{ anchor?: { x: number; y: number } }>();
   const [playlistTracks, setPlaylistTracks] = useState<MusicTrack[]>();
   const [sendTrack, setSendTrack] = useState<MusicTrack>();
-  const { data: lyrics } = useMusicData(track ? `lyrics:${track.id}` : undefined, () => (
-    callMusic('parvaneMusicLyrics', { trackId: track!.id })
-  ));
+  // Трек не на сервере (поток из сети, отрывок) — текст ищется по исполнителю и названию
+  const lyricsCatalog = track && (track.isNetwork || track.previewUrl) ? getPreviewCatalogTrack(track.id) : undefined;
+  const lyricsTarget = lyricsCatalog ? {
+    artist: lyricsCatalog.artist,
+    title: lyricsCatalog.title,
+    album: lyricsCatalog.album,
+    durationSecs: lyricsCatalog.durationSecs,
+  } : { trackId: track?.id };
+  const {
+    data: lyrics, isLoaded: isLyricsLoaded, patch: patchLyrics,
+  } = useMusicData(track ? `lyrics:${track.id}` : undefined, () => callMusic('parvaneMusicLyrics', lyricsTarget));
+  // «Текст не от этой песни»: сервер убирает его и больше этому треку не подставляет
+  const handleWrongLyrics = useLastCallback(() => {
+    patchLyrics(() => ({ isSynced: false, lines: [] }));
+    void callMusic('parvaneMusicLyrics', { ...lyricsTarget, isWrong: true }).catch(() => undefined);
+  });
 
   useLayoutEffect(() => {
     if (!track) closeMusicPlayer();
@@ -97,8 +115,57 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
     closeMusicPlayer();
     openUploadsWith('file');
   });
+  // ♡ трека не на сервере: скачать на сервер и сразу в «Любимое» — пока качается, на месте сердца кольцо, потом —
+  // залитое сердце. Какие треки так отмечены, помнится по ключу «исполнитель + название»
+  const [starredKeys, setStarredKeys] = useState<Set<string>>(new Set());
+  const starCatalog = track && (track.isNetwork || track.previewUrl) ? getPreviewCatalogTrack(track.id) : undefined;
+  const starKey = starCatalog && catalogKey(starCatalog);
+  const starJob = starCatalog && jobs.find((item) => catalogKey(item.track) === starKey);
+  const isStarAdding = Boolean(starJob && isJobActive(starJob) && starredKeys.has(starKey!));
+  const isShownStarred = starCatalog ? starredKeys.has(starKey!) : Boolean(track?.isStarred);
   const handleStar = useLastCallback(() => {
-    if (track) void setTrackStarred(track, !track.isStarred);
+    if (!track) return;
+    if (!starCatalog) {
+      void setTrackStarred(track, !track.isStarred);
+      return;
+    }
+    const isOn = !starredKeys.has(starKey!);
+    setStarredKeys((previous) => {
+      const updated = new Set(previous);
+      if (isOn) updated.add(starKey!);
+      else updated.delete(starKey!);
+      return updated;
+    });
+    if (starJob?.state === 'done' && starJob.trackId) {
+      void setTrackStarred({ ...track, id: starJob.trackId, isStarred: !isOn }, isOn);
+      return;
+    }
+    if (!isOn) return;
+    if (starJob && isJobActive(starJob)) {
+      addFetchFollowUp(starJob.jobId, { isStar: true });
+      return;
+    }
+    void startFetch(starCatalog, { isStar: true }).then((result) => {
+      if (result === 'ok') return;
+      setStarredKeys((previous) => {
+        const updated = new Set(previous);
+        updated.delete(starKey!);
+        return updated;
+      });
+      showNotification({ message: lang(result === 'limit' ? 'MusicFetchLimit' : 'MusicFetchFailedShort') });
+    });
+  });
+  // «Не нравится» прямо в плеере: трек больше не предлагается, играет следующий
+  const handleDislike = useLastCallback(async () => {
+    if (!track) return;
+    const target = starCatalog
+      ? { ref: starCatalog.ref, artist: starCatalog.artist, title: starCatalog.title }
+      : { trackId: track.id, artist: track.artist, title: track.title };
+    const isDone = await callMusic('parvaneMusicDislike', target).then(() => true, () => false);
+    showNotification({ message: lang(isDone ? 'MusicDisliked' : 'MusicPlaylistFailed') });
+    if (!isDone) return;
+    if (getMusicMix()) void loadMusicMix();
+    if (next) playQueueItem(player.queue.index + 1);
   });
   const handleOpenQueue = useLastCallback(() => setIsQueueOpen(true));
   const handleCloseQueue = useLastCallback(() => setIsQueueOpen(false));
@@ -190,7 +257,15 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
   }
 
   function renderLyrics() {
-    if (!lines.length) return undefined;
+    // Нет строк — честно: ещё ищем либо не нашли
+    if (!lines.length) {
+      return (
+        <section className={styles.card} data-music-lyrics={isLyricsLoaded ? 'none' : 'loading'}>
+          <h3 className={styles.cardTitle}>{lang('MusicLyrics')}</h3>
+          <p className={styles.lyricsNone}>{lang(isLyricsLoaded ? 'MusicLyricsNone' : 'MusicLyricsSearching')}</p>
+        </section>
+      );
+    }
     return (
       <section className={styles.card} data-music-lyrics={lyrics?.isSynced ? 'synced' : 'plain'}>
         <h3 className={styles.cardTitle}>{lang('MusicLyrics')}</h3>
@@ -207,6 +282,9 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
             </p>
           ))}
         </div>
+        <button type="button" className={styles.lyricsWrong} data-music-lyrics-wrong onClick={handleWrongLyrics}>
+          {lang('MusicLyricsWrong')}
+        </button>
       </section>
     );
   }
@@ -230,16 +308,28 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
                 {isPhone ? playing.artist : [playing.artist, playing.album].filter(Boolean).join(' · ')}
               </button>
             </div>
-            <button
-              type="button"
-              className={buildClassName(styles.star, playing.isStarred && styles.starOn)}
-              aria-label={lang(playing.isStarred ? 'MusicUnstar' : 'MusicStar')}
-              aria-pressed={playing.isStarred}
-              data-music-player-star
-              onClick={handleStar}
-            >
-              <ParvaneIcon name={playing.isStarred ? 'heart' : 'heartPlus'} />
-            </button>
+            <div className={styles.rate}>
+              <button
+                type="button"
+                className={styles.dislike}
+                aria-label={lang('MusicDislike')}
+                data-music-player-dislike
+                onClick={handleDislike}
+              >
+                <ParvaneIcon name="ban" />
+              </button>
+              <button
+                type="button"
+                className={buildClassName(styles.star, isShownStarred && styles.starOn)}
+                aria-label={lang(isStarAdding ? 'MusicStateAdding' : isShownStarred ? 'MusicUnstar' : 'MusicStar')}
+                aria-pressed={isShownStarred}
+                aria-busy={isStarAdding}
+                data-music-player-star={isStarAdding ? 'adding' : isShownStarred ? 'on' : 'off'}
+                onClick={handleStar}
+              >
+                {isStarAdding ? <span className={styles.starRing} aria-hidden /> : <ParvaneIcon name="heart" />}
+              </button>
+            </div>
           </div>
           <MusicControls isFullScreen />
           {player.hasError && <span className={styles.error} role="alert">{lang('MusicPlayError')}</span>}
@@ -330,7 +420,7 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
             </>
           ) : (
             // Компьютер: текст песни — справа от обложки; очередь (если в ней что-то есть) — под обложкой
-            <div className={buildClassName(styles.deskGrid, lines.length > 0 && styles.deskGridLyrics)}>
+            <div className={buildClassName(styles.deskGrid, styles.deskGridLyrics)}>
               <div className={styles.deskMain}>
                 {renderStage(playing)}
                 {hasUpcoming && (
@@ -340,7 +430,7 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
                 )}
                 <MusicPlayerAbout track={playing} />
               </div>
-              {lines.length > 0 && <aside className={styles.deskLyrics}>{renderLyrics()}</aside>}
+              <aside className={styles.deskLyrics}>{renderLyrics()}</aside>
             </div>
           )}
         </div>

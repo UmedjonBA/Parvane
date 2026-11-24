@@ -503,6 +503,10 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/tags":
             # Теги и сведения файла библиотеки («Теги файла», «Откуда файл»)
             self.handle_request(lambda: files.read_tags(existing(query["path"])))
+        elif url.path == "/lyrics":
+            # Текст песни по исполнителю и названию (LRCLIB): трек без текста рядом с файлом либо не на сервере
+            self.handle_request(lambda: {"text": lyrics.find(query.get("artist", ""), query.get("title", ""),
+                                                             query.get("album", ""), int(query.get("duration") or 0)) or ""})
         elif url.path == "/candidates":
             self.handle_request(lambda: candidates(query["source"], query["artist"], query["title"], limit))
         elif url.path == "/progress":

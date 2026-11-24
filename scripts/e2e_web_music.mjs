@@ -614,7 +614,20 @@ try {
   await waitPlaying(page, 'Ночной автобус', 'playing');
   await pause(page);
   console.log('OK: нажатие трека каталога — поток целиком, не отрывок');
-  await bus.locator('[data-catalog-add]').click();
+  // Полный плеер трека не на сервере: текст найден по исполнителю и названию; ♡ скачивает трек на сервер и кладёт в
+  // «Любимое» — пока качается, на месте сердца кольцо, потом залитое сердце
+  await page.locator('[data-music-desk-player]').getByRole('button', { name: 'Open player' }).click();
+  const netFull = page.locator('[data-music-full]');
+  await visible(netFull.locator('[data-music-lyrics="synced"]').getByText('Автобус'));
+  // «Текст не от этой песни» — текст убран, плеер честно пишет «не нашли»
+  await netFull.locator('[data-music-lyrics-wrong]').click();
+  await visible(netFull.locator('[data-music-lyrics="none"]').getByText('No lyrics found'));
+  await netFull.locator('[data-music-player-star]').click();
+  await visible(netFull.locator('[data-music-player-star="adding"], [data-music-player-star="on"]').first());
+  await visible(netFull.locator('[data-music-player-star="on"]'), STEP_TIMEOUT_MS * 2);
+  await netFull.getByRole('button', { name: 'Collapse player' }).click();
+  await gone(netFull);
+  console.log('OK: плеер трека из сети — текст найден, ♡ скачивает на сервер и в «Любимое»');
   // Скачанное перечитывает поиск: трек — уже строкой сервера
   const busTrack = wide.locator('[data-music-tracks] [data-track]').filter({ hasText: 'Ночной автобус' });
   await visible(busTrack, STEP_TIMEOUT_MS * 2);

@@ -177,6 +177,11 @@ http.createServer((req, res) => {
       })),
     });
   }
+  // Текст песни (LRCLIB): есть только у «Ночной автобус»
+  if (url.pathname === '/lyrics') {
+    const text = url.searchParams.get('title') === 'Ночной автобус' ? '[00:01.00] Ночь\n[00:03.00] Автобус' : '';
+    return reply(res, 200, { text });
+  }
   if (url.pathname === '/stream') {
     res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': NET_AUDIO.length });
     res.end(NET_AUDIO);

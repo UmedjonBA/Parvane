@@ -10,6 +10,7 @@ use crate::tests::{call, found, settled, setup_fetch, start};
 #[tokio::test]
 async fn deleted_track_goes_to_trash_and_comes_back() {
     let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let _plays = crate::tests::plays_guard().await;
     crate::library::open_plays(dir.join("music.db").to_str().unwrap()).await;
     fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("a", "Группа - Песня t1", 215)]);
     let job = settled(&ctx, "alice@local", &start(&ctx, "alice@local", "Песня t1").await.unwrap().job_id).await;
@@ -47,6 +48,7 @@ async fn deleted_track_goes_to_trash_and_comes_back() {
 #[tokio::test]
 async fn tags_are_edited_by_owner_or_admin_and_can_be_restored() {
     let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let _plays = crate::tests::plays_guard().await;
     crate::library::open_plays(dir.join("music.db").to_str().unwrap()).await;
     fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("a", "Группа - Песня t1", 215)]);
     let job = settled(&ctx, "alice@local", &start(&ctx, "alice@local", "Песня t1").await.unwrap().job_id).await;
@@ -74,6 +76,7 @@ async fn tags_are_edited_by_owner_or_admin_and_can_be_restored() {
 #[tokio::test]
 async fn link_of_track_on_server_asks_and_second_version_is_marked() {
     let (_fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let _plays = crate::tests::plays_guard().await;
     crate::library::open_plays(dir.join("music.db").to_str().unwrap()).await;
     let link = |as_version: bool| pb::FetchStartRequest { url: "https://soundcloud.com/gruppa/t2".into(), as_version, star: true, ..Default::default() };
     // Трек уже на сервере: задача готова с ним, скачивания нет
@@ -98,6 +101,7 @@ async fn link_of_track_on_server_asks_and_second_version_is_marked() {
 #[tokio::test]
 async fn admin_sets_limits_sources_and_personal_limits() {
     let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let _plays = crate::tests::plays_guard().await;
     crate::library::open_plays(dir.join("music.db").to_str().unwrap()).await;
     let get = |user: &'static str| call::<pb::AdminGetResponse>(&ctx, user, "music.admin.get", pb::AdminGetRequest {});
     let alice = get("alice@local").await.unwrap();

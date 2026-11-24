@@ -234,8 +234,86 @@
   background: none;
 }
 
+// ♡ и «Не нравится» рядом: крупные, сердце в любимом — залитое красное
+.rate {
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.star,
+.dislike {
+  width: 3rem;
+  height: 3rem;
+
+  :global(.icon),
+  svg {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+}
+
+.dislike {
+  cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+
+  color: var(--pv-muted);
+
+  background: transparent;
+}
+
 .starOn {
   color: var(--pv-red);
+
+  svg {
+    fill: currentColor;
+  }
+}
+
+// Трек качается на сервер ради ♡ — кольцо на месте сердца
+.starRing {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 3px solid var(--pv-line2);
+  border-top-color: var(--pv-at);
+  border-radius: 50%;
+
+  animation: star-ring-spin 1s linear infinite;
+}
+
+@keyframes star-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lyricsWrong {
+  cursor: pointer;
+
+  align-self: flex-start;
+
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+  text-decoration: underline;
+
+  background: none;
+}
+
+.lyricsNone {
+  margin: 0;
+  color: var(--pv-muted);
 }
 
 // Позиция и кнопки (`MusicControls` с `isFullScreen`)

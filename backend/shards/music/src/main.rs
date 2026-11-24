@@ -11,6 +11,7 @@ mod fetch;
 mod files;
 mod http;
 mod library;
+mod lyrics;
 mod mix;
 mod shared;
 mod subsonic;

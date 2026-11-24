@@ -5,8 +5,11 @@ use serde_json::json;
 
 use crate::tests::{call, setup_fetch};
 
-async fn with_plays(dir: &std::path::Path) {
+/// База прослушиваний теста; замок держится до конца теста (`let _plays = with_plays(..)`)
+async fn with_plays(dir: &std::path::Path) -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = crate::tests::plays_guard().await;
     crate::library::open_plays(dir.join("music.db").to_str().unwrap()).await;
+    guard
 }
 
 #[tokio::test]
@@ -41,7 +44,7 @@ async fn album_download_queues_only_missing_tracks() {
 #[tokio::test]
 async fn mix_needs_artists_then_builds_from_library_and_related() {
     let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
-    with_plays(&dir).await;
+    let _plays = with_plays(&dir).await;
     let user = "mixer@local";
     *fake.catalog.lock().unwrap() = vec![
         json!({"ref": "dz:200", "artist": "Соседи", "title": "Двор", "album": "Лето", "duration": 180}),
@@ -99,7 +102,7 @@ async fn mix_needs_artists_then_builds_from_library_and_related() {
 #[tokio::test]
 async fn search_history_is_per_user_deduplicated_and_clearable() {
     let (_, ctx, dir) = setup_fetch(30, u64::MAX).await;
-    with_plays(&dir).await;
+    let _plays = with_plays(&dir).await;
     let user = "searcher@local";
     for q in ["Miyagi", "кино", "miyagi"] {
         let _: pb::SearchRememberResponse = call(&ctx, user, "music.search.remember", pb::SearchRememberRequest { query: q.into() }).await.unwrap();

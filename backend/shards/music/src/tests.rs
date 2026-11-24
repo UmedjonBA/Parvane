@@ -161,6 +161,12 @@ pub(crate) async fn spawn_fake() -> (Arc<Fake>, String) {
 }
 
 /// Шард с поддельным сервером; HTTP-ссылки — на случайном порту.
+/// Тесты со своей базой прослушиваний идут по очереди: база одна на процесс, и тест, удаливший свою, ломал соседей
+pub(crate) async fn plays_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    LOCK.lock().await
+}
+
 pub(crate) async fn setup() -> (Arc<Fake>, Arc<Ctx>, String) {
     let (fake, base) = spawn_fake().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -436,6 +442,16 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
         "/catalog/artists" => reply(200, json!({"artists": [{"ref": "dz:1", "name": "Группа", "picture": "", "albums": 1}]})),
         // «Слушать из сети»: звук как есть
         "/stream" => Response::builder().header("content-type", "audio/mpeg").body(Full::new(Bytes::from_static(b"ID3-fake-audio"))).unwrap(),
+        // Текст песни (LRCLIB через сервис): есть только у «Песня t2» и у «Лампа — Утро»
+        "/lyrics" => {
+            let field = |key: &str| urlencoding_decode(q.get(key).cloned().unwrap_or_default());
+            let text = match (field("artist").as_str(), field("title").as_str()) {
+                (_, "Песня t2") => "[00:02.00] Строка два\n[00:01.00] Строка один",
+                ("Лампа", "Утро") => "Просто текст",
+                _ => "",
+            };
+            reply(200, json!({"text": text}))
+        }
         "/candidates" => {
             let source = q.get("source").cloned().unwrap_or_default();
             fake.asked_sources.lock().unwrap().push(source.clone());
@@ -616,12 +632,31 @@ async fn fetch_takes_confident_match_and_tracks_who_added_it() {
 #[tokio::test]
 async fn lyrics_prefer_synced_and_are_empty_when_missing() {
     let (_, ctx, _) = setup().await;
-    let r: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "t1".into() }).await.unwrap();
+    let r: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "t1".into(), ..Default::default() }).await.unwrap();
     assert!(r.synced);
     assert_eq!(r.lines.iter().map(|l| (l.start_ms, l.text.as_str())).collect::<Vec<_>>(), [(1500, "Первая"), (4200, "Вторая")]);
-    let none: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "t2".into() }).await.unwrap();
+    let none: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "t2".into(), ..Default::default() }).await.unwrap();
     assert!(!none.synced && none.lines.is_empty());
-    assert!(call::<pb::LyricsResponse>(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "../x".into() }).await.is_err());
+    assert!(call::<pb::LyricsResponse>(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "../x".into(), ..Default::default() }).await.is_err());
+}
+
+#[tokio::test]
+async fn lyrics_are_searched_when_the_library_has_none() {
+    // Музыкальный сервер текста не знает — поиск по тегам трека; трек не на сервере — по исполнителю и названию
+    let (_, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let r: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { track_id: "t2".into(), ..Default::default() }).await.unwrap();
+    assert!(r.synced);
+    assert_eq!(r.lines.iter().map(|l| (l.start_ms, l.text.as_str())).collect::<Vec<_>>(), [(1000, "Строка один"), (2000, "Строка два")]);
+    let net: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { artist: "Лампа".into(), title: "Утро".into(), ..Default::default() }).await.unwrap();
+    assert_eq!((net.synced, net.lines.len()), (false, 1));
+    let none: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { artist: "Никто".into(), title: "Ничего".into(), ..Default::default() }).await.unwrap();
+    assert!(none.lines.is_empty(), "не нашлось — пусто");
+    // «Текст не от этой песни» — больше не подставляется
+    let _: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { artist: "Лампа".into(), title: "Утро".into(), wrong: true, ..Default::default() }).await.unwrap();
+    let after: pb::LyricsResponse = call(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest { artist: "Лампа".into(), title: "Утро".into(), ..Default::default() }).await.unwrap();
+    assert!(after.lines.is_empty(), "отмеченный неверным текст вернулся");
+    assert_eq!(call::<pb::LyricsResponse>(&ctx, "alice@local", "music.lyrics", pb::LyricsRequest::default()).await.unwrap_err(), ErrorCode::Invalid);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
@@ -788,6 +823,7 @@ async fn library_counts_and_popular_by_plays_of_everyone() {
     crate::library::reset_stats();
     let dir = std::env::temp_dir().join(format!("parvane-music-plays-{}", now_ms()));
     std::fs::create_dir_all(&dir).unwrap();
+    let _plays = crate::tests::plays_guard().await;
     crate::library::open_plays(dir.join("music.db").to_str().unwrap()).await;
     let info: pb::InfoResponse = call(&ctx, "alice@local", "music.info", pb::InfoRequest {}).await.unwrap();
     assert_eq!((info.library_tracks, info.library_artists, info.library_albums, info.starred_count, info.admin), (3, 1, 1, 0, false));

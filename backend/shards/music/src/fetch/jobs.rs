@@ -108,6 +108,8 @@ pub(crate) struct Job {
     pub existing: bool,
     /// Файл уже записан в «добавленные» (суточный расход его учёл), задача ждёт сканирования библиотеки.
     pub recorded: bool,
+    /// Когда файл записан в учёт (мс): проверка лимита, прочитавшая учёт раньше, считает задачу ещё идущей.
+    pub recorded_ms: i64,
 }
 
 /// Занятый слот скачивания: освобождаясь, будит ждущих.
@@ -222,6 +224,7 @@ impl Job {
             star: false,
             existing: false,
             recorded: false,
+            recorded_ms: 0,
         }
     }
 
@@ -350,6 +353,8 @@ impl Fetch {
     /// Новая задача пользователя, если лимиты позволяют: суточный (идущие задачи тоже расходуют его — иначе его
     /// обходят пачкой запросов), место и число задач. `same` — такая же задача уже идёт (`DUPLICATE`).
     pub(crate) async fn admit(&self, address: &str, job: Job, same: impl Fn(&Job) -> bool) -> Result<(), ErrorCode> {
+        // Учёт читается раньше подсчёта идущих задач: задача, записанная в учёт между ними, иначе не видна нигде
+        let read_at = now_ms();
         let (today, used) = self.usage(address).await;
         let limits = self.limits_for(address).await;
         if limits.per_day == 0 || today >= limits.per_day || used >= limits.quota_bytes {
@@ -364,7 +369,7 @@ impl Fetch {
             return Err(ErrorCode::Duplicate);
         }
         // Идущая задача, файл которой уже записан, учтена в `today` — дважды её не считать
-        let pending = mine.iter().filter(|j| j.is_active() && !j.recorded).count();
+        let pending = mine.iter().filter(|j| j.is_active() && (!j.recorded || j.recorded_ms >= read_at)).count();
         if mine.len() >= JOBS_PER_USER || today as usize + pending >= limits.per_day as usize {
             return Err(ErrorCode::Limit);
         }
@@ -883,7 +888,10 @@ impl Fetch {
             self.fail(id, pb::FetchFailure::Library);
             return Ok(());
         }
-        self.update(id, |j| j.recorded = true);
+        self.update(id, |j| {
+            j.recorded = true;
+            j.recorded_ms = now_ms();
+        });
         // Теги и обложку сервис уже переписал при скачивании
         let _ = store::mark_tagged(&self.pool, &file.path, &file.path, 1).await;
         // Откуда файл и какая версия: вторая версия — следующий номер, иначе та же, что у уже лежащего (копия)
