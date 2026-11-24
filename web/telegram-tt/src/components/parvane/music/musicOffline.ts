@@ -171,8 +171,21 @@ export async function loadOfflineUrl(trackId: string) {
  * плейлист либо альбом целиком (`tracks` — весь состав): плейлист дальше следует за составом
  * (`musicOfflineSync.ts`), «Загруженное» показывает их группами. */
 export function saveTracksOffline(tracks: MusicTrack[], holder?: OfflineHolder) {
+  requestPersistentStorage();
   setOfflineHolds(addHolds(holds, tracks.map((track) => track.id), holder));
   queueOfflineTracks(tracks, holder);
+}
+
+// Без «постоянного» хранилища браузер считает кэш временным: при нехватке места (и в Safari через 7 дней без
+// открытия) скачанное стирается. Просьба — один раз; браузер решает сам (у установленной PWA обычно соглашается)
+let isPersistAsked = false;
+
+function requestPersistentStorage() {
+  if (isPersistAsked || !navigator.storage?.persist) return;
+  isPersistAsked = true;
+  void navigator.storage.persisted()
+    .then((isPersisted) => (isPersisted ? undefined : navigator.storage.persist()))
+    .catch(() => undefined);
 }
 
 /** Докачать треки, отметки которых уже стоят (сверка загруженного плейлиста). */
