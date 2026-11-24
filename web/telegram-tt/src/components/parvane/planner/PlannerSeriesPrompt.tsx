@@ -1,6 +1,7 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useLayoutEffect } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
+import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { formatCardDay, formatSeriesAsk } from './plannerEditorFormat';
 
 import useLang from '../../../hooks/useLang';
@@ -52,7 +53,9 @@ const SCOPE_KEYS = {
 // Ширина, до которой «План» — одна колонка (`Planner.module.scss`)
 const NARROW_WIDTH = 925;
 
-// Выбор объёма правки ряда: на компьютере — блок в карточке, на телефоне — шторка поверх карточки (доска `XpPlan`)
+// Выбор объёма правки ряда: на компьютере — окно по центру поверх затемнения (блок внизу карточки не замечали:
+// «Удалить» будто не срабатывало), на телефоне — шторка поверх карточки (доска `XpPlan`). Окно — в разметке
+// «Плана», не в общем слое окон: так его кнопки остаются внутри раздела
 const PlannerSeriesPrompt = ({
   mode, name, rule, day, newTime, onChoose, onCancel,
 }: OwnProps) => {
@@ -62,6 +65,11 @@ const PlannerSeriesPrompt = ({
 
   const title = lang(mode === 'delete' ? 'PlannerSeriesDeleteEntryTitle' : 'PlannerSeriesChangeTitle');
   const ask = formatSeriesAsk(lang, mode, name, rule || '', newTime);
+
+  useLayoutEffect(() => (isNarrow ? undefined : captureEscKeyListener(onCancel)), [isNarrow, onCancel]);
+  const handleBackdrop = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) onCancel();
+  });
 
   const handleChoose = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onChoose(e.currentTarget.dataset.seriesScope as PlannerPromptScope);
@@ -74,7 +82,12 @@ const PlannerSeriesPrompt = ({
   }
 
   const body = (
-    <div className={styles.seriesPrompt} role="group" aria-label={title} data-series-prompt={mode}>
+    <div
+      className={buildClassName(styles.seriesPrompt, !isNarrow && styles.seriesDialog)}
+      role="group"
+      aria-label={title}
+      data-series-prompt={mode}
+    >
       {!isNarrow && <p className={styles.seriesTitle}>{title}</p>}
       <p className={styles.seriesAsk} data-series-ask>{ask}</p>
       {SCOPES[mode].map((scope) => (
@@ -96,7 +109,13 @@ const PlannerSeriesPrompt = ({
     </div>
   );
 
-  if (!isNarrow) return body;
+  if (!isNarrow) {
+    return (
+      <div className={styles.seriesBackdrop} role="dialog" aria-modal aria-label={title} onClick={handleBackdrop}>
+        {body}
+      </div>
+    );
+  }
   return (
     <PvSheet isOpen title={title} onClose={onCancel}>
       {body}

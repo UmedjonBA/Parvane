@@ -2690,6 +2690,27 @@
   background: var(--pv-panel);
 }
 
+// Компьютер: выбор объёма правки ряда — окном по центру экрана
+.seriesBackdrop {
+  position: fixed;
+  z-index: var(--z-modal, 1000);
+  inset: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 1rem;
+
+  background: rgb(0 0 0 / 0.45);
+}
+
+.seriesDialog {
+  width: min(26rem, 100%);
+  padding: 1.25rem;
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 0.35);
+}
+
 .seriesTitle {
   margin: 0;
   font-size: 0.9375rem;
