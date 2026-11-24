@@ -80,7 +80,12 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
   });
   const handleCloseMenu = useLastCallback(() => setMenu(undefined));
   const [isPicking, setIsPicking] = useState(false);
-  // Нажатие строки — отрывок 30 с (доски `RpMusicA-05`, `MusicPlayer-05`)
+  // Нажатие строки — трек целиком потоком из сети («Слушать из сети», доска `MusicPlayer-04`): отрывок 30 с вместо
+  // песни раздражал; уверенного файла у источника нет — плеер сам играет отрывок каталога
+  const handleListen = useLastCallback(() => {
+    playTracks([catalogNetworkTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
+  });
+  // Отрывок 30 с — пунктом меню (доски `RpMusicA-05`, `MusicPlayer-05`)
   const handlePreview = useLastCallback(() => {
     playTracks([catalogPreviewTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
   });
@@ -104,9 +109,8 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
     setMenu(undefined);
     if (action === 'add') void handleAdd();
     else if (action === 'preview') handlePreview();
-    else if (action === 'network') {
-      playTracks([catalogNetworkTrack(track)], 0, { source: { kind: 'search', name: track.artist } });
-    } else if (action === 'star') void handleFollowUp({ isStar: true });
+    else if (action === 'network') handleListen();
+    else if (action === 'star') void handleFollowUp({ isStar: true });
     else if (action === 'queue') void handleFollowUp({ isQueue: true });
     else if (action === 'playlist') setIsPicking(true);
     else if (action === 'chat') openCatalogSend(track);
@@ -162,7 +166,7 @@ const MusicCatalogRow = ({ track, rank, sub }: OwnProps) => {
       data-catalog-state={state}
       onContextMenu={handleContextMenu}
     >
-      <button type="button" className={styles.trackMain} onClick={track.previewUrl ? handlePreview : handleMenu}>
+      <button type="button" className={styles.trackMain} onClick={handleListen}>
         {rank !== undefined && (
           <span className={styles.trackRank}>{rank}</span>
         )}

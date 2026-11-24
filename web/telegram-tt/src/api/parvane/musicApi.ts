@@ -66,6 +66,8 @@ export type MusicTrack = {
   previewUrl?: string;
   // Трек каталога, который играет потоком из источника («Слушать из сети»)
   isNetwork?: boolean;
+  // «Слушать из сети»: целого файла у источников нет — играет отрывок каталога
+  isNetworkFallback?: boolean;
   coverUrl?: string;
 };
 

@@ -237,6 +237,14 @@ function rememberPlayed(track: MusicTrack) {
   writeJson(RECENT_KEY, recent);
 }
 
+// Плеер подписывает отрывок вместо потока: «целиком в сети не нашли»
+function markNetworkFallback(trackId: string) {
+  const state = getMusicPlayer();
+  const track = state.tracksById[trackId];
+  if (!track || track.isNetworkFallback) return;
+  setMusicPlayer({ ...state, tracksById: { ...state.tracksById, [trackId]: { ...track, isNetworkFallback: true } } });
+}
+
 async function streamUrlOf(trackId: string) {
   const known = getMusicPlayer().tracksById[trackId];
   // «Слушать из сети»: поток из источника через сервер; уверенного файла нет — отрывок каталога, если есть
@@ -249,7 +257,10 @@ async function streamUrlOf(trackId: string) {
       streamUrls.set(trackId, { url: reply.url, expiresMs: reply.expiresMs });
       return reply.url;
     }
-    if (known.previewUrl) return known.previewUrl;
+    if (known.previewUrl) {
+      markNetworkFallback(trackId);
+      return known.previewUrl;
+    }
     throw new Error('no network stream');
   }
   // Отрывок каталога — ссылкой каталога, без сервера

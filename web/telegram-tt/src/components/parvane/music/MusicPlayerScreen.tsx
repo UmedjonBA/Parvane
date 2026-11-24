@@ -306,7 +306,8 @@ const MusicPlayerScreen = ({ isInline }: OwnProps) => {
               {(playing.previewUrl || playing.isNetwork) && (
                 <div className={styles.previewRow}>
                   <span className={styles.previewNote} data-music-preview={playing.isNetwork ? 'network' : 'preview'}>
-                    {lang(playing.isNetwork ? 'MusicNetworkOnly' : 'MusicPreviewOnly')}
+                    {lang(playing.isNetworkFallback ? 'MusicNetworkPreviewOnly'
+                      : playing.isNetwork ? 'MusicNetworkOnly' : 'MusicPreviewOnly')}
                   </span>
                   {renderPreviewAction()}
                 </div>

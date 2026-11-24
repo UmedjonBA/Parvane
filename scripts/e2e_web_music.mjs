@@ -607,6 +607,13 @@ try {
     return row;
   };
   const bus = await searchCatalog('автобус', CATALOG_BUS);
+  // Нажатие строки каталога — трек целиком потоком из сети, а не отрывок 30 с
+  const netRequest = page.waitForRequest((request) => request.url().includes('/_parvane/music/n/'), { timeout: STEP_TIMEOUT_MS });
+  await bus.locator('button').first().click();
+  await netRequest;
+  await waitPlaying(page, 'Ночной автобус', 'playing');
+  await pause(page);
+  console.log('OK: нажатие трека каталога — поток целиком, не отрывок');
   await bus.locator('[data-catalog-add]').click();
   // Скачанное перечитывает поиск: трек — уже строкой сервера
   const busTrack = wide.locator('[data-music-tracks] [data-track]').filter({ hasText: 'Ночной автобус' });

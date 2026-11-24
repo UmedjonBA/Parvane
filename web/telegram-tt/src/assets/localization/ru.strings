@@ -1712,6 +1712,7 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicNetworkPreviewOnly" = "Целиком в сети не нашли · отрывок 30 секунд";
 "MusicAddingAlbum" = "Добавляем альбом на сервер";
 "MusicFetchFailedMany_one" = "{count} трек не добавлен в библиотеку";
 "MusicFetchFailedMany_few" = "{count} трека не добавлены в библиотеку";
