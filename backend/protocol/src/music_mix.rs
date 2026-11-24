@@ -131,6 +131,8 @@ pub fn build(input: &Input) -> Vec<Pick> {
     let mut library: Vec<(f64, &LibraryCandidate, Reason)> = input
         .library
         .iter()
+        // Любимое и так в «Любимом»: подборка его не повторяет — кроме режима «Любимое», где его просят явно
+        .filter(|t| !(t.starred && input.mode != Mode::Favorites))
         .filter(|t| !input.recent.contains(&t.id) && !input.disliked_tracks.contains(&t.id) && !blocked(&t.artist))
         .map(|t| {
             let (score, reason) = library_score(t, input.today, input.mode);
@@ -363,12 +365,26 @@ mod tests {
         assert!(matches!(mix.iter().find(|p| matches!(p, Pick::Library { id, .. } if id == "fav")), Some(Pick::Library { reason: Reason::Starred, .. })));
     }
 
+    /// Обычный микс и «Открытия» не повторяют любимое — оно и так в «Любимом»
+    #[test]
+    fn starred_tracks_stay_out_of_normal_and_discover() {
+        for mode in [Mode::Normal, Mode::Discover] {
+            let mut i = input(mode);
+            i.library = vec![lib("fav", "Любимый", 5, true), lib("x", "Прочий", 5, false)];
+            let mix = build(&i);
+            assert!(!mix.iter().any(|p| matches!(p, Pick::Library { id, .. } if id == "fav")), "{mode:?}: любимое в миксе");
+            assert!(mix.iter().any(|p| matches!(p, Pick::Library { id, .. } if id == "x")), "{mode:?}: прочее пропало");
+        }
+    }
+
     #[test]
     fn short_library_is_filled_from_catalog() {
         let mut i = input(Mode::Normal);
         i.library.truncate(4);
+        // Любимое в обычный микс не идёт
+        let usable = i.library.iter().filter(|t| !t.starred).count();
         let mix = build(&i);
         assert_eq!(mix.len(), MIX_SIZE);
-        assert_eq!(count_catalog(&mix), MIX_SIZE - 4);
+        assert_eq!(count_catalog(&mix), MIX_SIZE - usable);
     }
 }
