@@ -92,6 +92,10 @@ async fn mix_needs_artists_then_builds_from_library_and_related() {
         }
     }
     let rebuilt = rebuilt.expect("микс пересобран");
+    // «Другой микс» не повторяет треки прежнего
+    let ids = |m: &pb::Mix| m.tracks.iter().map(|t| t.track.as_ref().map(|x| x.id.clone()).or_else(|| t.catalog.as_ref().map(|c| c.r#ref.clone())).unwrap_or_default()).collect::<std::collections::BTreeSet<_>>();
+    let repeated = ids(&mix).intersection(&ids(&rebuilt)).count();
+    assert_eq!(repeated, 0, "«Другой микс» повторил {repeated} треков: {:?} / {:?}", ids(&mix), ids(&rebuilt));
     assert!(!rebuilt.tracks.iter().any(|t| t.catalog.as_ref().is_some_and(|c| c.artist == "Соседи")), "исполнитель «не нравится» не предлагается");
     let _: pb::DislikeSetResponse = call(&ctx, user, "music.dislike.set", pb::DislikeSetRequest { artist: "Соседи".into(), undo: true, ..Default::default() }).await.unwrap();
     let list: pb::DislikeListResponse = call(&ctx, user, "music.dislike.list", pb::DislikeListRequest {}).await.unwrap();

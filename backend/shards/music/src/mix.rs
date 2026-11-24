@@ -383,7 +383,8 @@ async fn catalog_candidates(fetch: &Fetch, s: &Settings) -> Vec<(CatalogCandidat
 
 async fn recent_mix_tracks(address: &str, today: i64) -> Result<BTreeSet<String>, ErrorCode> {
     let since = day_text(today - RECENT_MIX_DAYS);
-    let rows: Vec<(String,)> = sqlx::query_as("SELECT tracks FROM mixes WHERE user = ? AND day >= ? AND day < ?")
+    // И сегодняшний: «Другой микс» его треки не повторяет (первая сборка дня его ещё не видит — его нет)
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT tracks FROM mixes WHERE user = ? AND day >= ? AND day <= ?")
         .bind(address)
         .bind(&since)
         .bind(day_text(today))
