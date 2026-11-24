@@ -1712,6 +1712,8 @@
 "MusicRecentlyPlayed" = "Недавно прослушанное";
 "MusicNewOnServer" = "Новое на сервере";
 "MusicMadeForYou" = "Сделано для вас";
+"MusicMixRadio" = "по радио {name}";
+"MusicMixGenre" = "из жанра «{name}»";
 "MusicLyricsWrong" = "Текст не от этой песни";
 "MusicLyricsNone" = "Текст не нашли";
 "MusicLyricsSearching" = "Ищем текст…";

@@ -1,5 +1,6 @@
 //! Поиск по каталогу, «Скачать альбом», «Микс дня», «Не нравится» и история поиска (как в HomeMusic).
 
+use parvane_protocol::music_mix;
 use parvane_protocol::pb::parvane::music::v1 as pb;
 use serde_json::json;
 
@@ -123,5 +124,52 @@ async fn search_history_is_per_user_deduplicated_and_clearable() {
     let _: pb::SearchForgetResponse = call(&ctx, user, "music.search.forget", pb::SearchForgetRequest::default()).await.unwrap();
     let h: pb::SearchHistoryResponse = call(&ctx, user, "music.search.history", pb::SearchHistoryRequest {}).await.unwrap();
     assert!(h.queries.is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Новое — из радио, похожих и соседнего жанра; два «не нравится» на треках исполнителя убирают его целиком;
+/// дослушанное и пропущенное записываются
+#[tokio::test]
+async fn mix_uses_radio_genre_and_learns_from_dislikes() {
+    let (_fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    let _plays = with_plays(&dir).await;
+    let user = "taste@local";
+    let artists: pb::MixArtistsResponse = call(&ctx, user, "music.mix.artists", pb::MixArtistsRequest { query: "груп".into() }).await.unwrap();
+    let _: pb::MixSettingsSetResponse = call(&ctx, user, "music.mix.settings", pb::MixSettingsSetRequest {
+        set_artists: true, artists: artists.artists.clone(), mode: "discover".into(), set_hour: true, hour: 0, tz_offset_min: 180,
+    }).await.unwrap();
+    let built = |after: i64| {
+        let ctx = ctx.clone();
+        async move {
+            for _ in 0..50 {
+                let r: pb::MixTodayResponse = call(&ctx, user, "music.mix.today", pb::MixTodayRequest { tz_offset_min: 180 }).await.unwrap();
+                if let Some(m) = r.mix.filter(|m| !r.building && m.built_ms > after) {
+                    return m;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            panic!("микс не собран");
+        }
+    };
+    let mix = built(0).await;
+    let reasons: std::collections::BTreeSet<String> = mix.tracks.iter().filter(|t| t.catalog.is_some()).map(|t| t.reason.clone()).collect();
+    assert!(reasons.contains("radio") && reasons.contains("genre"), "источники нового: {reasons:?}");
+    let genre_row = mix.tracks.iter().find(|t| t.reason == "genre").unwrap();
+    assert_eq!(genre_row.because_of, "R&B");
+    let per_radio_artist = |m: &pb::Mix, artist: &str| m.tracks.iter().filter(|t| t.catalog.as_ref().is_some_and(|c| c.artist == artist)).count();
+    assert!(per_radio_artist(&mix, "Радио 0") <= music_mix::PER_ARTIST_CATALOG, "больше двух треков одного исполнителя");
+    // Два «не нравится» на треках «Радио 0» — исполнитель пропадает и из сегодняшнего, и из следующего микса
+    for (reference, title) in [("dz:500", "Волна 0"), ("dz:503", "Волна 3")] {
+        let _: pb::DislikeSetResponse = call(&ctx, user, "music.dislike.set", pb::DislikeSetRequest { r#ref: reference.into(), artist: "Радио 0".into(), title: title.into(), ..Default::default() }).await.unwrap();
+    }
+    let _: pb::MixRebuildResponse = call(&ctx, user, "music.mix.rebuild", pb::MixRebuildRequest { tz_offset_min: 180 }).await.unwrap();
+    let rebuilt = built(mix.built_ms).await;
+    assert_eq!(per_radio_artist(&rebuilt, "Радио 0"), 0, "исполнитель с двумя «не нравится» остался");
+    // Пропуск и дослушанное записываются; середина — нет
+    for (listened, duration) in [(10, 200), (190, 200), (100, 200)] {
+        let _: pb::ListenReportResponse = call(&ctx, user, "music.listen.report", pb::ListenReportRequest { artist: "Радио 1".into(), title: "Волна 1".into(), listened_secs: listened, duration_secs: duration }).await.unwrap();
+    }
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT finished FROM listens WHERE user = ? ORDER BY created_ms").bind(user).fetch_all(crate::library::plays_pool().unwrap()).await.unwrap();
+    assert_eq!(rows, vec![(0,), (1,)]);
     let _ = std::fs::remove_dir_all(dir);
 }

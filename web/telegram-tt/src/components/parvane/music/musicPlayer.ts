@@ -276,6 +276,19 @@ async function streamUrlOf(trackId: string) {
   return reply.url;
 }
 
+// Трек сменился: сколько прежний играл — дослушал или пропустил (сигнал вкуса «Микса дня»; середину сервер не пишет)
+function reportListen(previousId: string | undefined) {
+  const previous = previousId ? getMusicPlayer().tracksById[previousId] : undefined;
+  if (!previous?.artist) return;
+  const { positionSecs, durationSecs } = getMusicPosition();
+  void callMusic('parvaneMusicListenReport', {
+    artist: previous.artist,
+    title: previous.title,
+    listenedSecs: Math.round(positionSecs),
+    durationSecs: Math.round(durationSecs || previous.durationSecs),
+  }).catch(() => undefined);
+}
+
 async function loadCurrent(shouldPlay: boolean) {
   const player = ensureAudio();
   const track = getCurrentTrack();
@@ -288,6 +301,7 @@ async function loadCurrent(shouldPlay: boolean) {
     return;
   }
   if (loadedTrackId !== track.id) {
+    reportListen(loadedTrackId);
     loadedTrackId = track.id;
     setMusicPosition({ positionSecs: 0, durationSecs: track.durationSecs });
     try {

@@ -120,6 +120,16 @@ export function createMusicCatalogApi(deps: Deps) {
       return true;
     },
 
+    /** Сколько трек играл перед сменой: сервер пишет дослушанное и пропущенное (вкус «Микса дня»). */
+    async parvaneMusicListenReport({
+      artist, title, listenedSecs, durationSecs,
+    }: { artist: string; title: string; listenedSecs: number; durationSecs: number }) {
+      await deps.call('music.listen.report', {
+        artist, title, listened_secs: Math.max(0, listenedSecs), duration_secs: Math.max(0, durationSecs),
+      });
+      return true;
+    },
+
     /** Текст песни: трека библиотеки по id, трека не на сервере — по исполнителю и названию (сервер ищет его сам,
      * если рядом с файлом нет). Синхронный — строки со временем начала. Не нашёлся — пусто. */
     async parvaneMusicLyrics({

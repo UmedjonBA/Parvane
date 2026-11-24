@@ -498,6 +498,12 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_request(lambda: catalog.artist_plan(query["ref"]))
         elif url.path == "/catalog/chart":
             self.handle_request(catalog.chart)
+        elif url.path == "/catalog/radio":
+            self.handle_request(lambda: {"tracks": catalog.radio(query["ref"])})
+        elif url.path == "/catalog/genre_of":
+            self.handle_request(lambda: catalog.genre_of(query["ref"]))
+        elif url.path == "/catalog/genre_chart":
+            self.handle_request(lambda: catalog.genre_chart(query["id"]))
         elif url.path == "/catalog/related":
             self.handle_request(lambda: {"artists": catalog.related(query["ref"])})
         elif url.path == "/tags":

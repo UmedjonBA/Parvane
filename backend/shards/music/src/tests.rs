@@ -411,6 +411,10 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
             "albums": [{"ref": "dz:10", "title": "Альбом", "artist": "Группа", "artist_ref": "dz:1", "cover": "", "year": 2020, "record_type": "album", "tracks": 2}],
             "top": catalog_album_tracks()})),
         "/catalog/related" => reply(200, json!({"artists": [{"ref": "dz:2", "name": "Соседи", "picture": "", "albums": 3}]})),
+        // «Микс дня»: радио исполнителя (одни и те же три исполнителя по 4 трека), его жанр, популярное соседнего жанра
+        "/catalog/radio" => reply(200, json!({"tracks": (0..12).map(|i| json!({"ref": format!("dz:{}", 500 + i), "artist": format!("Радио {}", i % 3), "title": format!("Волна {i}"), "duration": 200})).collect::<Vec<_>>()})),
+        "/catalog/genre_of" => reply(200, json!({"id": 116, "name": "Rap/Hip Hop"})),
+        "/catalog/genre_chart" => reply(200, json!({"genre": {"id": 165, "name": "R&B"}, "tracks": (0..10).map(|i| json!({"ref": format!("dz:{}", 600 + i), "artist": format!("Жанр {i}"), "title": format!("Ритм {i}"), "duration": 200})).collect::<Vec<_>>()})),
         // «Добавить на сервер всё»: альбом и сингл (у фальшивки треки любого выпуска — одни и те же)
         "/catalog/artist_plan" => reply(200, json!({
             "artist": {"ref": "dz:1", "name": "Группа", "picture": "", "albums": 2},

@@ -40,6 +40,13 @@ type OwnProps = {
 // собирает заново; настройки — режим, час обновления, любимые исполнители
 const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
   const lang = useLang();
+  // Почему трек в миксе: «по радио …», «из жанра «…»», «похоже на …»
+  const formatBecause = (reason: string, name: string) => {
+    if (!name) return '';
+    if (reason === 'radio') return lang('MusicMixRadio', { name });
+    if (reason === 'genre') return lang('MusicMixGenre', { name });
+    return lang('MusicMixBecause', { name });
+  };
   const today = useDerivedState(getMusicMix);
   const isFailed = useDerivedState(getIsMusicMixFailed);
   const player = useDerivedState(getMusicPlayer);
@@ -159,7 +166,7 @@ const MusicMixView = ({ isPhone, onSendToChat }: OwnProps) => {
               <MusicCatalogRow
                 key={`cat:${catalogKey(catalog)}`}
                 track={catalog}
-                sub={catalogLine(catalog, row.becauseOf ? lang('MusicMixBecause', { name: row.becauseOf }) : '')}
+                sub={catalogLine(catalog, formatBecause(row.reason, row.becauseOf))}
                 mixTag={catalog.title}
                 onListen={() => handlePlay(index)}
               />

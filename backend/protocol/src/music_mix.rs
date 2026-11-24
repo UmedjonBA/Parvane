@@ -2,10 +2,13 @@
 //! собирает кандидатов (библиотека сервера, каталог) и вызывает [`build`]; клиенты показывают готовый микс.
 //!
 //! Кандидаты — треки библиотеки (с отметкой «любимое», числом своих прослушиваний, днём последнего) и треки каталога
-//! похожих исполнителей. Режим задаёт доли: обычный — больше знакомого, «Любимое» — почти только своё, «Новое» —
-//! больше каталога. Вчерашние и позавчерашние треки микса не повторяются; не больше [`PER_ARTIST`] треков одного
-//! исполнителя; подряд один исполнитель не идёт. Перемешивание детерминировано `seed` (человек и день): тот же микс
-//! при повторной сборке в тот же день.
+//! из трёх источников: радио исполнителей профиля, похожие исполнители, соседний жанр. Вкус человека — [`taste`]:
+//! вес каждого исполнителя по выбранным, ♡, прослушиваниям, дослушанному, скачанному, пропущенному и «не нравится»;
+//! исполнитель с «не нравится» целиком либо на двух его треках в микс не попадает. Режим задаёт доли: обычный —
+//! больше знакомого, «Любимое» — почти только своё, «Новое» — больше каталога; часть каталога — из соседнего жанра.
+//! Сегодняшний микс «Другой микс» не повторяет никогда, треки прошлых дней — только если иначе микс короче
+//! [`MIX_SIZE`]; не больше [`PER_ARTIST`] треков одного исполнителя (из каталога — [`PER_ARTIST_CATALOG`]); подряд
+//! один исполнитель не идёт. Перемешивание детерминировано `seed`: тот же микс при повторной сборке в тот же день.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,6 +16,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MIX_SIZE: usize = 25;
 /// Треков одного исполнителя в миксе — не больше.
 pub const PER_ARTIST: usize = 3;
+/// Новых (из каталога) треков одного исполнителя — не больше: подборка должна открывать разных.
+pub const PER_ARTIST_CATALOG: usize = 2;
+/// Сколько «не нравится» на треках одного исполнителя убирают его из микса целиком.
+pub const DISLIKES_TO_BLOCK: usize = 2;
 /// Дней без прослушивания, после которых знакомый трек «соскучился» и поднимается выше.
 const FORGOTTEN_DAYS: i64 = 14;
 
@@ -40,6 +47,15 @@ impl Mode {
             Self::Normal => "normal",
             Self::Favorites => "favorites",
             Self::Discover => "discover",
+        }
+    }
+
+    /// Сколько каталога — из соседнего жанра (разнообразие): пятая часть микса, в «Новом» — треть.
+    fn genre_share(self) -> usize {
+        match self {
+            Self::Normal => 5,
+            Self::Favorites => 0,
+            Self::Discover => 8,
         }
     }
 
@@ -75,15 +91,48 @@ pub struct CatalogCandidate {
     pub reference: String,
     pub artist: String,
     pub title: String,
-    /// Исполнитель, похожий на которого дал этот трек (для подписи «похоже на …»).
+    /// Откуда трек: радио исполнителя, похожий исполнитель, соседний жанр.
+    pub source: Source,
+    /// Для подписи: исполнитель радио либо похожий («похоже на …»), название жанра.
     pub because_of: String,
+}
+
+/// Источник трека каталога.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Source {
+    /// Похож на исполнителя профиля.
+    #[default]
+    Related,
+    /// Радио исполнителя профиля (подборка каталога по нему).
+    Radio,
+    /// Популярное в соседнем жанре — разнообразие.
+    Genre,
+}
+
+impl Source {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Related => "catalog",
+            Self::Radio => "radio",
+            Self::Genre => "genre",
+        }
+    }
+
+    /// Насколько источник близок ко вкусу: радио — ближе всего, соседний жанр — дальше всего.
+    fn base(self) -> f64 {
+        match self {
+            Self::Radio => 1.0,
+            Self::Related => 0.8,
+            Self::Genre => 0.3,
+        }
+    }
 }
 
 /// Строка микса: трек и почему он здесь.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pick {
     Library { id: String, reason: Reason },
-    Catalog { reference: String, because_of: String },
+    Catalog { reference: String, because_of: String, source: Source },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,8 +164,12 @@ pub struct Input {
     pub seed: u64,
     pub library: Vec<LibraryCandidate>,
     pub catalog: Vec<CatalogCandidate>,
-    /// Треки прошлых миксов (id библиотеки и `dz:` каталога) — не повторять.
+    /// Треки миксов прошлых дней (id библиотеки и `dz:` каталога) — не повторять, если без них хватает на микс.
     pub recent: BTreeSet<String>,
+    /// Треки сегодняшнего микса — «Другой микс» их не повторяет никогда.
+    pub current: BTreeSet<String>,
+    /// Вкус: вес исполнителя (нормализованное имя), см. [`taste`].
+    pub weights: BTreeMap<String, f64>,
     /// «Не нравится»: треки (id и `dz:`) и исполнители (нормализованные имена, см. [`norm`]).
     pub disliked_tracks: BTreeSet<String>,
     pub disliked_artists: BTreeSet<String>,
@@ -126,6 +179,7 @@ pub struct Input {
 pub fn build(input: &Input) -> Vec<Pick> {
     let mut rng = Rng(input.seed | 1);
     let blocked = |artist: &str| input.disliked_artists.contains(&norm(artist));
+    let weight = |artist: &str| input.weights.get(&norm(artist)).copied().unwrap_or(0.0);
     let owned: BTreeSet<String> = input.library.iter().map(|t| key(&t.artist, &t.title)).collect();
 
     let mut library: Vec<(f64, &LibraryCandidate, Reason)> = input
@@ -133,10 +187,10 @@ pub fn build(input: &Input) -> Vec<Pick> {
         .iter()
         // Любимое и так в «Любимом»: подборка его не повторяет — кроме режима «Любимое», где его просят явно
         .filter(|t| !(t.starred && input.mode != Mode::Favorites))
-        .filter(|t| !input.recent.contains(&t.id) && !input.disliked_tracks.contains(&t.id) && !blocked(&t.artist))
+        .filter(|t| !input.current.contains(&t.id) && !input.disliked_tracks.contains(&t.id) && !blocked(&t.artist))
         .map(|t| {
             let (score, reason) = library_score(t, input.today, input.mode);
-            (score + rng.unit() * 0.75, t, reason)
+            (score + weight(&t.artist) * 0.2 + rng.unit() * 0.75, t, reason)
         })
         .collect();
     library.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -145,56 +199,171 @@ pub fn build(input: &Input) -> Vec<Pick> {
         .catalog
         .iter()
         .filter(|t| {
-            !input.recent.contains(&t.reference)
+            !input.current.contains(&t.reference)
                 && !input.disliked_tracks.contains(&t.reference)
                 && !blocked(&t.artist)
                 && !owned.contains(&key(&t.artist, &t.title))
         })
-        .map(|t| (rng.unit(), t))
+        // Ближе ко вкусу — выше: источник, вес исполнителя (отрицательный — «не нравится» на его треке), случай
+        .map(|t| (t.source.base() + weight(&t.artist).clamp(-4.0, 6.0) * 0.35 + rng.unit() * 1.2, t))
         .collect();
     catalog.sort_by(|a, b| b.0.total_cmp(&a.0));
 
     let mut per_artist: BTreeMap<String, usize> = BTreeMap::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut take = |artist: &str, track_key: String| {
+    let mut take = |artist: &str, track_key: String, limit: usize| {
         let count = per_artist.entry(norm(artist)).or_default();
-        if *count >= PER_ARTIST || !seen.insert(track_key) {
+        if *count >= limit || seen.contains(&track_key) {
             return false;
         }
+        seen.insert(track_key);
         *count += 1;
         true
     };
+    let catalog_pick = |t: &CatalogCandidate| Pick::Catalog { reference: t.reference.clone(), because_of: t.because_of.clone(), source: t.source };
     let want_catalog = input.mode.catalog_share().min(MIX_SIZE);
+    let want_genre = input.mode.genre_share().min(want_catalog);
     let mut from_catalog: Vec<(String, Pick)> = Vec::new();
-    for (_, t) in &catalog {
-        if from_catalog.len() >= want_catalog {
-            break;
-        }
-        if take(&t.artist, key(&t.artist, &t.title)) {
-            from_catalog.push((t.artist.clone(), Pick::Catalog { reference: t.reference.clone(), because_of: t.because_of.clone() }));
-        }
-    }
     let mut from_library: Vec<(String, Pick)> = Vec::new();
-    for (_, t, reason) in &library {
+    // Прошлые дни — только во втором проходе, когда без них микс короче
+    for allow_recent in [false, true] {
+        let fresh = |id: &str| allow_recent || !input.recent.contains(id);
+        // Разнообразие: доля соседнего жанра, потом остальной каталог по близости ко вкусу
+        for (_, t) in catalog.iter().filter(|(_, t)| t.source == Source::Genre) {
+            if from_catalog.iter().filter(|(_, p)| matches!(p, Pick::Catalog { source: Source::Genre, .. })).count() >= want_genre {
+                break;
+            }
+            if fresh(&t.reference) && take(&t.artist, key(&t.artist, &t.title), PER_ARTIST_CATALOG) {
+                from_catalog.push((t.artist.clone(), catalog_pick(t)));
+            }
+        }
+        for (_, t) in &catalog {
+            if from_catalog.len() >= want_catalog {
+                break;
+            }
+            if fresh(&t.reference) && take(&t.artist, key(&t.artist, &t.title), PER_ARTIST_CATALOG) {
+                from_catalog.push((t.artist.clone(), catalog_pick(t)));
+            }
+        }
+        for (_, t, reason) in &library {
+            if from_library.len() + from_catalog.len() >= MIX_SIZE {
+                break;
+            }
+            if fresh(&t.id) && take(&t.artist, key(&t.artist, &t.title), PER_ARTIST) {
+                from_library.push((t.artist.clone(), Pick::Library { id: t.id.clone(), reason: *reason }));
+            }
+        }
+        // Библиотеки не хватило — добрать каталогом
+        for (_, t) in &catalog {
+            if from_library.len() + from_catalog.len() >= MIX_SIZE {
+                break;
+            }
+            if fresh(&t.reference) && take(&t.artist, key(&t.artist, &t.title), PER_ARTIST_CATALOG) {
+                from_catalog.push((t.artist.clone(), catalog_pick(t)));
+            }
+        }
         if from_library.len() + from_catalog.len() >= MIX_SIZE {
             break;
-        }
-        if take(&t.artist, key(&t.artist, &t.title)) {
-            from_library.push((t.artist.clone(), Pick::Library { id: t.id.clone(), reason: *reason }));
-        }
-    }
-    // Библиотеки не хватило — добрать каталогом
-    for (_, t) in &catalog {
-        if from_library.len() + from_catalog.len() >= MIX_SIZE {
-            break;
-        }
-        if take(&t.artist, key(&t.artist, &t.title)) {
-            from_catalog.push((t.artist.clone(), Pick::Catalog { reference: t.reference.clone(), because_of: t.because_of.clone() }));
         }
     }
     interleave(from_library, from_catalog)
 }
 
+/// Сигналы вкуса одного человека: имена исполнителей, по одному на событие.
+#[derive(Clone, Debug, Default)]
+pub struct Signals {
+    /// Выбраны в настройках микса.
+    pub seeds: Vec<String>,
+    /// По одному на трек в «Любимом».
+    pub starred: Vec<String>,
+    /// По одному на день, когда слушал трек исполнителя (30 дней).
+    pub played: Vec<String>,
+    /// Дослушал трек до конца.
+    pub finished: Vec<String>,
+    /// Переключил в первые секунды.
+    pub skipped: Vec<String>,
+    /// Добавил трек на сервер.
+    pub fetched: Vec<String>,
+    /// «Не нравится» на треке.
+    pub disliked_tracks: Vec<String>,
+    /// «Не нравится» на исполнителе.
+    pub disliked_artists: Vec<String>,
+}
+
+/// Вкус: веса исполнителей и кто убран из микса целиком.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Taste {
+    pub weights: BTreeMap<String, f64>,
+    pub blocked: BTreeSet<String>,
+}
+
+impl Taste {
+    /// Исполнители по убыванию веса, только с весом больше нуля — от них строятся радио и похожие.
+    pub fn top(&self, limit: usize) -> Vec<String> {
+        let mut liked: Vec<(&String, &f64)> = self.weights.iter().filter(|(a, w)| **w > 0.0 && !self.blocked.contains(*a)).collect();
+        liked.sort_by(|a, b| b.1.total_cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        liked.into_iter().take(limit).map(|(a, _)| a.clone()).collect()
+    }
+}
+
+/// Вес исполнителя по сигналам: выбран +3, ♡ +2, день прослушивания +0,5 (не больше +4), дослушал +0,5, скачал +1,
+/// пропустил −1, «не нравится» на треке −3. «Не нравится» на исполнителе либо на [`DISLIKES_TO_BLOCK`] его треках —
+/// исполнитель убран.
+pub fn taste(signals: &Signals) -> Taste {
+    let mut weights: BTreeMap<String, f64> = BTreeMap::new();
+    let mut add = |artists: &[String], delta: f64| {
+        for a in artists {
+            let n = norm(a);
+            if !n.is_empty() {
+                *weights.entry(n).or_default() += delta;
+            }
+        }
+    };
+    add(&signals.seeds, 3.0);
+    add(&signals.starred, 2.0);
+    add(&signals.finished, 0.5);
+    add(&signals.fetched, 1.0);
+    add(&signals.skipped, -1.0);
+    add(&signals.disliked_tracks, -3.0);
+    let mut plays: BTreeMap<String, f64> = BTreeMap::new();
+    for a in &signals.played {
+        *plays.entry(norm(a)).or_default() += 0.5;
+    }
+    for (a, w) in plays {
+        if !a.is_empty() {
+            *weights.entry(a).or_default() += w.min(4.0);
+        }
+    }
+    let mut dislikes: BTreeMap<String, usize> = BTreeMap::new();
+    for a in &signals.disliked_tracks {
+        *dislikes.entry(norm(a)).or_default() += 1;
+    }
+    let mut blocked: BTreeSet<String> = signals.disliked_artists.iter().map(|a| norm(a)).filter(|a| !a.is_empty()).collect();
+    blocked.extend(dislikes.into_iter().filter(|(a, n)| *n >= DISLIKES_TO_BLOCK && !a.is_empty()).map(|(a, _)| a));
+    Taste { weights, blocked }
+}
+
+/// Соседние жанры каталога (номера жанров Deezer): откуда брать разнообразие для любителя жанра.
+pub fn neighbor_genres(genre: u32) -> &'static [u32] {
+    match genre {
+        116 => &[165, 132, 113],      // рэп/хип-хоп → R&B, поп, танцевальная
+        132 => &[113, 165, 85],       // поп → танцевальная, R&B, альтернатива
+        152 => &[85, 464, 153],       // рок → альтернатива, метал, блюз
+        165 => &[116, 169, 132],      // R&B → рэп, соул и фанк, поп
+        113 => &[106, 132, 116],      // танцевальная → электронная, поп, рэп
+        85 => &[152, 106, 466],       // альтернатива → рок, электронная, фолк
+        106 => &[113, 85, 132],       // электронная → танцевальная, альтернатива, поп
+        466 => &[85, 84, 153],        // фолк → альтернатива, кантри, блюз
+        144 => &[2, 116, 165],        // регги → африканская, рэп, R&B
+        129 => &[153, 169, 98],       // джаз → блюз, соул, классика
+        98 => &[129, 173, 466],       // классика → джаз, кино, фолк
+        464 => &[152, 85, 106],       // метал → рок, альтернатива, электронная
+        169 => &[165, 129, 153],      // соул и фанк → R&B, джаз, блюз
+        153 => &[129, 152, 169],      // блюз → джаз, рок, соул
+        197 => &[132, 113, 116],      // латино → поп, танцевальная, рэп
+        _ => &[132, 116, 85],
+    }
+}
 /// Знакомое выше: любимое, часто слушаемое, давно не слушанное, исполнители из выбранных.
 fn library_score(t: &LibraryCandidate, today: i64, mode: Mode) -> (f64, Reason) {
     let forgotten = t.plays > 0 && t.last_day.is_some_and(|d| today - d >= FORGOTTEN_DAYS);
@@ -297,7 +466,7 @@ mod tests {
     }
 
     fn cat(r: &str, artist: &str) -> CatalogCandidate {
-        CatalogCandidate { reference: format!("dz:{r}"), artist: artist.into(), title: format!("Трек {r}"), because_of: "Группа".into() }
+        CatalogCandidate { reference: format!("dz:{r}"), artist: artist.into(), title: format!("Трек {r}"), because_of: "Группа".into(), ..Default::default() }
     }
 
     fn input(mode: Mode) -> Input {
@@ -330,11 +499,11 @@ mod tests {
     #[test]
     fn no_repeats_dislikes_or_owned_catalog_and_artists_spread() {
         let mut i = input(Mode::Normal);
-        i.recent.insert("l0".into());
+        i.current.insert("l0".into());
         i.disliked_tracks.insert("dz:c1".into());
         i.disliked_artists.insert(norm("Исп 2"));
         // Трек каталога, который уже есть на сервере, не предлагается
-        i.catalog.push(CatalogCandidate { reference: "dz:dup".into(), artist: "Исп 3".into(), title: "Песня l3".into(), because_of: String::new() });
+        i.catalog.push(CatalogCandidate { reference: "dz:dup".into(), artist: "Исп 3".into(), title: "Песня l3".into(), ..Default::default() });
         let mix = build(&i);
         let ids: Vec<String> = mix.iter().map(|p| match p { Pick::Library { id, .. } => id.clone(), Pick::Catalog { reference, .. } => reference.clone() }).collect();
         assert!(!ids.contains(&"l0".to_string()) && !ids.contains(&"dz:c1".to_string()) && !ids.contains(&"dz:dup".to_string()));
@@ -375,6 +544,71 @@ mod tests {
             assert!(!mix.iter().any(|p| matches!(p, Pick::Library { id, .. } if id == "fav")), "{mode:?}: любимое в миксе");
             assert!(mix.iter().any(|p| matches!(p, Pick::Library { id, .. } if id == "x")), "{mode:?}: прочее пропало");
         }
+    }
+
+    /// Вкус: выбранные и ♡ — плюс, пропуски и «не нравится» на треке — минус; два «не нравится» убирают исполнителя
+    #[test]
+    fn taste_weights_and_blocks_by_track_dislikes() {
+        let v = |xs: &[&str]| xs.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        let t = taste(&Signals {
+            seeds: v(&["Эндшпиль"]),
+            starred: v(&["Santiz", "Santiz"]),
+            played: v(&["Santiz", "Santiz", "Santiz", "Santiz", "Santiz", "Santiz", "Santiz", "Santiz", "Santiz", "Santiz"]),
+            skipped: v(&["Каспийский груз"]),
+            disliked_tracks: v(&["jamik", "jamik", "Нурминский"]),
+            disliked_artists: v(&["Кто-то"]),
+            ..Default::default()
+        });
+        assert_eq!(t.weights[&norm("Santiz")], 4.0 + 4.0, "♡ дважды и прослушивания — не больше +4");
+        assert!(t.blocked.contains(&norm("jamik")), "два «не нравится» на треках");
+        assert!(!t.blocked.contains(&norm("Нурминский")) && t.weights[&norm("Нурминский")] < 0.0, "одно — вниз, но не убран");
+        assert!(t.blocked.contains(&norm("Кто-то")));
+        assert_eq!(t.top(2), vec![norm("Santiz"), norm("Эндшпиль")]);
+    }
+
+    /// Новое: не больше двух треков одного исполнителя, доля соседнего жанра, ближе ко вкусу — выше
+    #[test]
+    fn catalog_is_spread_by_artist_and_genre() {
+        let mut i = input(Mode::Normal);
+        i.library.clear();
+        i.catalog = (0..30).map(|n| CatalogCandidate { source: Source::Radio, ..cat(&format!("r{n}"), &format!("Рад {}", n % 3)) }).collect();
+        i.catalog.extend((0..30).map(|n| CatalogCandidate { source: Source::Genre, because_of: "R&B".into(), ..cat(&format!("g{n}"), &format!("Жанр {n}")) }));
+        i.catalog.extend((0..30).map(|n| CatalogCandidate { source: Source::Related, ..cat(&format!("p{n}"), &format!("Пох {n}")) }));
+        let mix = build(&i);
+        assert_eq!(mix.len(), MIX_SIZE);
+        let genre = mix.iter().filter(|p| matches!(p, Pick::Catalog { source: Source::Genre, .. })).count();
+        assert!(genre >= Mode::Normal.genre_share(), "соседнего жанра {genre}");
+        let radio = mix.iter().filter(|p| matches!(p, Pick::Catalog { source: Source::Radio, .. })).count();
+        assert!(radio <= 3 * PER_ARTIST_CATALOG, "по два трека на исполнителя радио: {radio}");
+    }
+
+    /// Сегодняшний микс не повторяется никогда; прошлые дни — только если иначе микс короче
+    #[test]
+    fn other_mix_never_repeats_today_and_stays_full() {
+        let mut i = input(Mode::Normal);
+        let first = build(&i);
+        let ids = |m: &[Pick]| m.iter().map(|p| match p { Pick::Library { id, .. } => id.clone(), Pick::Catalog { reference, .. } => reference.clone() }).collect::<BTreeSet<_>>();
+        i.current = ids(&first);
+        i.seed = seed("alice@local", 200, 7);
+        let second = build(&i);
+        assert!(ids(&second).is_disjoint(&i.current));
+        // Всё остальное было в прошлые дни — микс всё равно полный, без сегодняшних
+        i.recent = i.library.iter().map(|t| t.id.clone()).chain(i.catalog.iter().map(|t| t.reference.clone())).collect();
+        let third = build(&i);
+        assert_eq!(third.len(), second.len());
+        assert!(ids(&third).is_disjoint(&i.current));
+    }
+
+    /// Вес исполнителя поднимает его треки каталога над треками безразличного
+    #[test]
+    fn liked_artists_rank_higher() {
+        let mut i = input(Mode::Discover);
+        i.library.clear();
+        i.catalog = (0..40).map(|n| cat(&format!("c{n}"), &format!("Кат {n}"))).collect();
+        i.weights = (0..10).map(|n| (norm(&format!("Кат {n}")), 6.0)).collect();
+        let mix = build(&i);
+        let liked = mix.iter().filter(|p| matches!(p, Pick::Catalog { reference, .. } if reference.trim_start_matches("dz:c").parse::<u32>().is_ok_and(|n| n < 10))).count();
+        assert!(liked >= 8, "любимых исполнителей в миксе {liked} из 10");
     }
 
     #[test]

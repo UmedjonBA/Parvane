@@ -5172,6 +5172,12 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicSortBy': {
     'name': V;
   };
+  'MusicMixRadio': {
+    'name': V;
+  };
+  'MusicMixGenre': {
+    'name': V;
+  };
   'MusicNoticeAdded': {
     'user': V;
     'track': V;

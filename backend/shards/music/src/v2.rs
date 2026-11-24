@@ -47,7 +47,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
     let sub_shared = ctx.sub.as_ref().ok_or(ErrorCode::Unavailable)?;
     let sub: &Subsonic = sub_shared;
     // «Микс дня», «Не нравится», история поиска
-    if method.starts_with("music.mix.") || method.starts_with("music.dislike.") || method.starts_with("music.search.") {
+    if method.starts_with("music.mix.") || method.starts_with("music.dislike.") || method.starts_with("music.search.") || method == "music.listen.report" {
         return crate::mix::dispatch(ctx, sub, method, &req).await;
     }
     // Общие плейлисты (spec 041, MUSIC-3): права проверяет шард

@@ -13,6 +13,7 @@ mod http;
 mod library;
 mod lyrics;
 mod mix;
+mod mix_taste;
 mod shared;
 mod subsonic;
 mod token;

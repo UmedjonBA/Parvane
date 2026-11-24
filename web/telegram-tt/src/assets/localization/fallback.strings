@@ -1968,6 +1968,8 @@
 "MusicRecentlyPlayed" = "Recently played";
 "MusicNewOnServer" = "New on the server";
 "MusicMadeForYou" = "Made for you";
+"MusicMixRadio" = "from {name} radio";
+"MusicMixGenre" = "from the {name} genre";
 "MusicLyricsWrong" = "These lyrics are for another song";
 "MusicLyricsNone" = "No lyrics found";
 "MusicLyricsSearching" = "Looking for lyrics…";

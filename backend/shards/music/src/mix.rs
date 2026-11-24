@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use futures::StreamExt as _;
-use parvane_protocol::music_mix::{self, CatalogCandidate, Input, LibraryCandidate, Mode, Pick};
+use parvane_protocol::music_mix::{self, Input, LibraryCandidate, Mode, Pick};
 use parvane_protocol::pb::parvane::core::v2::{ErrorCode, ShardRequest};
 use parvane_protocol::pb::parvane::music::v1 as pb;
 use parvane_v2rt::body;
@@ -32,10 +32,6 @@ const HOUR_MS: i64 = 3_600_000;
 const DEFAULT_HOUR: u32 = 6;
 /// Выбранных исполнителей — не больше (как в протоколе).
 const ARTISTS_MAX: usize = 20;
-/// Исполнителей, похожих на которых ищем для каталожной части микса.
-const SEEDS_FOR_RELATED: usize = 4;
-const RELATED_ARTISTS: usize = 8;
-const TRACKS_PER_RELATED: u32 = 5;
 /// Дней прошлых миксов, треки которых не повторяются.
 const RECENT_MIX_DAYS: i64 = 2;
 const HISTORY_MAX: i64 = 30;
@@ -65,6 +61,7 @@ pub(crate) async fn dispatch(ctx: &Ctx, sub: &Subsonic, method: &str, req: &Shar
         "music.mix.artists" => artists(ctx, sub, address, body(req)?).await,
         "music.dislike.set" => dislike_set(address, body(req)?).await,
         "music.dislike.list" => dislike_list(address).await,
+        "music.listen.report" => crate::mix_taste::listen_report(pool()?, address, body(req)?).await,
         "music.search.history" => history(address).await,
         "music.search.remember" => remember(address, body(req)?).await,
         "music.search.forget" => forget(address, body(req)?).await,
@@ -256,12 +253,16 @@ async fn build(sub: &Subsonic, fetch: Option<&Fetch>, address: &str, day: &str, 
     let today = day_number(day);
     let seed_names: BTreeSet<String> = s.artists.iter().map(|a| music_mix::norm(&a.name)).collect();
     let library = library_candidates(sub, &user, &s, &seed_names).await;
+    // Вкус человека по всему, что он делал, — от него и новое из каталога, и порядок
+    let signals = crate::mix_taste::signals(pool()?, sub, &user, address, &s.artists, &library).await;
+    let taste = music_mix::taste(&signals);
     let catalog = match fetch {
-        Some(f) => catalog_candidates(f, &s).await,
+        Some(f) => crate::mix_taste::catalog_candidates(f, &s.artists, &taste, &signals).await,
         None => Vec::new(),
     };
-    let (disliked_tracks, disliked_artists) = dislike_sets(address).await?;
-    let recent = recent_mix_tracks(address, today).await?;
+    let (disliked_tracks, mut disliked_artists) = dislike_sets(address).await?;
+    disliked_artists.extend(taste.blocked.iter().cloned());
+    let (recent, current) = recent_mix_tracks(address, today).await?;
     let catalog_by_ref: HashMap<String, Value> = catalog.iter().map(|(c, raw)| (c.reference.clone(), raw.clone())).collect();
     let input = Input {
         mode: s.mode,
@@ -270,6 +271,8 @@ async fn build(sub: &Subsonic, fetch: Option<&Fetch>, address: &str, day: &str, 
         library,
         catalog: catalog.into_iter().map(|(c, _)| c).collect(),
         recent,
+        current,
+        weights: taste.weights,
         disliked_tracks,
         disliked_artists,
     };
@@ -278,7 +281,7 @@ async fn build(sub: &Subsonic, fetch: Option<&Fetch>, address: &str, day: &str, 
         .iter()
         .map(|p| match p {
             Pick::Library { id, reason } => json!({"kind": "library", "id": id, "reason": reason.as_str()}),
-            Pick::Catalog { reference, because_of } => json!({"kind": "catalog", "track": catalog_by_ref.get(reference), "because_of": because_of}),
+            Pick::Catalog { reference, because_of, source } => json!({"kind": "catalog", "track": catalog_by_ref.get(reference), "because_of": because_of, "reason": source.as_str()}),
         })
         .collect();
     sqlx::query("INSERT OR REPLACE INTO mixes (user, day, built_ms, mode, tracks) VALUES (?, ?, ?, ?, ?)")
@@ -346,63 +349,30 @@ fn add_candidate(by_id: &mut HashMap<String, LibraryCandidate>, seeds: &BTreeSet
     entry.starred |= starred || t.starred;
 }
 
-/// Каталог: треки исполнителей, похожих на выбранных.
-async fn catalog_candidates(fetch: &Fetch, s: &Settings) -> Vec<(CatalogCandidate, Value)> {
-    let Ok(service) = fetch.service() else { return Vec::new() };
-    let mut related: Vec<(String, String)> = Vec::new();
-    let mut seen = BTreeSet::new();
-    let chosen: BTreeSet<String> = s.artists.iter().map(|a| music_mix::norm(&a.name)).collect();
-    for artist in s.artists.iter().take(SEEDS_FOR_RELATED) {
-        let Ok(v) = service.catalog_call("related", &[("ref", artist.r#ref.clone())]).await else { continue };
-        for r in v.get("artists").and_then(Value::as_array).into_iter().flatten() {
-            let name = r.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-            if !name.is_empty() && seen.insert(music_mix::norm(&name)) {
-                related.push((name, artist.name.clone()));
-            }
-        }
-    }
-    // В режиме «Новое» — и сами выбранные исполнители (их треки, которых нет на сервере)
-    if s.mode == Mode::Discover {
-        related.extend(s.artists.iter().map(|a| (a.name.clone(), a.name.clone())));
-    }
-    related.retain(|(name, _)| s.mode == Mode::Discover || !chosen.contains(&music_mix::norm(name)));
-    related.truncate(RELATED_ARTISTS);
-    let mut out = Vec::new();
-    for (name, because_of) in related {
-        let Ok(found) = service.catalog_raw(&format!("artist:\"{}\"", name.replace('"', "")), TRACKS_PER_RELATED).await else { continue };
-        for raw in found {
-            let q = query_of_json(&raw);
-            if q.reference.is_empty() {
-                continue;
-            }
-            out.push((CatalogCandidate { reference: q.reference.clone(), artist: q.artist.clone(), title: q.title.clone(), because_of: because_of.clone() }, raw));
-        }
-    }
-    out
-}
-
-async fn recent_mix_tracks(address: &str, today: i64) -> Result<BTreeSet<String>, ErrorCode> {
+/// Треки миксов прошлых дней (не повторять, если хватает другого) и сегодняшнего (не повторять никогда).
+async fn recent_mix_tracks(address: &str, today: i64) -> Result<(BTreeSet<String>, BTreeSet<String>), ErrorCode> {
     let since = day_text(today - RECENT_MIX_DAYS);
-    // И сегодняшний: «Другой микс» его треки не повторяет (первая сборка дня его ещё не видит — его нет)
-    let rows: Vec<(String,)> = sqlx::query_as("SELECT tracks FROM mixes WHERE user = ? AND day >= ? AND day <= ?")
+    let today_text = day_text(today);
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT day, tracks FROM mixes WHERE user = ? AND day >= ? AND day <= ?")
         .bind(address)
         .bind(&since)
-        .bind(day_text(today))
+        .bind(&today_text)
         .fetch_all(pool()?)
         .await
         .map_err(db_err)?;
-    let mut out = BTreeSet::new();
-    for (tracks,) in rows {
+    let (mut recent, mut current) = (BTreeSet::new(), BTreeSet::new());
+    for (day, tracks) in rows {
+        let set = if day == today_text { &mut current } else { &mut recent };
         for row in serde_json::from_str::<Vec<Value>>(&tracks).unwrap_or_default() {
             if let Some(id) = row.get("id").and_then(Value::as_str) {
-                out.insert(id.to_string());
+                set.insert(id.to_string());
             }
             if let Some(r) = row.pointer("/track/ref").and_then(Value::as_str) {
-                out.insert(r.to_string());
+                set.insert(r.to_string());
             }
         }
     }
-    Ok(out)
+    Ok((recent, current))
 }
 
 /// Строки микса для клиента: библиотека — трек целиком; каталог — эталон либо, если уже скачан, трек библиотеки.
@@ -423,10 +393,10 @@ async fn resolve(ctx: &Ctx, sub: &Subsonic, address: &str, rows: &[Value]) -> Ve
             let year = raw.get("year").and_then(Value::as_u64).and_then(|y| u32::try_from(y).ok()).unwrap_or(0);
             if let Some(f) = fetch.as_deref() {
                 if let Some(track) = f.in_library(sub, &user, &q).await {
-                    return Some(pb::MixTrack { track: Some(track), reason: "catalog".into(), because_of, ..Default::default() });
+                    return Some(pb::MixTrack { track: Some(track), reason, because_of, ..Default::default() });
                 }
             }
-            Some(pb::MixTrack { catalog: Some(catalog_pb(&q, year, String::new())), reason: "catalog".into(), because_of, ..Default::default() })
+            Some(pb::MixTrack { catalog: Some(catalog_pb(&q, year, String::new())), reason, because_of, ..Default::default() })
         }
     });
     futures::stream::iter(items).buffered(FETCH_PARALLEL).filter_map(|x| async move { x }).collect().await

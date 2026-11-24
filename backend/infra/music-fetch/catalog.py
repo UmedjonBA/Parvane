@@ -256,6 +256,33 @@ def chart():
     return {"tracks": unique([track_out(item) for item in data("/chart/0/tracks", limit=50)])}
 
 
+RADIO_LIMIT = 50
+GENRE_CHART_LIMIT = 50
+
+
+def radio(ref):
+    """Радио исполнителя («Микс дня»): подборка каталога по нему — десятки треков разных близких исполнителей."""
+    return [track_out(item) for item in data(f"/artist/{ref_id(ref)}/radio", limit=RADIO_LIMIT)]
+
+
+def genre_of(ref):
+    """Жанр исполнителя — по его последнему альбому: `{id, name}`; не узнать — `{id: 0}`."""
+    for item in data(f"/artist/{ref_id(ref)}/albums", limit=3):
+        album = get(f"/album/{item['id']}")
+        genres = (album.get("genres") or {}).get("data") or []
+        if album.get("genre_id") and int(album["genre_id"]) > 0:
+            name = genres[0].get("name", "") if genres else ""
+            return {"id": int(album["genre_id"]), "name": name}
+    return {"id": 0, "name": ""}
+
+
+def genre_chart(genre_id):
+    """Популярное в жанре — разнообразие «Микса дня»: `{genre: {id, name}, tracks}`."""
+    genre = get(f"/genre/{int(genre_id)}")
+    tracks = [track_out(item) for item in data(f"/chart/{int(genre_id)}/tracks", limit=GENRE_CHART_LIMIT)]
+    return {"genre": {"id": int(genre_id), "name": genre.get("name", "")}, "tracks": tracks}
+
+
 def related(ref):
     """Похожие исполнители."""
     return [artist_out(item) for item in data(f"/artist/{ref_id(ref)}/related", limit=RELATED_LIMIT)]

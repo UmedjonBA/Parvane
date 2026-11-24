@@ -140,6 +140,10 @@ service MusicService {
   rpc DislikeSet(DislikeSetRequest) returns (DislikeSetResponse) {
     option (parvane.core.v2.method) = {name: "music.dislike.set" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  // Сколько трек играл перед переключением: дослушал либо пропустил — сигнал вкуса для «Микса дня».
+  rpc ListenReport(ListenReportRequest) returns (ListenReportResponse) {
+    option (parvane.core.v2.method) = {name: "music.listen.report" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
   rpc DislikeList(DislikeListRequest) returns (DislikeListResponse) {
     option (parvane.core.v2.method) = {name: "music.dislike.list" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
@@ -983,6 +987,16 @@ message DislikeSetRequest {
   bool undo = 5;
 }
 message DislikeSetResponse {}
+
+// Прослушивание трека закончилось (переключил, кончился): дослушал (≥ 80 %) либо пропустил (< 30 с) — сигнал
+// вкуса; иначе сервер ничего не записывает.
+message ListenReportRequest {
+  string artist = 1 [(parvane.core.v2.max_len) = 512];
+  string title = 2 [(parvane.core.v2.max_len) = 512];
+  uint32 listened_secs = 3;
+  uint32 duration_secs = 4;
+}
+message ListenReportResponse {}
 
 message DislikeListRequest {}
 message DislikeListResponse {
