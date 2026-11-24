@@ -18,3 +18,12 @@
 .hint {
   font-size: 0.8125rem;
 }
+
+// Типы записи: на компьютере — в несколько строк, все видны сразу (в одну строку уходили за край окна); на
+// телефоне — лентой под палец
+.kindsWrap {
+  @media (hover: hover) and (pointer: fine) {
+    overflow-x: visible;
+    flex-wrap: wrap;
+  }
+}

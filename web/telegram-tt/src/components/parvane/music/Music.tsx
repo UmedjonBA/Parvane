@@ -22,7 +22,6 @@ import {
   consumeMusicAddRequest, getCatalogSend, getIsMusicPage, getMusicAddRequest, getMusicQuery, getMusicTab, getMusicView,
   goBackMusic, openCatalogSend, openMusicView, openNewPlaylist, openUploadsWith, setMusicQuery,
 } from './musicView';
-import { scrollRowByWheel } from './musicWheelRows';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -100,16 +99,6 @@ const Music = () => {
   const isPlayerOpen = useDerivedState(getIsMusicPlayerOpen);
   const isSearchBar = view.kind === 'home' || view.kind === 'search';
   const deskSearchRef = useRef<HTMLInputElement>();
-  const rootRef = useRef<HTMLDivElement>();
-
-  // Колесо над лентой альбомов и исполнителей листает её вбок (на компьютере иначе не уместившееся не увидеть)
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return undefined;
-    const handleWheel = (e: WheelEvent) => scrollRowByWheel(e, root);
-    root.addEventListener('wheel', handleWheel, { passive: false });
-    return () => root.removeEventListener('wheel', handleWheel);
-  }, []);
 
   useEffect(() => {
     if (!isShown || info) return;
@@ -404,7 +393,6 @@ const Music = () => {
 
   return (
     <div
-      ref={rootRef}
       id="ParvaneMusic"
       className={buildClassName(styles.root, isPage && styles.rootPage)}
       data-music-enabled={info ? String(info.isEnabled) : 'loading'}

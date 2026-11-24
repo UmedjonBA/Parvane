@@ -69,6 +69,7 @@ import {
   resetLocationHash,
 } from '../../util/routing';
 import updateIcon from '../../util/updateIcon';
+import { installWheelRows } from '../../util/wheelRows';
 import { callApi } from '../../api/gramjs';
 import { getCurrentTrack, getMusicPlayer } from '../parvane/music/musicPlayer';
 import { getIsMusicPlayerOpen } from '../parvane/music/musicPlayerView';
@@ -289,6 +290,11 @@ const Main = ({
 
   const { isDesktop, isTouchScreen } = useAppLayout();
   const { width: windowWidth } = useWindowSize();
+  // Parvane: колесо мыши листает горизонтальные ленты со скрытой полосой прокрутки (на компьютере)
+  useEffect(() => {
+    installWheelRows();
+  }, []);
+
   useEffect(() => {
     if (!isLeftColumnOpen && !isMiddleColumnOpen && !isDesktop) {
       // Always display at least one column

@@ -665,7 +665,7 @@ const PlannerQuickInput = ({
             <span className={styles.muted}>{lang('PlannerQuickHint')}</span>
           )}
         </div>
-        <div className={buildClassName(styles.hscroll, 'no-scrollbar')} role="radiogroup">
+        <div className={buildClassName(styles.hscroll, extra.kindsWrap, 'no-scrollbar')} role="radiogroup">
           {kindChoices.map((kind) => {
             const autoKind = healthLine ? healthChoiceOf(healthLine.entries[0].kind) : draft.kind;
             const isActive = choice === kind || (choice === 'auto' && hasText && autoKind === kind);
